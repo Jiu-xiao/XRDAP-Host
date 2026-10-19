@@ -32,6 +32,24 @@ struct Counter {
     period_us: u64,
 }
 
+/// 模拟的 Cortex-M 内核调试状态：DHCSR、DEMCR、AIRCR 的读写效果。
+/// 内核停住时计数器不走；系统复位后计数器从 0 重新开始。
+struct Core {
+    halted: bool,
+    debugen: bool,
+    demcr: u32,
+    /// 计数器的起点（elapsed_us 的值）
+    origin_us: u64,
+    /// 停住的累计时长
+    frozen_us: u64,
+    /// 这次停住的起点
+    halt_start_us: u64,
+    /// DHCSR.S_RESET_ST：复位后第一次读 DHCSR 时为 1
+    reset_sticky: bool,
+}
+
+pub const FAKE_CPUID: u32 = 0x410F_C241; // Cortex-M4 r0p1
+
 struct SubConfig {
     items: Vec<SubItem>,
     period_us: u32,
@@ -58,6 +76,7 @@ struct State {
     skipped: u32,
     skip_every: Option<u64>,
     requests: Vec<Vec<u8>>,
+    core: Core,
 }
 
 /// 模拟探针。可以克隆：克隆出的句柄共享同一个探针，测试里用来检查内存。
@@ -104,6 +123,15 @@ impl FakeProbe {
             skipped: 0,
             skip_every: None,
             requests: Vec::new(),
+            core: Core {
+                halted: false,
+                debugen: false,
+                demcr: 0,
+                origin_us: 1_000_000,
+                frozen_us: 0,
+                halt_start_us: 0,
+                reset_sticky: false,
+            },
         })))
     }
 
@@ -160,6 +188,11 @@ impl FakeProbe {
     /// 收到过的全部请求，测试用。
     pub fn requests(&self) -> Vec<Vec<u8>> {
         self.st().requests.clone()
+    }
+
+    /// 模拟内核是否停住，测试用。
+    pub fn is_halted(&self) -> bool {
+        self.st().core.halted
     }
 
     pub fn is_sampling(&self) -> bool {
@@ -288,7 +321,7 @@ impl State {
     fn byte(&self, addr: u32, now: u64) -> Option<u8> {
         for c in &self.counters {
             if addr >= c.addr && addr < c.addr + c.size as u32 {
-                let v = (now - 1_000_000) / c.period_us;
+                let v = self.run_us(now) / c.period_us;
                 return Some(v.to_le_bytes()[(addr - c.addr) as usize]);
             }
         }
@@ -298,13 +331,110 @@ impl State {
         })
     }
 
+    /// 内核实际运行的时长：去掉停住的时间，从上次复位算起。
+    fn run_us(&self, now: u64) -> u64 {
+        let c = &self.core;
+        let halted_now = if c.halted { now - c.halt_start_us } else { 0 };
+        now.saturating_sub(c.origin_us + c.frozen_us + halted_now)
+    }
+
+    fn dhcsr(&self) -> u32 {
+        let c = &self.core;
+        let mut v = u32::from(c.debugen) | (u32::from(c.halted) << 1);
+        v |= 1 << 16; // S_REGRDY
+        if c.halted {
+            v |= 1 << 17;
+        }
+        if c.reset_sticky {
+            v |= 1 << 25;
+        }
+        v
+    }
+
+    /// 系统控制空间里模拟的几个寄存器（只支持 4 字节对齐访问）。
+    fn scs_read(&mut self, addr: u32) -> Option<u32> {
+        match addr {
+            0xE000_ED00 => Some(FAKE_CPUID),
+            0xE000_ED0C => Some(0xFA05_0000),
+            0xE000_EDF0 => {
+                let v = self.dhcsr();
+                self.core.reset_sticky = false;
+                Some(v)
+            }
+            0xE000_EDFC => Some(self.core.demcr),
+            _ => None,
+        }
+    }
+
+    fn scs_write(&mut self, addr: u32, v: u32, now: u64) -> bool {
+        match addr {
+            0xE000_EDF0 => {
+                if v >> 16 != 0xA05F {
+                    return true; // 没有钥匙的写被忽略
+                }
+                let debugen = v & 1 != 0;
+                let halt = debugen && v & 2 != 0;
+                self.core.debugen = debugen;
+                self.set_halted(halt, now);
+                true
+            }
+            0xE000_EDFC => {
+                self.core.demcr = v;
+                true
+            }
+            0xE000_ED0C => {
+                if v >> 16 == 0x05FA && v & 4 != 0 {
+                    // SYSRESETREQ：计数器从 0 开始；DEMCR.VC_CORERESET 置位时复位后停住
+                    self.core.origin_us = now;
+                    self.core.frozen_us = 0;
+                    self.core.halted = false;
+                    self.core.reset_sticky = true;
+                    let catch = self.core.debugen && self.core.demcr & 1 != 0;
+                    self.set_halted(catch, now);
+                }
+                true
+            }
+            0xE000_ED00 => true,
+            _ => false,
+        }
+    }
+
+    fn set_halted(&mut self, halt: bool, now: u64) {
+        let c = &mut self.core;
+        if halt && !c.halted {
+            c.halted = true;
+            c.halt_start_us = now;
+        } else if !halt && c.halted {
+            c.halted = false;
+            c.frozen_us += now - c.halt_start_us;
+        }
+    }
+
     fn read(&self, addr: u32, len: usize, now: u64) -> Option<Vec<u8>> {
         (0..len)
             .map(|i| self.byte(addr.wrapping_add(i as u32), now))
             .collect()
     }
 
+    /// 目标总线上的读：系统控制空间走模拟寄存器，其余走内存。
+    fn read_mem(&mut self, addr: u32, len: usize, now: u64) -> Option<Vec<u8>> {
+        if (0xE000_E000..0xE000_F000).contains(&addr) {
+            if len != 4 || addr & 3 != 0 {
+                return None;
+            }
+            return self.scs_read(addr).map(|v| v.to_le_bytes().to_vec());
+        }
+        self.read(addr, len, now)
+    }
+
     fn write(&mut self, addr: u32, data: &[u8]) -> bool {
+        if (0xE000_E000..0xE000_F000).contains(&addr) {
+            if data.len() != 4 || addr & 3 != 0 {
+                return false;
+            }
+            let now = self.elapsed_us();
+            return self.scs_write(addr, u32::from_le_bytes(data.try_into().unwrap()), now);
+        }
         // 先检查整段都可写，避免写一半
         let ok = (0..data.len()).all(|i| {
             let a = addr.wrapping_add(i as u32);
@@ -343,11 +473,11 @@ impl State {
         Ok(a)
     }
 
-    fn read_item(&self, it: &Item, now: u64) -> (u8, Vec<u8>) {
+    fn read_item(&mut self, it: &Item, now: u64) -> (u8, Vec<u8>) {
         let zero = vec![0u8; it.size as usize];
         match self.resolve(it, now) {
             Err(st) => (st, zero),
-            Ok(a) => match self.read(a, it.size as usize, now) {
+            Ok(a) => match self.read_mem(a, it.size as usize, now) {
                 Some(v) => (0, v),
                 None => (0x1F, zero),
             },

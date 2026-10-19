@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
+use xrdap::cortex::{self, AfterReset, CoreStatus};
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
 use xrdap::fake::FakeProbe;
@@ -31,6 +32,16 @@ pub enum Cmd {
     Write(Target, Vec<u8>),
     Start { targets: Vec<Target>, divs: Vec<u16>, period_us: u32, stop_on_full: bool },
     Stop,
+    /// 读内核状态；界面每隔一段时间发一次
+    PollCore,
+    Core(CoreCmd),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CoreCmd {
+    Halt,
+    Resume,
+    Reset(AfterReset),
 }
 
 pub enum Event {
@@ -44,6 +55,10 @@ pub enum Event {
     Frames(Vec<HostFrame>),
     Stats(Stats),
     Stopped,
+    /// 内核型号（连接后读一次）
+    CoreInfo(String),
+    /// 内核状态；cmd 为 Some 时是停住、继续、复位的结果
+    Core { cmd: Option<CoreCmd>, status: Result<CoreStatus, String> },
 }
 
 const TIMEOUT: Duration = Duration::from_millis(2000);
@@ -99,10 +114,26 @@ fn write_one(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
     }
 }
 
+fn core_cmd(probe: &mut Probe, cmd: CoreCmd) -> Event {
+    let status = match cmd {
+        CoreCmd::Halt => cortex::halt(probe),
+        CoreCmd::Resume => cortex::resume(probe),
+        CoreCmd::Reset(after) => cortex::reset(probe, after),
+    };
+    Event::Core { cmd: Some(cmd), status: status.map_err(|e| e.to_string()) }
+}
+
+fn poll_core(probe: &mut Probe) -> Event {
+    Event::Core { cmd: None, status: cortex::status(probe).map_err(|e| e.to_string()) }
+}
+
 pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'static) {
     // 采样帧和统计不唤醒界面：界面采样时自己按固定帧率刷新
     let send = |ev: Event| {
-        let quiet = matches!(ev, Event::Frames(_) | Event::Stats(_));
+        let quiet = matches!(
+            ev,
+            Event::Frames(_) | Event::Stats(_) | Event::Core { cmd: None, status: Ok(_) }
+        );
         let _ = tx.send(ev);
         if !quiet {
             wake();
@@ -125,8 +156,13 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                     let t = p.connect_swd(clock).map_err(|e| format!("连接目标失败：{e}"))?;
                     Ok((p, t))
                 }) {
-                    Ok((p, t)) => {
+                    Ok((mut p, t)) => {
                         send(Event::Connected { probe: p.describe(), target: t.describe() });
+                        match cortex::info(&mut p) {
+                            Ok(i) => send(Event::CoreInfo(i.describe())),
+                            Err(e) => send(Event::CoreInfo(format!("读不到 CPUID（{e}）"))),
+                        }
+                        send(poll_core(&mut p));
                         probe = Some(p);
                     }
                     Err(e) => send(Event::Error(e)),
@@ -148,6 +184,15 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                 None => send(Event::Error("还没有连接".into())),
             },
             Cmd::Stop => send(Event::Stopped),
+            Cmd::PollCore => {
+                if let Some(p) = probe.as_mut() {
+                    send(poll_core(p));
+                }
+            }
+            Cmd::Core(c) => match probe.as_mut() {
+                Some(p) => send(core_cmd(p, c)),
+                None => send(Event::Error("还没有连接".into())),
+            },
             Cmd::Start { targets, divs, period_us, stop_on_full } => {
                 let Some(p) = probe.as_mut() else {
                     send(Event::Error("还没有连接".into()));
@@ -186,6 +231,8 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                             Ok(r) => send(Event::ReadDone(tag, r)),
                             Err(e) => send(Event::Error(format!("读取失败：{e}"))),
                         },
+                        Ok(Cmd::PollCore) => send(poll_core(sampler.probe_mut())),
+                        Ok(Cmd::Core(c)) => send(core_cmd(sampler.probe_mut(), c)),
                         Ok(Cmd::Stop) => break None,
                         Ok(other) => {
                             // 连接、断开、重新开始：先停掉这次采样再处理

@@ -26,6 +26,12 @@ impl Series {
         }
     }
 
+    /// t 时刻的值：t 之前（含）最后一个点的值；t 早于第一个点时为 None。
+    pub fn value_at(&self, t: f64) -> Option<f64> {
+        let i = self.pts.partition_point(|p| p[0] <= t);
+        (i > 0).then(|| self.pts[i - 1][1])
+    }
+
     /// [t0, t1] 里的点，抽成最多 2 × buckets 个：每个桶保留最小值和最大值（按出现顺序），
     /// 尖峰不会被抽掉。点数本来就少时原样返回。
     pub fn decimated(&self, t0: f64, t1: f64, buckets: usize) -> Vec<[f64; 2]> {

@@ -281,3 +281,44 @@ fn connect_stops_leftover_sampling() {
     probe2.connect_swd(4_000_000).unwrap();
     assert!(!fake.is_sampling());
 }
+
+#[test]
+fn halt_resume_and_reset() {
+    use xrdap::cortex::{self, AfterReset, CoreState};
+    let (fake, mut probe, mut syms) = g431();
+    probe.connect_swd(4_000_000).unwrap();
+    let tick = targets(&mut syms, &["tick"]);
+    let read_tick = |probe: &mut Probe| {
+        let r = probe.read(&items(&tick)).unwrap();
+        u32::from_le_bytes(r[0].value[..4].try_into().unwrap())
+    };
+
+    assert_eq!(cortex::info(&mut probe).unwrap().describe(), "Cortex-M4 r0p1");
+    assert_eq!(cortex::status(&mut probe).unwrap().state, CoreState::Running);
+
+    // 停住后计数器不走
+    let s = cortex::halt(&mut probe).unwrap();
+    assert_eq!(s.state, CoreState::Halted);
+    assert!(fake.is_halted());
+    let a = read_tick(&mut probe);
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(read_tick(&mut probe), a);
+
+    // 继续后计数器接着走
+    assert_ne!(cortex::resume(&mut probe).unwrap().state, CoreState::Halted);
+    std::thread::sleep(Duration::from_millis(20));
+    assert!(read_tick(&mut probe) > a);
+
+    // 复位后停在复位向量：计数器回到 0 且不走，DEMCR 恢复原值
+    let s = cortex::reset(&mut probe, AfterReset::Halt).unwrap();
+    assert_eq!(s.state, CoreState::Halted);
+    assert_eq!(read_tick(&mut probe), 0);
+    assert_eq!(cortex::read_u32(&mut probe, cortex::DEMCR).unwrap() & 1, 0);
+
+    // 复位后运行：计数器从 0 重新开始
+    std::thread::sleep(Duration::from_millis(30));
+    let s = cortex::reset(&mut probe, AfterReset::Run).unwrap();
+    assert_ne!(s.state, CoreState::Halted);
+    let t = read_tick(&mut probe);
+    assert!(t < 25, "复位后 tick 应从 0 开始，读到 {t}");
+}

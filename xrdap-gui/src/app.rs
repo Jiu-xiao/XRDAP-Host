@@ -9,13 +9,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, RichText};
-use egui_plot::{Legend, Line, Plot, PlotPoints};
 use xrdap::expr::{Resolver, Target};
 use xrdap::types::{ScalarKind, SymbolTable};
 use xrdap::watch::{HostFrame, Stats};
 
+use crate::plot::{Curve, PlotView, MAX_CHARTS};
 use crate::series::Series;
-use crate::worker::{self, Cmd, Conn, Event};
+use crate::worker::{self, Cmd, Conn, CoreCmd, Event};
+use xrdap::cortex::{AfterReset, CoreState, CoreStatus};
 
 /// 曲线最多保留的时长和点数（每条）
 const KEEP_S: f64 = 120.0;
@@ -70,6 +71,10 @@ struct Watch {
     note: String,
     series: Series,
     color: Color32,
+    /// 画在第几张图（1 起）
+    chart: u8,
+    /// 当前值最近一次变化的时刻，用来高亮
+    changed_at: Option<Instant>,
 }
 
 struct VarRow {
@@ -78,6 +83,26 @@ struct VarRow {
     addr: u64,
     ty: String,
     size: Option<u64>,
+    /// 定义在 HAL、CMSIS、RTOS、C 库等第三方代码里
+    system: bool,
+}
+
+/// 按编译单元路径和变量名粗略判断是不是第三方代码（HAL、CMSIS、RTOS、中间件、C 库）的变量。
+fn is_system_var(name: &str, unit: &str) -> bool {
+    let u = unit.replace('\\', "/").to_ascii_lowercase();
+    const UNIT_MARKS: &[&str] = &[
+        "drivers/", "middlewares/", "cmsis", "_hal", "hal_", "freertos", "/rtos", "rt-thread",
+        "lwip", "usb_device", "usbd_", "fatfs", "newlib", "picolibc", "libc", "libgcc",
+        "/arm-none-eabi/", "startup_", "syscalls", "sysmem", "system_stm32", "segger",
+    ];
+    name.starts_with("__")
+        || matches!(name, "errno" | "_impure_ptr" | "environ")
+        || UNIT_MARKS.iter().any(|m| u.contains(m))
+}
+
+/// 输入框占满剩下的宽度：留出边框和内边距，否则每帧把面板撑宽一点。
+fn fill_width(ui: &egui::Ui) -> f32 {
+    (ui.available_width() - 12.0).max(40.0)
 }
 
 struct Csv {
@@ -113,12 +138,17 @@ pub struct App {
     connected: bool,
     probe_desc: String,
     target_desc: String,
+    core_info: String,
+    core: Option<Result<CoreStatus, String>>,
+    core_busy: bool,
+    last_core_poll: Instant,
 
     elf_path: String,
     syms: SymbolTable,
     vars: Vec<VarRow>,
     search: String,
     expr: String,
+    user_only: bool,
 
     watches: Vec<Watch>,
     next_id: u64,
@@ -138,6 +168,7 @@ pub struct App {
     t_last: Option<f64>,
     window_s: f64,
     paused: bool,
+    plot: PlotView,
     csv: Option<Csv>,
 
     log: VecDeque<String>,
@@ -203,11 +234,16 @@ impl App {
             connected: false,
             probe_desc: String::new(),
             target_desc: String::new(),
+            core_info: String::new(),
+            core: None,
+            core_busy: false,
+            last_core_poll: Instant::now(),
             elf_path: get("xrdap.elf").unwrap_or_default(),
             syms: SymbolTable::new(),
             vars: Vec::new(),
             search: String::new(),
             expr: String::new(),
+            user_only: get("xrdap.user_only").is_some_and(|v| v == "1"),
             watches: Vec::new(),
             next_id: 0,
             read_ids: HashMap::new(),
@@ -225,6 +261,10 @@ impl App {
             t_last: None,
             window_s: get("xrdap.window").and_then(|v| v.parse().ok()).unwrap_or(10.0),
             paused: false,
+            plot: PlotView {
+                normalize: get("xrdap.normalize").is_some_and(|v| v == "1"),
+                ..Default::default()
+            },
             csv: None,
             log: VecDeque::new(),
         };
@@ -243,7 +283,8 @@ impl App {
                 let Some(name) = parts.next() else { continue };
                 let div = parts.next().and_then(|d| d.parse().ok()).unwrap_or(1);
                 let show = parts.next() != Some("0");
-                app.add_expr(name, div, show, true);
+                let chart = parts.next().and_then(|c| c.parse().ok()).unwrap_or(1);
+                app.add_expr(name, div, show, chart, true);
             }
         }
         app
@@ -306,6 +347,7 @@ impl App {
                         addr: v.addr,
                         ty: syms.name_of(v.ty),
                         size: syms.size_of(v.ty),
+                        system: is_system_var(&v.name, &v.unit),
                     })
                     .collect();
                 vars.sort_by(|a, b| a.name.cmp(&b.name).then(a.addr.cmp(&b.addr)));
@@ -313,13 +355,13 @@ impl App {
                 self.syms = syms;
                 self.vars = vars;
                 // 已有的监视项按名字重新解析，地址和类型以新 ELF 为准
-                let old: Vec<(String, u16, bool)> = self
+                let old: Vec<(String, u16, bool, u8)> = self
                     .watches
                     .drain(..)
-                    .map(|w| (w.target.name, w.div, w.show))
+                    .map(|w| (w.target.name, w.div, w.show, w.chart))
                     .collect();
-                for (name, div, show) in old {
-                    self.add_expr(&name, div, show, true);
+                for (name, div, show, chart) in old {
+                    self.add_expr(&name, div, show, chart, true);
                 }
             }
             Err(e) => self.log(format!("读 ELF 失败：{e}")),
@@ -327,7 +369,7 @@ impl App {
     }
 
     /// 解析表达式并加进监视表。结构体、数组展开成各个成员；已有同名项时跳过。
-    fn add_expr(&mut self, text: &str, div: u16, show: bool, quiet: bool) {
+    fn add_expr(&mut self, text: &str, div: u16, show: bool, chart: u8, quiet: bool) {
         let text = text.trim();
         if text.is_empty() {
             return;
@@ -360,6 +402,8 @@ impl App {
                         note: String::new(),
                         series: Series::new(KEEP_S, MAX_POINTS),
                         color: color_for(id),
+                        chart: chart.clamp(1, MAX_CHARTS),
+                        changed_at: None,
                     });
                     added += 1;
                 }
@@ -488,6 +532,7 @@ impl App {
             .map(|id| self.watches.iter().position(|w| w.id == *id))
             .collect();
         let mut csv_err = None;
+        let now = Instant::now();
         for f in &frames {
             let t0 = *self.t0_probe.get_or_insert(f.probe_us);
             let t = (f.probe_us as f64 - t0 as f64) / 1e6;
@@ -510,7 +555,12 @@ impl App {
                         }
                         w.series.push(t, w.target.ty.to_f64(b));
                         w.failed = false;
-                        w.latest = Some(b.clone());
+                        if w.latest.as_ref() != Some(b) {
+                            if w.latest.is_some() {
+                                w.changed_at = Some(now);
+                            }
+                            w.latest = Some(b.clone());
+                        }
                     }
                     Some(None) => {
                         if let Some(line) = &mut line {
@@ -544,7 +594,26 @@ impl App {
                 self.probe_desc = probe;
                 self.target_desc = target;
             }
+            Event::CoreInfo(text) => self.core_info = text,
+            Event::Core { cmd, status } => {
+                if let Some(cmd) = cmd {
+                    self.core_busy = false;
+                    let what = match cmd {
+                        CoreCmd::Halt => "停住",
+                        CoreCmd::Resume => "继续",
+                        CoreCmd::Reset(AfterReset::Run) => "复位",
+                        CoreCmd::Reset(AfterReset::Halt) => "复位并停住",
+                    };
+                    match &status {
+                        Ok(s) => self.log(format!("{what}：内核{}", s.state.text())),
+                        Err(e) => self.log(format!("{what}失败：{e}")),
+                    }
+                }
+                self.core = Some(status);
+            }
             Event::Disconnected => {
+                self.core = None;
+                self.core_info.clear();
                 self.connected = false;
                 self.sampling = false;
                 self.log("已断开".into());
@@ -699,7 +768,7 @@ impl App {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.tcp_addr)
                             .hint_text("IP 或 IP:端口，默认端口 3241")
-                            .desired_width(ui.available_width()),
+                            .desired_width(fill_width(ui)),
                     );
                 }
                 Kind::Fake => {
@@ -732,6 +801,57 @@ impl App {
         if self.connected {
             ui.label(RichText::new(&self.probe_desc).small());
             ui.label(RichText::new(&self.target_desc).small());
+            self.ui_core(ui);
+        }
+    }
+
+    /// 内核型号、运行状态和停住、继续、复位按钮。
+    fn ui_core(&mut self, ui: &mut egui::Ui) {
+        let (text, color) = match &self.core {
+            None => ("读取中".to_string(), ui.visuals().weak_text_color()),
+            Some(Err(e)) => (format!("读不到状态：{e}"), ui.visuals().error_fg_color),
+            Some(Ok(s)) => {
+                let c = match s.state {
+                    CoreState::Running | CoreState::Sleeping => Color32::from_rgb(90, 200, 120),
+                    CoreState::Halted => ui.visuals().warn_fg_color,
+                    CoreState::Lockup => ui.visuals().error_fg_color,
+                };
+                (s.state.text().to_string(), c)
+            }
+        };
+        ui.horizontal(|ui| {
+            ui.label(format!("内核：{}", self.core_info));
+            ui.label(RichText::new(format!("● {text}")).color(color));
+        });
+        let halted = matches!(&self.core, Some(Ok(s)) if s.state == CoreState::Halted);
+        let mut cmd = None;
+        ui.add_enabled_ui(!self.core_busy, |ui| {
+            ui.horizontal(|ui| {
+                if halted {
+                    if ui.button("▶ 继续").clicked() {
+                        cmd = Some(CoreCmd::Resume);
+                    }
+                } else if ui.button("⏸ 停住").clicked() {
+                    cmd = Some(CoreCmd::Halt);
+                }
+                if ui.button("↻ 复位").on_hover_text("系统复位后运行").clicked() {
+                    cmd = Some(CoreCmd::Reset(AfterReset::Run));
+                }
+                if ui
+                    .button("复位并停住")
+                    .on_hover_text("系统复位，停在复位向量，第一条指令之前")
+                    .clicked()
+                {
+                    cmd = Some(CoreCmd::Reset(AfterReset::Halt));
+                }
+                if self.core_busy {
+                    ui.add(egui::Spinner::new());
+                }
+            });
+        });
+        if let Some(c) = cmd {
+            self.core_busy = true;
+            self.send(Cmd::Core(c));
         }
     }
 
@@ -756,7 +876,7 @@ impl App {
             ui.add(
                 egui::TextEdit::singleline(&mut self.elf_path)
                     .hint_text("带 -g 调试信息的 ELF")
-                    .desired_width(ui.available_width()),
+                    .desired_width(fill_width(ui)),
             );
         });
         if load {
@@ -774,7 +894,7 @@ impl App {
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut self.expr)
                         .hint_text("表达式，例如 motor[1].pid->out")
-                        .desired_width(ui.available_width()),
+                        .desired_width(fill_width(ui)),
                 );
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if clicked || enter {
@@ -784,13 +904,17 @@ impl App {
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
                     .hint_text(format!("在 {} 个全局变量里搜索", self.vars.len()))
-                    .desired_width(ui.available_width()),
+                    .desired_width(fill_width(ui)),
             );
+            ui.checkbox(&mut self.user_only, "只看自己的变量")
+                .on_hover_text("隐藏 HAL、CMSIS、RTOS、中间件和 C 库里的变量（按源文件路径猜测）");
             let needle = self.search.trim().to_lowercase();
+            let user_only = self.user_only;
             let hits: Vec<usize> = self
                 .vars
                 .iter()
                 .enumerate()
+                .filter(|(_, v)| !(user_only && v.system))
                 .filter(|(_, v)| needle.is_empty() || v.lower.contains(&needle))
                 .map(|(i, _)| i)
                 .collect();
@@ -806,15 +930,16 @@ impl App {
                                 add = Some(v.name.clone());
                             }
                             let size = v.size.map(|s| format!("{s} B")).unwrap_or_else(|| "?".into());
+                            let kind = if v.system { "，第三方代码" } else { "" };
                             ui.label(&v.name)
-                                .on_hover_text(format!("0x{:08X}  {}  {size}", v.addr, v.ty));
+                                .on_hover_text(format!("0x{:08X}  {}  {size}{kind}", v.addr, v.ty));
                             ui.label(RichText::new(&v.ty).weak().small());
                         });
                     }
                 });
         });
         if let Some(name) = add {
-            self.add_expr(&name, 1, true, false);
+            self.add_expr(&name, 1, true, 1, false);
         }
     }
 
@@ -864,6 +989,8 @@ impl App {
                         ui.selectable_value(&mut self.window_s, w, format!("{w} s"));
                     }
                 });
+            ui.toggle_value(&mut self.plot.normalize, "归一化")
+                .on_hover_text("每条曲线按窗口里的最小、最大值缩放到同一高度，方便比较量级差很多的变量");
             ui.toggle_value(&mut self.paused, "暂停跟随")
                 .on_hover_text("暂停后可以拖动、缩放；数据照常接收");
             clear = ui.button("清空曲线").clicked();
@@ -898,6 +1025,14 @@ impl App {
                 RichText::new(text)
             };
             ui.label(text);
+            if let Some(Ok(c)) = &self.core {
+                if matches!(c.state, CoreState::Halted | CoreState::Lockup) {
+                    ui.label(
+                        RichText::new(format!("目标内核{}，变量不会变化", c.state.text()))
+                            .color(ui.visuals().warn_fg_color),
+                    );
+                }
+            }
         }
     }
 
@@ -920,11 +1055,12 @@ impl App {
             .column(Column::initial(150.0).at_least(60.0).clip(true))
             .column(Column::initial(70.0).at_least(40.0).clip(true))
             .column(Column::exact(50.0))
+            .column(Column::exact(44.0))
             .column(Column::initial(170.0).at_least(60.0).clip(true))
             .column(Column::exact(130.0))
             .column(Column::remainder().at_least(40.0).clip(true))
             .header(row_h, |mut h| {
-                for title in ["", "变量", "类型", "分频", "当前值", "写入", ""] {
+                for title in ["", "变量", "类型", "分频", "图", "当前值", "写入", ""] {
                     h.col(|ui| {
                         ui.strong(title);
                     });
@@ -951,6 +1087,19 @@ impl App {
                             .on_hover_text("每几拍采一次");
                     });
                     row.col(|ui| {
+                        ui.add(egui::DragValue::new(&mut w.chart).range(1..=MAX_CHARTS).speed(0.05))
+                            .on_hover_text("画在第几张图，几张图的时间轴联动");
+                    });
+                    row.col(|ui| {
+                        // 值刚变过时短暂高亮
+                        if let Some(t) = w.changed_at {
+                            let age = t.elapsed().as_secs_f32();
+                            if age < 0.4 {
+                                let a = ((0.4 - age) / 0.4 * 36.0) as u8;
+                                let rect = ui.max_rect();
+                                ui.painter().rect_filled(rect, 2.0, Color32::from_rgba_unmultiplied(255, 200, 80, a));
+                            }
+                        }
                         let value = match (&w.latest, w.failed) {
                             (_, true) => RichText::new("读取失败").color(ui.visuals().error_fg_color),
                             (Some(b), _) => RichText::new(w.target.ty.format(b)).monospace(),
@@ -999,33 +1148,21 @@ impl App {
     }
 
     fn ui_plot(&mut self, ui: &mut egui::Ui) {
-        let buckets = (ui.available_width() as usize).max(100);
-        let follow = !self.paused;
+        let curves: Vec<Curve> = self
+            .watches
+            .iter()
+            .filter(|w| w.show)
+            .map(|w| Curve {
+                name: &w.target.name,
+                color: w.color,
+                chart: w.chart,
+                series: &w.series,
+                float: matches!(w.target.ty.kind, ScalarKind::Float),
+            })
+            .collect();
+        self.plot.ui_cursors(ui, &curves);
         let t_last = self.t_last.unwrap_or(0.0);
-        let window = self.window_s;
-        let watches = &self.watches;
-        Plot::new("plot")
-            .legend(Legend::default())
-            .x_axis_label("时间 (s)")
-            .allow_drag(!follow)
-            .allow_zoom(!follow)
-            .allow_scroll(!follow)
-            .show(ui, |p| {
-                let (x0, x1) = if follow {
-                    let x0 = (t_last - window).max(0.0);
-                    let x1 = x0 + window;
-                    p.set_plot_bounds_x(x0..=x1);
-                    p.set_auto_bounds(egui::Vec2b::new(false, true));
-                    (x0, x1)
-                } else {
-                    let b = p.plot_bounds();
-                    (b.min()[0], b.max()[0])
-                };
-                for w in watches.iter().filter(|w| w.show) {
-                    let pts = w.series.decimated(x0, x1, buckets);
-                    p.line(Line::new(w.target.name.clone(), PlotPoints::from(pts)).color(w.color));
-                }
-            });
+        self.plot.ui_plots(ui, &curves, !self.paused, t_last, self.window_s);
     }
 }
 
@@ -1072,6 +1209,15 @@ impl eframe::App for App {
         if self.sampling || self.starting || self.connecting {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
+        // 连接期间每 0.5 秒读一次内核状态（读 DHCSR 是一次厂商 READ，采样期间也可以）
+        if self.connected && !self.core_busy {
+            const POLL: Duration = Duration::from_millis(500);
+            if self.last_core_poll.elapsed() >= POLL {
+                self.last_core_poll = Instant::now();
+                self.send(Cmd::PollCore);
+            }
+            ctx.request_repaint_after(POLL);
+        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
@@ -1086,10 +1232,12 @@ impl eframe::App for App {
         storage.set_string("xrdap.elf", self.elf_path.clone());
         storage.set_string("xrdap.period", self.period.clone());
         storage.set_string("xrdap.window", self.window_s.to_string());
+        storage.set_string("xrdap.normalize", u8::from(self.plot.normalize).to_string());
+        storage.set_string("xrdap.user_only", u8::from(self.user_only).to_string());
         let watches: Vec<String> = self
             .watches
             .iter()
-            .map(|w| format!("{}\t{}\t{}", w.target.name, w.div, u8::from(w.show)))
+            .map(|w| format!("{}\t{}\t{}\t{}", w.target.name, w.div, u8::from(w.show), w.chart))
             .collect();
         storage.set_string("xrdap.watches", watches.join("\n"));
     }
@@ -1102,5 +1250,19 @@ impl eframe::App for App {
             let _ = h.join();
         }
         self.stop_csv();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_var_guess() {
+        assert!(is_system_var("hspi1", "../Drivers/STM32G4xx_HAL_Driver/Src/stm32g4xx_hal_spi.c"));
+        assert!(is_system_var("pxCurrentTCB", r"Middlewares\Third_Party\FreeRTOS\Source\tasks.c"));
+        assert!(is_system_var("__malloc_av_", "newlib/libc/stdlib/mallocr.c"));
+        assert!(!is_system_var("motor", "Core/Src/main.c"));
+        assert!(!is_system_var("pid_cfg", "User/app/pid.cpp"));
     }
 }

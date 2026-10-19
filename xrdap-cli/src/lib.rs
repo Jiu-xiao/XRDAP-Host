@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::{ArgAction, Args, Parser, Subcommand};
+use xrdap::cortex::{self, AfterReset};
 use xrdap::dap::{self, Probe};
 use xrdap::expr::{Resolver, Target};
 use xrdap::fake::FakeProbe;
@@ -129,6 +130,22 @@ pub enum Cmd {
         /// 变量=值，可以写多个。整数可以写十进制或 0x 十六进制，浮点写小数，枚举可以写名字
         #[arg(required = true, help_heading = "参数", value_name = "变量=值")]
         assigns: Vec<String>,
+    },
+
+    /// 停住目标内核
+    #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
+    Halt,
+
+    /// 让停住的目标内核继续运行
+    #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
+    Run,
+
+    /// 复位目标（AIRCR.SYSRESETREQ），默认复位后运行
+    #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
+    Reset {
+        /// 复位后停在复位向量，不运行
+        #[arg(long)]
+        halt: bool,
     },
 
     /// 在探针上按固定周期采样变量，打印或写成 CSV。按 Ctrl-C 停止
@@ -275,6 +292,22 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
             connect_target(&mut probe, &conn)?;
             cmd_write(&mut probe, &list, out)
         }
+        Cmd::Halt | Cmd::Run | Cmd::Reset { .. } => {
+            let syms = load_symbols(&conn)?;
+            let mut probe = open_probe(&conn, &syms, err)?;
+            connect_target(&mut probe, &conn)?;
+            let s = match cli.cmd {
+                Cmd::Halt => cortex::halt(&mut probe)?,
+                Cmd::Run => cortex::resume(&mut probe)?,
+                Cmd::Reset { halt } => {
+                    let after = if halt { AfterReset::Halt } else { AfterReset::Run };
+                    cortex::reset(&mut probe, after)?
+                }
+                _ => unreachable!(),
+            };
+            writeln!(out, "内核：{}（DHCSR 0x{:08X}）", s.state.text(), s.dhcsr)?;
+            Ok(())
+        }
         Cmd::Watch {
             exprs,
             period,
@@ -406,7 +439,17 @@ fn cmd_info(probe: &mut Probe, conn: &ConnOpts, target: bool, out: &mut dyn Writ
     }
     if target {
         match probe.connect_swd(conn.clock) {
-            Ok(t) => writeln!(out, "目标：{}，SWD 时钟 {} Hz", t.describe(), conn.clock)?,
+            Ok(t) => {
+                writeln!(out, "目标：{}，SWD 时钟 {} Hz", t.describe(), conn.clock)?;
+                let core = cortex::info(probe).map(|i| i.describe());
+                let state = cortex::status(probe);
+                match (core, state) {
+                    (Ok(c), Ok(st)) => {
+                        writeln!(out, "内核：{c}，{}（DHCSR 0x{:08X}）", st.state.text(), st.dhcsr)?
+                    }
+                    (Err(e), _) | (_, Err(e)) => writeln!(out, "内核：读不到（{e}）")?,
+                }
+            }
             Err(e) => writeln!(out, "目标：连接失败（{e}）")?,
         }
     }

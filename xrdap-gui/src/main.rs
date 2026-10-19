@@ -5,6 +5,7 @@
 
 mod app;
 mod fonts;
+mod plot;
 mod series;
 mod worker;
 
