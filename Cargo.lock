@@ -3832,7 +3832,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xrdap"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "gimli",
  "mdns-sd",
@@ -3843,31 +3843,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "xrdap-cli"
-version = "0.3.0"
+name = "xrdap-tool"
+version = "0.4.0"
 dependencies = [
  "clap",
  "ctrlc",
- "xrdap",
-]
-
-[[package]]
-name = "xrdap-forward"
-version = "0.3.0"
-dependencies = [
- "clap",
- "xrdap",
-]
-
-[[package]]
-name = "xrdap-gui"
-version = "0.3.0"
-dependencies = [
  "eframe",
  "egui_extras",
  "egui_plot",
  "rfd",
- "serial2",
+ "windows-sys 0.59.0",
  "xrdap",
 ]
 

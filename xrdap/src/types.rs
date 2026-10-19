@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use crate::bytes::{le_u32, le_u64};
 use crate::{Error, Result};
 
 pub type TypeId = usize;
@@ -446,9 +447,9 @@ impl ValueType {
 
     fn float_value(&self, bytes: &[u8]) -> f64 {
         if self.size == 4 {
-            f32::from_le_bytes(bytes[..4].try_into().unwrap()) as f64
+            f32::from_bits(le_u32(bytes, 0)) as f64
         } else {
-            f64::from_le_bytes(bytes[..8].try_into().unwrap())
+            f64::from_bits(le_u64(bytes, 0))
         }
     }
 
@@ -470,7 +471,7 @@ impl ValueType {
             },
             ScalarKind::Pointer => format!("0x{raw:0width$X}"),
             ScalarKind::Enum { values, .. } => {
-                let v = self.int_value(bytes).unwrap() as i64;
+                let v = self.int_value(bytes).unwrap_or(0) as i64;
                 match values.iter().find(|(x, _)| *x == v) {
                     Some((_, name)) => format!("{name} ({v})"),
                     None => format!("{v}"),
@@ -493,7 +494,7 @@ impl ValueType {
         match &self.kind {
             ScalarKind::Float => format_float(self.float_value(bytes), self.size),
             ScalarKind::Pointer => format!("0x{raw:0w$X}", w = self.size as usize * 2),
-            _ => self.int_value(bytes).unwrap().to_string(),
+            _ => self.int_value(bytes).unwrap_or(0).to_string(),
         }
     }
 

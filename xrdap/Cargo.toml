@@ -13,6 +13,8 @@ usb = ["dep:nusb"]
 elf = ["dep:object", "dep:gimli"]
 # 找探针：串口挨个问 DAP_Info（按 USB VID 挑候选口），局域网用 mDNS
 discover = ["usb", "dep:serialport", "dep:mdns-sd"]
+# 进程内的模拟探针，测试和演示用
+fake = []
 
 [dependencies]
 serial2 = { workspace = true }
@@ -21,3 +23,7 @@ object = { version = "0.40", optional = true, default-features = false, features
 gimli = { version = "0.34", optional = true, default-features = false, features = ["read", "std"] }
 serialport = { version = "4.10", optional = true }
 mdns-sd = { version = "0.21.6", optional = true }
+
+[[test]]
+name = "fake_probe"
+required-features = ["fake", "elf"]

@@ -1,5 +1,7 @@
 //! 链路帧：串口上的 libxr Topic 帧和 TCP 上的 `"DAP\0"` 帧。格式见 docs/protocol.md 第 1、2 节。
 
+use crate::bytes::le_u32;
+
 pub const TCP_MAGIC: &[u8; 4] = b"DAP\0";
 pub const TCP_HEADER_LEN: usize = 8;
 pub const TCP_TYPE_REQUEST: u8 = 1;
@@ -137,7 +139,7 @@ impl FrameParser {
                 self.buf.drain(..1);
                 continue;
             }
-            let topic_crc = u32::from_le_bytes(self.buf[4..8].try_into().unwrap());
+            let topic_crc = le_u32(&self.buf, 4);
             let payload = self.buf[HEADER_LEN..HEADER_LEN + data_len].to_vec();
             self.buf.drain(..total);
             if topic_crc == self.topic_crc {

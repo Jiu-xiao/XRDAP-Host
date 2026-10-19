@@ -1,43 +1,17 @@
-//! 把探针变成一个标准的 USB CMSIS-DAP v2 设备，经 USB/IP 协议提供给电脑。
+//! USB/IP 服务端：把探针模拟成一个 USB CMSIS-DAP v2 设备。
 //!
-//! 电脑用 USB/IP 客户端（Linux 内核自带的 `usbip`，Windows 上的 usbip-win2）挂载后，
-//! 系统里出现一个 USB CMSIS-DAP 设备，Keil、pyOCD、probe-rs、OpenOCD 都按 USB 探针使用。
-//! 设备收到的每个 DAP 命令交给调用方提供的执行函数（通常包一层 [`Probe::xfer`](crate::dap::Probe::xfer)），
-//! 所以探针本身经串口、TCP 还是 USB 连着都可以。执行函数总要返回一个响应：探针出错时由调用方
-//! 决定回什么（例如 `[0xFF]`，表示命令不支持，调试工具会报错而不是一直等）。
+//! 虚拟设备：VID:PID 1D50:6199、bcdDevice 0x0200（与 S3 真 USB 设备的 0x0100 区分，Windows 按
+//! 这三项缓存描述符），一个厂商类接口（接口名 `CMSIS-DAP v2`），Bulk OUT 0x01、Bulk IN 0x81，
+//! 高速 512 字节；BOS 里带 MS OS 2.0 描述符，Windows 自动绑定 WinUSB。与固件
+//! `firmware/common/net/usbip_device.hpp` 是同一个设备模型。
 //!
-//! 虚拟设备：VID:PID 1D50:6199、bcdDevice 0x0200（与真 S3 的 0x0100 区分，Windows 按这三项缓存
-//! 描述符），一个厂商类接口（接口名 `CMSIS-DAP v2`），Bulk OUT 0x01、Bulk IN 0x81，高速 512 字节；
-//! BOS 里带 MS OS 2.0 描述符，Windows 自动绑定 WinUSB，设备接口 GUID 与 CMSIS-DAP v2 约定相同。
-//!
-//! 协议：TCP 3240，`OP_REQ_DEVLIST`、`OP_REQ_IMPORT` 之后是 `USBIP_CMD_SUBMIT`/`RET_SUBMIT`、
+//! 协议：`OP_REQ_DEVLIST`、`OP_REQ_IMPORT` 之后是 `USBIP_CMD_SUBMIT`/`RET_SUBMIT`、
 //! `CMD_UNLINK`/`RET_UNLINK`，字段大端。见 Linux 内核文档 `usb/usbip_protocol.rst`。
-//!
-//! ```no_run
-//! use std::net::TcpListener;
-//! use xrdap::usbip::{serve, DeviceInfo, Event};
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let mut probe = xrdap::open::open(Some("COM7"), &Default::default())?;
-//! let info = DeviceInfo::new("XR-DAP-C3", "XRobot-XRDAP-9C139E721384");
-//! let listener = TcpListener::bind("127.0.0.1:3240")?;
-//! serve(
-//!     &listener,
-//!     &info,
-//!     &mut |req| probe.xfer(req).unwrap_or_else(|_| vec![0xFF]),
-//!     |e: Event| println!("{e:?}"),
-//! )?;
-//! # Ok(())
-//! # }
-//! ```
 
 use std::collections::VecDeque;
-use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::io;
 
-/// USB/IP 的默认端口。
-pub const PORT: u16 = 3240;
+use super::link::{bad, Link};
 
 const VERSION: u16 = 0x0111;
 const OP_REQ_DEVLIST: u16 = 0x8005;
@@ -196,7 +170,7 @@ fn put_u32(out: &mut Vec<u8>, v: u32) {
     out.extend_from_slice(&v.to_be_bytes());
 }
 fn be_u32(b: &[u8], at: usize) -> u32 {
-    u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
+    u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
 /// `usbip_usb_device`：312 字节。
@@ -235,47 +209,6 @@ fn ret_header(cmd: u32, seqnum: u32, status: i32, actual: usize) -> Vec<u8> {
     h
 }
 
-/// 停止标志多久看一次：读等待的超时
-const STOP_POLL: Duration = Duration::from_millis(100);
-
-/// 客户端连接。带停止标志时读操作每 [`STOP_POLL`] 醒一次看标志；Windows 上从别的线程
-/// shutdown 套接字叫不醒阻塞中的 recv，只能这样退出。
-struct Link<'a> {
-    s: TcpStream,
-    stop: Option<&'a AtomicBool>,
-}
-
-impl Link<'_> {
-    fn stopped(&self) -> bool {
-        self.stop.is_some_and(|f| f.load(Ordering::Acquire))
-    }
-
-    /// 读满 `buf`。超时醒来时已读到的数据保留，接着读，不会把一帧拆坏。
-    fn read_full(&mut self, buf: &mut [u8]) -> io::Result<()> {
-        let mut got = 0;
-        while got < buf.len() {
-            match self.s.read(&mut buf[got..]) {
-                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
-                Ok(n) => got += n,
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        io::ErrorKind::WouldBlock
-                            | io::ErrorKind::TimedOut
-                            | io::ErrorKind::Interrupted
-                    ) =>
-                {
-                    if self.stopped() {
-                        return Err(io::ErrorKind::Interrupted.into());
-                    }
-                }
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
-}
-
 /// 一个挂载会话：处理一个客户端从 DEVLIST/IMPORT 到断开。
 struct Session<'a> {
     info: &'a DeviceInfo,
@@ -291,10 +224,12 @@ impl Session<'_> {
     /// 把排队的响应交给等着的 IN 请求。
     fn pair(&mut self) {
         while !self.pending_in.is_empty() && !self.responses.is_empty() {
-            let (seq, len) = self.pending_in.pop_front().unwrap();
-            let mut data = self.responses.pop_front().unwrap();
-            data.truncate(len);
-            self.reply(RET_SUBMIT, seq, 0, data.len(), &data);
+            if let (Some((seq, len)), Some(mut data)) =
+                (self.pending_in.pop_front(), self.responses.pop_front())
+            {
+                data.truncate(len);
+                self.reply(RET_SUBMIT, seq, 0, data.len(), &data);
+            }
         }
     }
 
@@ -309,7 +244,7 @@ impl Session<'_> {
         if self.tx.is_empty() {
             return Ok(());
         }
-        let r = s.s.write_all(&self.tx);
+        let r = s.write_all(&self.tx);
         self.tx.clear();
         r
     }
@@ -322,7 +257,8 @@ impl Session<'_> {
     ) -> io::Result<()> {
         let (seq, dir, ep) = (be_u32(hdr, 4), be_u32(hdr, 12), be_u32(hdr, 16));
         let len = be_u32(hdr, 24) as usize;
-        let setup: [u8; 8] = hdr[40..48].try_into().unwrap();
+        let mut setup = [0u8; 8];
+        setup.copy_from_slice(&hdr[40..48]);
         let mut out_data = vec![0u8; if dir == DIR_IN { 0 } else { len }];
         s.read_full(&mut out_data)?;
         match (ep, dir) {
@@ -368,48 +304,13 @@ impl Session<'_> {
     }
 }
 
-fn bad(msg: String) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, msg)
-}
-
-/// 处理一个客户端连接，直到对方断开（返回 Ok）或连接出错。返回时设备已"拔出"。
-/// 设备列表查询（`usbip list -r`）回完列表就返回。
-pub fn serve_connection(
-    s: TcpStream,
+/// 处理一个客户端连接，直到对方断开（返回 Ok）或出错。设备列表查询（`usbip list -r`）
+/// 回完列表就返回。
+pub(super) fn serve(
+    s: &mut Link,
     info: &DeviceInfo,
     exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
 ) -> io::Result<()> {
-    serve_link(Link { s, stop: None }, info, exec)
-}
-
-/// 同 [`serve_connection`]，另外在 `stop` 置位后 0.1 秒内结束会话并返回 Ok
-/// （对客户端来说设备被拔掉）。供别的线程随时停止共享用。
-pub fn serve_connection_until(
-    s: TcpStream,
-    info: &DeviceInfo,
-    exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-    stop: &AtomicBool,
-) -> io::Result<()> {
-    s.set_read_timeout(Some(STOP_POLL))?;
-    match serve_link(
-        Link {
-            s,
-            stop: Some(stop),
-        },
-        info,
-        exec,
-    ) {
-        Err(_) if stop.load(Ordering::Acquire) => Ok(()),
-        r => r,
-    }
-}
-
-fn serve_link(
-    mut s: Link,
-    info: &DeviceInfo,
-    exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-) -> io::Result<()> {
-    s.s.set_nodelay(true)?;
     let mut op = [0u8; 8];
     s.read_full(&mut op)?;
     let code = u16::from_be_bytes([op[2], op[3]]);
@@ -420,7 +321,7 @@ fn serve_link(
             put_u32(&mut reply, 1);
             usb_device(&mut reply);
             reply.extend_from_slice(&[0xFF, 0, 0, 0]); // 接口：厂商类
-            return s.s.write_all(&reply);
+            return s.write_all(&reply);
         }
         OP_REQ_IMPORT => {
             let mut busid = [0u8; 32];
@@ -428,11 +329,11 @@ fn serve_link(
             let wanted = busid.split(|&b| b == 0).next().unwrap_or(&[]);
             if wanted != BUS_ID.as_bytes() {
                 op_header(&mut reply, OP_REP_IMPORT, 1);
-                return s.s.write_all(&reply);
+                return s.write_all(&reply);
             }
             op_header(&mut reply, OP_REP_IMPORT, 0);
             usb_device(&mut reply);
-            s.s.write_all(&reply)?;
+            s.write_all(&reply)?;
         }
         other => return Err(bad(format!("USB/IP：未知操作 0x{other:04X}"))),
     }
@@ -450,42 +351,20 @@ fn serve_link(
             Err(e) => return Err(e),
         }
         match be_u32(&hdr, 0) {
-            CMD_SUBMIT => session.submit(&mut s, &hdr, exec)?,
+            CMD_SUBMIT => session.submit(s, &hdr, exec)?,
             CMD_UNLINK => session.unlink(&hdr),
             other => return Err(bad(format!("USB/IP：未知命令 {other}"))),
         }
-        session.flush(&mut s)?;
-    }
-}
-
-/// [`serve`] 报告的事件。
-#[derive(Debug)]
-pub enum Event {
-    /// 客户端连上（挂载或查询设备列表）
-    Connected(SocketAddr),
-    /// 客户端断开；`Some` 是连接异常断开的原因
-    Disconnected(SocketAddr, Option<io::Error>),
-}
-
-/// 在 `listener` 上一次服务一个客户端，一直运行到 `accept` 出错。
-/// 每个客户端连上和断开时调用 `on_event`。
-pub fn serve(
-    listener: &TcpListener,
-    info: &DeviceInfo,
-    exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-    mut on_event: impl FnMut(Event),
-) -> io::Result<()> {
-    loop {
-        let (s, peer) = listener.accept()?;
-        on_event(Event::Connected(peer));
-        let r = serve_connection(s, info, exec);
-        on_event(Event::Disconnected(peer, r.err()));
+        session.flush(s)?;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::AtomicBool;
     use std::thread;
 
     fn submit(
@@ -534,7 +413,9 @@ mod tests {
             // 两个连接：一次 DEVLIST，一次 IMPORT
             for _ in 0..2 {
                 let (s, _) = listener.accept().unwrap();
-                serve_connection(s, &info, &mut |req| {
+                let stop = AtomicBool::new(false);
+                let mut link = Link::new(s, &stop).unwrap();
+                serve(&mut link, &info, &mut |req| {
                     let mut r = req.to_vec();
                     r.push(0xAA);
                     r

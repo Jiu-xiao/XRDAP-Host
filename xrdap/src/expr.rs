@@ -572,12 +572,19 @@ impl<'a> Resolver<'a> {
         Ok(id)
     }
 
+    /// 内置类型（u8 到 u64、i8 到 i64、f32、f64）
+    fn builtin(&self, name: &str) -> Result<TypeId> {
+        self.syms
+            .builtin(name)
+            .ok_or_else(|| Error::usage(format!("没有内置类型 {name}")))
+    }
+
     fn eval(&mut self, e: &Expr) -> Result<Val> {
         match e {
             Expr::Ident(name) => self.variable(name),
             Expr::Num(v) => Ok(Val::C {
                 value: *v,
-                ty: self.syms.builtin("u32").unwrap(),
+                ty: self.builtin("u32")?,
             }),
             Expr::Raw(addr, spec) => Ok(Val::L {
                 loc: Loc {
@@ -633,7 +640,7 @@ impl<'a> Resolver<'a> {
                     "{name} 没有 DWARF 类型信息，按符号大小当作 u{} 处理",
                     size * 8
                 ));
-                let ty = self.syms.builtin(&format!("u{}", size * 8)).unwrap();
+                let ty = self.builtin(&format!("u{}", size * 8))?;
                 return Ok(Val::L {
                     loc: Loc {
                         base: addr,

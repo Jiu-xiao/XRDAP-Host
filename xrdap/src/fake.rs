@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::bytes::le_u32;
 use crate::transport::Transport;
 use crate::types::SymbolTable;
 use crate::vendor::{Item, SubItem};
@@ -136,7 +137,9 @@ impl FakeProbe {
     }
 
     fn st(&self) -> std::sync::MutexGuard<'_, State> {
-        self.0.lock().unwrap()
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// 环形缓冲的字节数（默认与固件一样 16384）。
@@ -271,7 +274,7 @@ fn get16(p: &[u8]) -> u16 {
 }
 
 fn get32(p: &[u8]) -> u32 {
-    u32::from_le_bytes(p[..4].try_into().unwrap())
+    le_u32(p, 0)
 }
 
 /// 按固件的格式解析一个条目。
@@ -441,7 +444,7 @@ impl State {
                 return false;
             }
             let now = self.elapsed_us();
-            return self.scs_write(addr, u32::from_le_bytes(data.try_into().unwrap()), now);
+            return self.scs_write(addr, le_u32(data, 0), now);
         }
         // 先检查整段都可写，避免写一半
         let ok = (0..data.len()).all(|i| {
@@ -813,11 +816,15 @@ impl State {
 
     fn push_frame(&mut self, frame: Vec<u8>, stop_on_full: bool) {
         while self.ring_used + frame.len() + 2 > self.ring_bytes {
-            if stop_on_full || self.ring.is_empty() {
+            let oldest = if stop_on_full {
+                None
+            } else {
+                self.ring.pop_front()
+            };
+            let Some(old) = oldest else {
                 self.dropped += 1;
                 return;
-            }
-            let old = self.ring.pop_front().unwrap();
+            };
             self.ring_used -= old.len() + 2;
             self.ring_payload -= old.len();
             self.dropped += 1;
@@ -883,11 +890,11 @@ impl State {
         let limit = want.min(PACKET_SIZE - 24);
         let mut frames = Vec::new();
         let mut count = 0u16;
-        while let Some(f) = self.ring.front() {
+        while let Some(f) = self.ring.pop_front() {
             if frames.len() + f.len() > limit {
+                self.ring.push_front(f);
                 break;
             }
-            let f = self.ring.pop_front().unwrap();
             self.ring_used -= f.len() + 2;
             self.ring_payload -= f.len();
             frames.extend(f);

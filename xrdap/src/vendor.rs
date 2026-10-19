@@ -1,5 +1,6 @@
 //! XR 厂商扩展命令 0x80 到 0x85 的请求编码和响应解码。字节格式见 docs/protocol.md 第 3 节。
 
+use crate::bytes::{le_u16, le_u32, le_u48, le_u64};
 use crate::{Error, Result};
 
 pub const CMD_INFO: u8 = 0x80;
@@ -156,24 +157,6 @@ pub fn hex(data: &[u8]) -> String {
         .map(|b| format!("{b:02X}"))
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn le_u16(d: &[u8], at: usize) -> u16 {
-    u16::from_le_bytes([d[at], d[at + 1]])
-}
-
-fn le_u32(d: &[u8], at: usize) -> u32 {
-    u32::from_le_bytes(d[at..at + 4].try_into().unwrap())
-}
-
-fn le_u48(d: &[u8], at: usize) -> u64 {
-    let mut b = [0u8; 8];
-    b[..6].copy_from_slice(&d[at..at + 6]);
-    u64::from_le_bytes(b)
-}
-
-fn le_u64(d: &[u8], at: usize) -> u64 {
-    u64::from_le_bytes(d[at..at + 8].try_into().unwrap())
 }
 
 // ------------------------------------------------------------------ INFO

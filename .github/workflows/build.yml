@@ -43,20 +43,21 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: clippy
-        run: cargo clippy --workspace --all-targets --release -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --release -- -D warnings
 
       - name: 测试
-        run: cargo test --release --workspace
+        run: cargo test --release --workspace --all-features
 
-      - name: 编译
-        run: cargo build --release --workspace
+      - name: 库只开默认 feature 也能编译
+        run: cargo build --release -p xrdap
+
+      - name: 编译 xrdap（图形界面和命令行在同一个可执行文件里）
+        run: cargo build --release -p xrdap-tool
 
       - name: 整理可执行文件
         run: |
           mkdir dist
           cp target/release/xrdap${{ matrix.exe }} dist/xrdap-${{ matrix.suffix }}
-          cp target/release/xrdap-forward${{ matrix.exe }} dist/xrdap-forward-${{ matrix.suffix }}
-          cp target/release/xrdap-gui${{ matrix.exe }} dist/xrdap-gui-${{ matrix.suffix }}
 
       - uses: actions/upload-artifact@v4
         with:

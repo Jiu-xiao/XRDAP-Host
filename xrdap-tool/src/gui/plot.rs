@@ -3,7 +3,7 @@
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{Legend, Line, Plot, PlotPoints, VLine};
 
-use crate::series::Series;
+use super::series::Series;
 
 pub const MAX_CHARTS: u8 = 4;
 

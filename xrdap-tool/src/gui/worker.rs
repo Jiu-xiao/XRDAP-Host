@@ -14,7 +14,7 @@ use xrdap::types::SymbolTable;
 use xrdap::vendor::{self, Item, ItemResult, SubItem};
 use xrdap::watch::{HostFrame, Sampler, StartError, Stats};
 
-use crate::share::{Share, ShareEvent};
+use xrdap::share::{Event as ShareEvent, Protocol, Share};
 
 /// 共享为 USB DAP 时的监听地址：只给本机用
 const SHARE_LISTEN: &str = "127.0.0.1:3240";
@@ -253,19 +253,21 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
         match cmd {
             Cmd::Share(false) => {}
             Cmd::Share(true) => match probe.take() {
-                Some(p) => match Share::start(p, SHARE_LISTEN, share_notify.clone()) {
-                    Ok(s) => {
-                        send(Event::Sharing {
-                            attach: s.attach_command(),
-                            device: format!("{}（{}）", s.info().product, s.info().serial),
-                        });
-                        share = Some(s);
+                Some(p) => {
+                    match Share::start(p, Protocol::Usbip, SHARE_LISTEN, share_notify.clone()) {
+                        Ok(s) => {
+                            send(Event::Sharing {
+                                attach: s.attach_hint(),
+                                device: format!("{}（{}）", s.device().product, s.device().serial),
+                            });
+                            share = Some(s);
+                        }
+                        Err((p, e)) => {
+                            probe = Some(p);
+                            send(Event::Error(e.to_string()));
+                        }
                     }
-                    Err((p, e)) => {
-                        probe = Some(p);
-                        send(Event::Error(e));
-                    }
-                },
+                }
                 None => send(Event::Error("还没有连接".into())),
             },
             Cmd::Connect(conn, c) => {

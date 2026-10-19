@@ -17,6 +17,17 @@ use crate::{Error, Result};
 
 pub const DEFAULT_BAUD: u32 = 4_000_000;
 
+/// 系统里的串口名，排好序（Windows 上 COMx，Linux 上 /dev/ttyXXX）。
+pub fn available_ports() -> Result<Vec<String>> {
+    let mut ports: Vec<String> = SerialPort::available_ports()
+        .map_err(|e| Error::Io(format!("列串口失败：{e}")))?
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect();
+    ports.sort();
+    Ok(ports)
+}
+
 pub struct SerialTransport {
     port: SerialPort,
     rx: Receiver<Vec<u8>>,

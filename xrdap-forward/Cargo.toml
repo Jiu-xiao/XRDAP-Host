@@ -1,9 +1,0 @@
-[package]
-name = "xrdap-forward"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]
-xrdap = { workspace = true, features = ["usb", "discover"] }
-clap = { workspace = true }

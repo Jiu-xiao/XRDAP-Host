@@ -9,7 +9,7 @@ use clap::Parser;
 use xrdap::dap::Probe;
 use xrdap::expr::Resolver;
 use xrdap::fake::FakeProbe;
-use xrdap_cli::{cmd_watch, run, Cli, WatchOpts};
+use xrdap_tool::cli::{cmd_watch, run, Cli, WatchOpts};
 
 fn fixture(name: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -20,13 +20,16 @@ fn fixture(name: &str) -> String {
 }
 
 fn xrdap(args: &[&str]) -> Result<String, String> {
+    xrdap_with_stop(args, &AtomicBool::new(false))
+}
+
+fn xrdap_with_stop(args: &[&str], stop: &AtomicBool) -> Result<String, String> {
     let mut argv = vec!["xrdap", "--fake"];
     argv.extend_from_slice(args);
     let cli = Cli::try_parse_from(argv).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let stop = AtomicBool::new(false);
-    let r = run(cli, &mut out, &mut err, &stop);
+    let r = run(cli, &mut out, &mut err, stop);
     let text = String::from_utf8(out).unwrap();
     match r {
         Ok(()) => Ok(text),
@@ -236,17 +239,59 @@ fn watch_stops_on_ctrl_c() {
 }
 
 #[test]
-fn connection_options_are_exclusive() {
-    let e = xrdap(&["--tcp", "127.0.0.1", "info"]).unwrap_err();
+fn fake_and_probe_are_exclusive() {
+    let e = xrdap(&["--probe", "COM7", "info"]).unwrap_err();
     assert!(e.contains("只能写一个"), "{e}");
 }
 
 #[test]
-fn usb_flag_does_not_swallow_subcommand() {
+fn no_command_means_gui() {
     use clap::Parser;
-    let cli = xrdap_cli::Cli::try_parse_from(["xrdap", "--usb", "info"]).unwrap();
-    assert!(matches!(cli.cmd, xrdap_cli::Cmd::Info { .. }));
-    assert_eq!(cli.conn.usb.as_deref(), Some(""));
-    let cli = xrdap_cli::Cli::try_parse_from(["xrdap", "--usb=ABC", "list"]).unwrap();
-    assert_eq!(cli.conn.usb.as_deref(), Some("ABC"));
+    let cli = Cli::try_parse_from(["xrdap"]).unwrap();
+    assert!(cli.cmd.is_none());
+    let cli = Cli::try_parse_from([
+        "xrdap",
+        "-p",
+        "COM7",
+        "share",
+        "usbip",
+        "--listen",
+        "0.0.0.0:3240",
+    ])
+    .unwrap();
+    assert!(matches!(cli.cmd, Some(xrdap_tool::cli::Cmd::Share { .. })));
+    assert_eq!(cli.conn.probe.as_deref(), Some("COM7"));
+}
+
+#[test]
+fn share_openocd_answers_dap_info_until_stopped() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let flag = stop.clone();
+    let server = std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let r = xrdap_with_stop(&["share", "openocd", "--listen", "127.0.0.1:34241"], &flag);
+        out.extend(r.unwrap().into_bytes());
+        String::from_utf8(out).unwrap()
+    });
+    let mut c = (0..50)
+        .find_map(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            TcpStream::connect("127.0.0.1:34241").ok()
+        })
+        .expect("share 没有开始监听");
+    // DAP_Info(厂商)
+    c.write_all(b"DAP\0\x02\x00\x01\x00\x00\x01").unwrap();
+    let mut hdr = [0u8; 8];
+    c.read_exact(&mut hdr).unwrap();
+    let len = u16::from_le_bytes([hdr[4], hdr[5]]) as usize;
+    let mut resp = vec![0u8; len];
+    c.read_exact(&mut resp).unwrap();
+    assert_eq!(resp[0], 0x00);
+    stop.store(true, Ordering::SeqCst);
+    let text = server.join().unwrap();
+    assert!(text.contains("cmsis-dap tcp port 34241"), "{text}");
+    assert!(text.contains("已连接") && text.contains("已停止"), "{text}");
 }

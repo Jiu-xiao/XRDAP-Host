@@ -33,12 +33,14 @@
 //! | [`watch`]、[`csv`] | 探针端采样、CSV 记录 / Probe-side sampling, CSV records |
 //! | [`cortex`] | 内核状态和停住、继续、复位 / Core state, halt, resume, reset |
 //! | [`wifi`] | 探针 Wi-Fi 的查询、设置、清除 / Query, set and clear the probe's Wi-Fi |
+//! | [`share`] | 把探针共享成 USB/IP 设备或 OpenOCD TCP 后端 / Share a probe over USB/IP or as an OpenOCD TCP backend |
 //! | [`vendor`]、[`frame`]、[`transport`] | 厂商命令编码、串口/TCP 帧、三种传输 / Vendor encoding, serial/TCP framing, transports |
-//! | [`fake`] | 进程内的模拟探针，测试用 / In-process fake probe for tests |
+//! | `fake`（feature `fake`）| 进程内的模拟探针，测试和演示用 / In-process fake probe for tests and demos |
 //!
 //! 字节格式见 XRDAP-ESP 仓库的 `docs/protocol.md`。完整示例在 `examples/`。
 //! Byte formats: `docs/protocol.md` in the XRDAP-ESP repository. Full examples: `examples/`.
 
+mod bytes;
 pub mod cortex;
 pub mod csv;
 pub mod dap;
@@ -48,12 +50,13 @@ pub mod discover;
 pub mod elf;
 pub mod error;
 pub mod expr;
+#[cfg(feature = "fake")]
 pub mod fake;
 pub mod frame;
 pub mod open;
+pub mod share;
 pub mod transport;
 pub mod types;
-pub mod usbip;
 pub mod vendor;
 pub mod watch;
 pub mod wifi;

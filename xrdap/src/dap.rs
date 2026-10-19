@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::bytes::le_u32;
 use crate::transport::Transport;
 use crate::vendor::{self, Item, ItemResult, SubItem, SubRead, SubSetResult, VendorInfo};
 use crate::{Error, Result};
@@ -81,6 +82,19 @@ impl TargetInfo {
     }
 }
 
+/// 探针在 DAP_Info 里报的身份；探针没有报的项为 None。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Identity {
+    pub vendor: Option<String>,
+    pub product: Option<String>,
+    /// 序列号，例如 `XRobot-XRDAP-E8069093EF1C`；同一块探针在 USB、串口、TCP 上相同
+    pub serial: Option<String>,
+    /// 探针固件版本
+    pub firmware: Option<String>,
+    /// CMSIS-DAP 协议版本
+    pub protocol: Option<String>,
+}
+
 /// 一个探针连接。
 pub struct Probe {
     t: Box<dyn Transport>,
@@ -143,6 +157,17 @@ impl Probe {
         }
         let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
         Ok(Some(String::from_utf8_lossy(&data[..end]).into_owned()))
+    }
+
+    /// 读 DAP_Info 里的厂商、产品、序列号和版本。
+    pub fn identity(&mut self) -> Result<Identity> {
+        Ok(Identity {
+            vendor: self.dap_info_string(ID_VENDOR)?,
+            product: self.dap_info_string(ID_PRODUCT)?,
+            serial: self.dap_info_string(ID_SERIAL)?,
+            firmware: self.dap_info_string(ID_FIRMWARE)?,
+            protocol: self.dap_info_string(ID_PROTOCOL)?,
+        })
     }
 
     /// 查询 DAP 包长，并告诉传输层（USB 的 IN 传输长度依赖它）。
@@ -219,7 +244,7 @@ impl Probe {
                 vendor::hex(&resp)
             )));
         }
-        Ok(u32::from_le_bytes(resp[3..7].try_into().unwrap()))
+        Ok(le_u32(&resp, 3))
     }
 
     /// 让探针停止采样。采样期间探针只接受 DAP_Info、DAP_HostStatus 和厂商命令。

@@ -1,16 +1,14 @@
-//! XR-DAP 图形界面：按变量名选变量，在探针上采样，实时画曲线，可以边采边改变量。
-
-// Windows 上发布版不弹控制台窗口
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+//! 图形界面：按变量名选变量，在探针上采样，实时画曲线，可以边采边改变量，或把探针共享给
+//! 别的调试工具。
 
 mod app;
 mod fonts;
 mod plot;
 mod series;
-mod share;
 mod worker;
 
-fn main() -> eframe::Result {
+/// 打开主窗口，直到用户关闭。
+pub fn run() -> eframe::Result {
     let opts = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 760.0])

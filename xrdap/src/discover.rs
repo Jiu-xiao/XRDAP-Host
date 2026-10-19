@@ -17,7 +17,7 @@
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use crate::dap::{self, Probe};
+use crate::dap::Probe;
 use crate::open::Addr;
 use crate::transport::serial::{SerialTransport, DEFAULT_BAUD};
 use crate::Result;
@@ -123,11 +123,10 @@ pub fn serial_candidates() -> Vec<(String, bool)> {
 pub fn probe_serial(port: &str, keep_lines: bool, wait: Duration) -> Option<Found> {
     let mut t = SerialTransport::open(port, DEFAULT_BAUD, keep_lines, wait).ok()?;
     t.handshake(wait).ok()?;
-    let mut probe = Probe::new(Box::new(t));
-    let s = |p: &mut Probe, id| p.dap_info_string(id).ok().flatten();
+    let id = Probe::new(Box::new(t)).identity().unwrap_or_default();
     Some(Found {
-        serial: s(&mut probe, dap::ID_SERIAL),
-        product: s(&mut probe, dap::ID_PRODUCT),
+        serial: id.serial,
+        product: id.product,
         addr: Addr::Serial {
             port: port.to_string(),
             keep_lines,

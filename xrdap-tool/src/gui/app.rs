@@ -14,13 +14,13 @@ use xrdap::expr::{Resolver, Target};
 use xrdap::types::{ScalarKind, SymbolTable};
 use xrdap::watch::{HostFrame, Stats};
 
-use crate::plot::{Curve, PlotView, MAX_CHARTS};
-use crate::series::Series;
-use crate::share::ShareEvent;
-use crate::worker::{self, Cmd, Conn, CoreCmd, Event};
+use super::plot::{Curve, PlotView, MAX_CHARTS};
+use super::series::Series;
+use super::worker::{self, Cmd, Conn, CoreCmd, Event};
 use xrdap::cortex::{AfterReset, CoreState, CoreStatus};
 use xrdap::discover::{self, ProbeEntry};
 use xrdap::open::Addr;
+use xrdap::share::Event as ShareEvent;
 use xrdap::transport::serial::DEFAULT_BAUD;
 
 /// 曲线最多保留的时长和点数（每条）
@@ -234,7 +234,7 @@ fn right_to_left_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R)
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let font = crate::fonts::install(&cc.egui_ctx);
+        let font = super::fonts::install(&cc.egui_ctx);
         let (tx, worker_rx) = channel();
         let (worker_tx, rx) = channel();
         let ctx = cc.egui_ctx.clone();
@@ -363,12 +363,9 @@ impl App {
     }
 
     fn refresh_serial(&mut self) {
-        match serial2::SerialPort::available_ports() {
-            Ok(list) => {
-                self.serial_ports = list.iter().map(|p| p.display().to_string()).collect();
-                self.serial_ports.sort();
-            }
-            Err(e) => self.log(format!("列串口失败：{e}")),
+        match xrdap::transport::serial::available_ports() {
+            Ok(ports) => self.serial_ports = ports,
+            Err(e) => self.log(e.to_string()),
         }
     }
 
@@ -695,7 +692,7 @@ impl App {
                 if let Some(st) = self.share.as_mut() {
                     st.client = match ev {
                         ShareEvent::Client(peer) => Some(peer),
-                        ShareEvent::Idle => None,
+                        ShareEvent::Idle(_) => None,
                     };
                 }
             }

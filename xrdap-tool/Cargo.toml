@@ -1,0 +1,26 @@
+[package]
+name = "xrdap-tool"
+description = "XR-DAP 探针工具 xrdap：图形界面、命令行，以及把探针共享给别的调试工具"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "xrdap_tool"
+path = "src/lib.rs"
+
+[[bin]]
+name = "xrdap"
+path = "src/main.rs"
+
+[dependencies]
+xrdap = { path = "../xrdap", features = ["fake"] }
+clap = { workspace = true }
+ctrlc = "3.4"
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
+egui_plot = "0.34"
+egui_extras = { version = "0.33", default-features = false }
+rfd = "0.15"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }

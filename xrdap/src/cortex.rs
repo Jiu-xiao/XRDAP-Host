@@ -5,6 +5,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::bytes::le_u32;
 use crate::dap::Probe;
 use crate::vendor::{self, Item};
 use crate::{Error, Result};
@@ -130,9 +131,7 @@ pub enum AfterReset {
 pub fn read_u32(probe: &mut Probe, addr: u32) -> Result<u32> {
     let r = probe.read(&[Item::direct(0, 4, addr)])?;
     match r.first() {
-        Some(r) if r.status == 0 && r.value.len() == 4 => {
-            Ok(u32::from_le_bytes(r.value[..4].try_into().unwrap()))
-        }
+        Some(r) if r.status == 0 && r.value.len() == 4 => Ok(le_u32(&r.value, 0)),
         Some(r) => Err(Error::Io(format!(
             "读 0x{addr:08X} 失败：{}",
             vendor::item_status_text(r.status, &[])
