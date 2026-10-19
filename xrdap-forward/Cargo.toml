@@ -5,5 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-xrdap = { workspace = true }
+xrdap = { workspace = true, features = ["usb", "discover"] }
 clap = { workspace = true }

@@ -53,6 +53,7 @@ pub mod frame;
 pub mod open;
 pub mod transport;
 pub mod types;
+pub mod usbip;
 pub mod vendor;
 pub mod watch;
 pub mod wifi;
