@@ -33,6 +33,8 @@
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 /// USB/IP 的默认端口。
 pub const PORT: u16 = 3240;
@@ -233,6 +235,47 @@ fn ret_header(cmd: u32, seqnum: u32, status: i32, actual: usize) -> Vec<u8> {
     h
 }
 
+/// 停止标志多久看一次：读等待的超时
+const STOP_POLL: Duration = Duration::from_millis(100);
+
+/// 客户端连接。带停止标志时读操作每 [`STOP_POLL`] 醒一次看标志；Windows 上从别的线程
+/// shutdown 套接字叫不醒阻塞中的 recv，只能这样退出。
+struct Link<'a> {
+    s: TcpStream,
+    stop: Option<&'a AtomicBool>,
+}
+
+impl Link<'_> {
+    fn stopped(&self) -> bool {
+        self.stop.is_some_and(|f| f.load(Ordering::Acquire))
+    }
+
+    /// 读满 `buf`。超时醒来时已读到的数据保留，接着读，不会把一帧拆坏。
+    fn read_full(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        let mut got = 0;
+        while got < buf.len() {
+            match self.s.read(&mut buf[got..]) {
+                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Ok(n) => got += n,
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                            | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    if self.stopped() {
+                        return Err(io::ErrorKind::Interrupted.into());
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+}
+
 /// 一个挂载会话：处理一个客户端从 DEVLIST/IMPORT 到断开。
 struct Session<'a> {
     info: &'a DeviceInfo,
@@ -262,18 +305,18 @@ impl Session<'_> {
 
     /// 一个命令引起的回复（OUT 的回复和配上的 IN 响应）合成一次写。分两次写时第二段要等
     /// 对方的延迟 ACK，每个来回多出约 40 ms。
-    fn flush(&mut self, s: &mut TcpStream) -> io::Result<()> {
+    fn flush(&mut self, s: &mut Link) -> io::Result<()> {
         if self.tx.is_empty() {
             return Ok(());
         }
-        let r = s.write_all(&self.tx);
+        let r = s.s.write_all(&self.tx);
         self.tx.clear();
         r
     }
 
     fn submit(
         &mut self,
-        s: &mut TcpStream,
+        s: &mut Link,
         hdr: &[u8; 48],
         exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
     ) -> io::Result<()> {
@@ -281,7 +324,7 @@ impl Session<'_> {
         let len = be_u32(hdr, 24) as usize;
         let setup: [u8; 8] = hdr[40..48].try_into().unwrap();
         let mut out_data = vec![0u8; if dir == DIR_IN { 0 } else { len }];
-        s.read_exact(&mut out_data)?;
+        s.read_full(&mut out_data)?;
         match (ep, dir) {
             (0, _) => match control(self.info, &setup) {
                 Some(mut data) => {
@@ -332,13 +375,43 @@ fn bad(msg: String) -> io::Error {
 /// 处理一个客户端连接，直到对方断开（返回 Ok）或连接出错。返回时设备已"拔出"。
 /// 设备列表查询（`usbip list -r`）回完列表就返回。
 pub fn serve_connection(
-    mut s: TcpStream,
+    s: TcpStream,
     info: &DeviceInfo,
     exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
 ) -> io::Result<()> {
-    s.set_nodelay(true)?;
+    serve_link(Link { s, stop: None }, info, exec)
+}
+
+/// 同 [`serve_connection`]，另外在 `stop` 置位后 0.1 秒内结束会话并返回 Ok
+/// （对客户端来说设备被拔掉）。供别的线程随时停止共享用。
+pub fn serve_connection_until(
+    s: TcpStream,
+    info: &DeviceInfo,
+    exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
+    stop: &AtomicBool,
+) -> io::Result<()> {
+    s.set_read_timeout(Some(STOP_POLL))?;
+    match serve_link(
+        Link {
+            s,
+            stop: Some(stop),
+        },
+        info,
+        exec,
+    ) {
+        Err(_) if stop.load(Ordering::Acquire) => Ok(()),
+        r => r,
+    }
+}
+
+fn serve_link(
+    mut s: Link,
+    info: &DeviceInfo,
+    exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
+) -> io::Result<()> {
+    s.s.set_nodelay(true)?;
     let mut op = [0u8; 8];
-    s.read_exact(&mut op)?;
+    s.read_full(&mut op)?;
     let code = u16::from_be_bytes([op[2], op[3]]);
     let mut reply = Vec::new();
     match code {
@@ -347,19 +420,19 @@ pub fn serve_connection(
             put_u32(&mut reply, 1);
             usb_device(&mut reply);
             reply.extend_from_slice(&[0xFF, 0, 0, 0]); // 接口：厂商类
-            return s.write_all(&reply);
+            return s.s.write_all(&reply);
         }
         OP_REQ_IMPORT => {
             let mut busid = [0u8; 32];
-            s.read_exact(&mut busid)?;
+            s.read_full(&mut busid)?;
             let wanted = busid.split(|&b| b == 0).next().unwrap_or(&[]);
             if wanted != BUS_ID.as_bytes() {
                 op_header(&mut reply, OP_REP_IMPORT, 1);
-                return s.write_all(&reply);
+                return s.s.write_all(&reply);
             }
             op_header(&mut reply, OP_REP_IMPORT, 0);
             usb_device(&mut reply);
-            s.write_all(&reply)?;
+            s.s.write_all(&reply)?;
         }
         other => return Err(bad(format!("USB/IP：未知操作 0x{other:04X}"))),
     }
@@ -371,7 +444,7 @@ pub fn serve_connection(
     };
     let mut hdr = [0u8; 48];
     loop {
-        match s.read_exact(&mut hdr) {
+        match s.read_full(&mut hdr) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),

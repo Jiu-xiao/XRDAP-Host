@@ -7,6 +7,7 @@ mod app;
 mod fonts;
 mod plot;
 mod series;
+mod share;
 mod worker;
 
 fn main() -> eframe::Result {

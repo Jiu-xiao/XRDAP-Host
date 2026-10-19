@@ -14,6 +14,11 @@ use xrdap::types::SymbolTable;
 use xrdap::vendor::{self, Item, ItemResult, SubItem};
 use xrdap::watch::{HostFrame, Sampler, StartError, Stats};
 
+use crate::share::{Share, ShareEvent};
+
+/// 共享为 USB DAP 时的监听地址：只给本机用
+const SHARE_LISTEN: &str = "127.0.0.1:3240";
+
 #[derive(Debug, Clone)]
 pub enum Conn {
     /// 真探针：USB、串口或 TCP；`baud` 只对串口有用
@@ -38,6 +43,8 @@ pub enum Cmd {
     /// 读内核状态；界面每隔一段时间发一次
     PollCore,
     Core(CoreCmd),
+    /// 开始或停止共享为 USB DAP（USB/IP）。共享期间别的命令都不执行
+    Share(bool),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +84,15 @@ pub enum Event {
         cmd: Option<CoreCmd>,
         status: Result<CoreStatus, String>,
     },
+    /// 开始共享：挂载命令和虚拟 USB 设备的名字
+    Sharing {
+        attach: String,
+        device: String,
+    },
+    /// 共享中客户端连上或断开
+    Share(ShareEvent),
+    /// 共享结束，探针交回界面
+    ShareStopped,
 }
 
 const TIMEOUT: Duration = Duration::from_millis(2000);
@@ -165,8 +181,15 @@ fn poll_core(probe: &mut Probe) -> Event {
     }
 }
 
-pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'static) {
+pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send + 'static) {
     // 采样帧和统计不唤醒界面：界面采样时自己按固定帧率刷新
+    let share_notify = {
+        let (tx, wake) = (tx.clone(), wake.clone());
+        move |ev: ShareEvent| {
+            let _ = tx.send(Event::Share(ev));
+            wake();
+        }
+    };
     let send = |ev: Event| {
         let quiet = matches!(
             ev,
@@ -183,6 +206,8 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
         }
     };
     let mut probe: Option<Probe> = None;
+    let mut share: Option<Share> = None;
+    let mut clock = 0u32;
     let mut pending: Option<Cmd> = None;
     loop {
         let cmd = match pending.take() {
@@ -192,13 +217,62 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                 Err(_) => return,
             },
         };
+        if let Some(s) = share.take() {
+            match cmd {
+                Cmd::Share(true) => {
+                    share = Some(s);
+                    continue;
+                }
+                // 停止共享：探针交回来，重新连接目标（外部工具可能改过 SWD 时钟、断开过目标）
+                Cmd::Share(false) => {
+                    let mut p = s.stop();
+                    send(Event::ShareStopped);
+                    if let Err(e) = p.connect_swd(clock) {
+                        send(Event::Error(format!("重新连接目标失败：{e}")));
+                    }
+                    send(poll_core(&mut p));
+                    probe = Some(p);
+                    continue;
+                }
+                // 连接别的探针或断开：先停掉共享，交回来的探针随之关闭
+                Cmd::Connect(..) | Cmd::Disconnect => {
+                    drop(s.stop());
+                    send(Event::ShareStopped);
+                }
+                Cmd::PollCore => {
+                    share = Some(s);
+                    continue;
+                }
+                _ => {
+                    share = Some(s);
+                    send(Event::Error("正在共享为 USB DAP，先停止共享".into()));
+                    continue;
+                }
+            }
+        }
         match cmd {
-            Cmd::Connect(conn, clock) => {
+            Cmd::Share(false) => {}
+            Cmd::Share(true) => match probe.take() {
+                Some(p) => match Share::start(p, SHARE_LISTEN, share_notify.clone()) {
+                    Ok(s) => {
+                        send(Event::Sharing {
+                            attach: s.attach_command(),
+                            device: format!("{}（{}）", s.info().product, s.info().serial),
+                        });
+                        share = Some(s);
+                    }
+                    Err((p, e)) => {
+                        probe = Some(p);
+                        send(Event::Error(e));
+                    }
+                },
+                None => send(Event::Error("还没有连接".into())),
+            },
+            Cmd::Connect(conn, c) => {
                 probe = None;
+                clock = c;
                 match open(&conn).and_then(|mut p| {
-                    let t = p
-                        .connect_swd(clock)
-                        .map_err(|e| format!("连接目标失败：{e}"))?;
+                    let t = p.connect_swd(c).map_err(|e| format!("连接目标失败：{e}"))?;
                     Ok((p, t))
                 }) {
                     Ok((mut p, t)) => {
@@ -331,5 +405,57 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                 send(Event::Stopped);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+
+    fn next(rx: &Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
+        loop {
+            let ev = rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("没有等到事件");
+            if want(&ev) {
+                return ev;
+            }
+        }
+    }
+
+    #[test]
+    fn share_blocks_other_commands_and_gives_probe_back() {
+        let (cmd_tx, cmd_rx) = channel();
+        let (ev_tx, ev_rx) = channel();
+        let worker = std::thread::spawn(move || run(cmd_rx, ev_tx, || {}));
+
+        cmd_tx
+            .send(Cmd::Connect(Conn::Fake(None), 4_000_000))
+            .unwrap();
+        next(&ev_rx, |e| matches!(e, Event::Connected { .. }));
+
+        cmd_tx.send(Cmd::Share(true)).unwrap();
+        // 3240 被别的程序占着时共享失败，探针留在后台线程，照样可以停
+        let started = next(&ev_rx, |e| {
+            matches!(e, Event::Sharing { .. } | Event::Error(_))
+        });
+        if let Event::Sharing { attach, .. } = &started {
+            assert!(attach.starts_with("usbip attach -r 127.0.0.1"));
+            cmd_tx.send(Cmd::PollCore).unwrap();
+            cmd_tx.send(Cmd::Core(CoreCmd::Halt)).unwrap();
+            next(
+                &ev_rx,
+                |e| matches!(e, Event::Error(m) if m.contains("共享")),
+            );
+            cmd_tx.send(Cmd::Share(false)).unwrap();
+            next(&ev_rx, |e| matches!(e, Event::ShareStopped));
+        }
+        // 探针回到后台线程：内核命令能执行
+        cmd_tx.send(Cmd::Core(CoreCmd::Halt)).unwrap();
+        next(&ev_rx, |e| matches!(e, Event::Core { cmd: Some(_), .. }));
+
+        drop(cmd_tx);
+        worker.join().unwrap();
     }
 }

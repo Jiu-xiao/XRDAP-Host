@@ -3,6 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::JoinHandle;
@@ -15,6 +16,7 @@ use xrdap::watch::{HostFrame, Stats};
 
 use crate::plot::{Curve, PlotView, MAX_CHARTS};
 use crate::series::Series;
+use crate::share::ShareEvent;
 use crate::worker::{self, Cmd, Conn, CoreCmd, Event};
 use xrdap::cortex::{AfterReset, CoreState, CoreStatus};
 use xrdap::discover::{self, ProbeEntry};
@@ -140,6 +142,13 @@ fn unix_us_now() -> i64 {
         .map_or(0, |d| d.as_micros() as i64)
 }
 
+/// 共享为 USB DAP 的界面状态。
+struct ShareState {
+    attach: String,
+    device: String,
+    client: Option<SocketAddr>,
+}
+
 pub struct App {
     tx: Option<Sender<Cmd>>,
     rx: Receiver<Event>,
@@ -166,6 +175,9 @@ pub struct App {
     core: Option<Result<CoreStatus, String>>,
     core_busy: bool,
     last_core_poll: Instant,
+    /// 正在共享为 USB DAP 时的状态；None 为没有共享
+    share: Option<ShareState>,
+    share_busy: bool,
 
     elf_path: String,
     syms: SymbolTable,
@@ -255,6 +267,8 @@ impl App {
             core: None,
             core_busy: false,
             last_core_poll: Instant::now(),
+            share: None,
+            share_busy: false,
             elf_path: get("xrdap.elf").unwrap_or_default(),
             syms: SymbolTable::new(),
             vars: Vec::new(),
@@ -322,6 +336,11 @@ impl App {
         if let Some(tx) = &self.tx {
             let _ = tx.send(cmd);
         }
+    }
+
+    /// 能不能读写、采样、控制内核：已连接，且探针没有共享给外部工具。
+    fn usable(&self) -> bool {
+        self.connected && self.share.is_none()
     }
 
     fn refresh_usb(&mut self) {
@@ -662,6 +681,29 @@ impl App {
                 }
                 self.core = Some(status);
             }
+            Event::Sharing { attach, device } => {
+                self.share_busy = false;
+                self.sampling = false;
+                self.log(format!("已共享为 USB DAP：{device}；挂载：{attach}"));
+                self.share = Some(ShareState {
+                    attach,
+                    device,
+                    client: None,
+                });
+            }
+            Event::Share(ev) => {
+                if let Some(st) = self.share.as_mut() {
+                    st.client = match ev {
+                        ShareEvent::Client(peer) => Some(peer),
+                        ShareEvent::Idle => None,
+                    };
+                }
+            }
+            Event::ShareStopped => {
+                self.share_busy = false;
+                self.share = None;
+                self.log("已停止共享".into());
+            }
             Event::Disconnected => {
                 self.core = None;
                 self.core_info.clear();
@@ -674,6 +716,7 @@ impl App {
                     self.connected = false;
                 }
                 self.connecting = false;
+                self.share_busy = false;
                 self.starting = false;
                 self.log(e);
             }
@@ -943,8 +986,50 @@ impl App {
         if self.connected {
             ui.label(RichText::new(&self.probe_desc).small());
             ui.label(RichText::new(&self.target_desc).small());
-            self.ui_core(ui);
+            if self.share.is_none() {
+                self.ui_core(ui);
+            }
+            ui.separator();
+            self.ui_share(ui);
         }
+    }
+
+    /// 共享为 USB DAP：开关、挂载命令、谁在用。
+    fn ui_share(&mut self, ui: &mut egui::Ui) {
+        let mut on = self.share.is_some();
+        ui.horizontal(|ui| {
+            let changed = ui
+                .add_enabled(!self.share_busy, egui::Checkbox::new(&mut on, "共享为 USB DAP"))
+                .on_hover_text(
+                    "在本机 3240 端口提供 USB/IP 设备。用 usbip 挂载后，Keil、pyOCD、probe-rs、                     OpenOCD 把它当 USB CMSIS-DAP 探针用。共享期间这里不能读写变量和采样。                     Windows 需要先安装 usbip-win2。",
+                )
+                .changed();
+            if self.share_busy {
+                ui.add(egui::Spinner::new());
+            }
+            if changed {
+                self.share_busy = true;
+                self.send(Cmd::Share(on));
+            }
+        });
+        let Some(st) = &self.share else {
+            return;
+        };
+        ui.label(RichText::new(&st.device).small());
+        let mut copy = false;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(&st.attach).monospace().small());
+            copy = ui.small_button("复制").clicked();
+        });
+        if copy {
+            ui.ctx().copy_text(st.attach.clone());
+        }
+        match st.client {
+            Some(peer) => ui.label(
+                RichText::new(format!("● 正被 {peer} 使用")).color(Color32::from_rgb(90, 200, 120)),
+            ),
+            None => ui.label(RichText::new("等待挂载（Linux 用 sudo 执行上面的命令）").weak()),
+        };
     }
 
     /// 内核型号、运行状态和停住、继续、复位按钮。
@@ -1113,7 +1198,7 @@ impl App {
                     self.send(Cmd::Stop);
                 }
             } else {
-                let can = self.connected && !self.starting && !self.watches.is_empty();
+                let can = self.usable() && !self.starting && !self.watches.is_empty();
                 start = ui
                     .add_enabled(can, egui::Button::new("▶ 开始采样"))
                     .clicked();
@@ -1126,7 +1211,7 @@ impl App {
                     .on_hover_text("默认覆盖最旧的帧");
             });
             read = ui
-                .add_enabled(self.connected, egui::Button::new("读一次"))
+                .add_enabled(self.usable(), egui::Button::new("读一次"))
                 .clicked();
             ui.separator();
             if let Some(c) = &self.csv {
@@ -1327,8 +1412,12 @@ impl App {
             self.watches.remove(i);
         }
         for i in writes {
-            if !self.connected {
-                self.watches[i].note = "还没有连接".into();
+            if !self.usable() {
+                self.watches[i].note = if self.connected {
+                    "探针正在共享为 USB DAP".into()
+                } else {
+                    "还没有连接".into()
+                };
                 continue;
             }
             let w = &mut self.watches[i];
@@ -1407,7 +1496,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
         // 连接期间每 0.5 秒读一次内核状态（读 DHCSR 是一次厂商 READ，采样期间也可以）
-        if self.connected && !self.core_busy {
+        if self.usable() && !self.core_busy {
             const POLL: Duration = Duration::from_millis(500);
             if self.last_core_poll.elapsed() >= POLL {
                 self.last_core_poll = Instant::now();
