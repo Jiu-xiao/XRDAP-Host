@@ -47,7 +47,7 @@ pub struct DeviceInfo {
 
 impl DeviceInfo {
     /// `product` 是探针的产品名（例如 XR-DAP-C3），后面自动加上 " CMSIS-DAP"。
-    pub fn new(product: &str, serial: &str) -> Self {
+    pub(crate) fn new(product: &str, serial: &str) -> Self {
         Self {
             product: format!("{product} CMSIS-DAP"),
             serial: serial.to_string(),

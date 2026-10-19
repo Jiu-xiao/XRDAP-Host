@@ -131,16 +131,6 @@ impl Share {
         })
     }
 
-    /// 协议
-    pub fn protocol(&self) -> Protocol {
-        self.protocol
-    }
-
-    /// 实际监听的地址
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
-    }
-
     /// USB/IP 虚拟设备的产品名和序列号
     pub fn device(&self) -> &DeviceInfo {
         &self.device
