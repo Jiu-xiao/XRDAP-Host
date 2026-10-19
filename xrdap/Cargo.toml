@@ -1,0 +1,19 @@
+[package]
+name = "xrdap"
+description = "XR-DAP 探针的上位机库：传输、CMSIS-DAP 初始化、厂商扩展命令、DWARF 变量解析"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["usb", "elf"]
+# CMSIS-DAP v2 USB Bulk 传输
+usb = ["dep:nusb"]
+# 读 ELF 符号和 DWARF 类型
+elf = ["dep:object", "dep:gimli"]
+
+[dependencies]
+serial2 = { workspace = true }
+nusb = { version = "0.2", optional = true }
+object = { version = "0.40", optional = true, default-features = false, features = ["read_core", "elf", "std"] }
+gimli = { version = "0.34", optional = true, default-features = false, features = ["read", "std"] }

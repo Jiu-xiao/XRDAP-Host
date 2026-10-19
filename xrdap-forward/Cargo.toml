@@ -1,0 +1,9 @@
+[package]
+name = "xrdap-forward"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+xrdap = { workspace = true }
+clap = { workspace = true }
