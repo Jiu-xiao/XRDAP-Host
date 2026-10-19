@@ -3,8 +3,11 @@
 
 mod app;
 mod fonts;
+mod model;
+mod panels;
 mod plot;
 mod series;
+mod widgets;
 mod worker;
 
 /// 打开主窗口，直到用户关闭。
@@ -16,6 +19,7 @@ pub fn run() -> eframe::Result {
             .with_title("XR-DAP"),
         ..Default::default()
     };
+    // 应用名决定界面设置的保存位置，沿用旧名，升级后设置不丢
     eframe::run_native(
         "xrdap-gui",
         opts,

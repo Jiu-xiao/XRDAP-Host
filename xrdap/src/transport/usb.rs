@@ -82,7 +82,7 @@ impl UsbTransport {
                 1 => &found[0],
                 n => {
                     return Err(Error::usage(format!(
-                        "插着 {n} 个探针，用 --usb <序列号> 选一个：{}",
+                        "插着 {n} 个探针，用 -p usb:<序列号> 选一个：{}",
                         serial_list(&found)
                     )))
                 }

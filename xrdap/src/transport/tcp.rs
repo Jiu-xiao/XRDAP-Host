@@ -1,4 +1,4 @@
-//! TCP 传输：探针的 3241 端口或 xrdap-forward 的监听端口。
+//! TCP 传输：探针的 3241 端口，或 `xrdap share openocd` 的监听端口。
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
