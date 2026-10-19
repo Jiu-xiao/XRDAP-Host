@@ -476,6 +476,14 @@ impl ValueType {
         }
     }
 
+    /// 画曲线用的数值：整数、枚举、布尔、指针按整数值，浮点按原值。
+    pub fn to_f64(&self, bytes: &[u8]) -> f64 {
+        match &self.kind {
+            ScalarKind::Float => self.float_value(bytes),
+            _ => self.int_value(bytes).unwrap_or(0) as f64,
+        }
+    }
+
     /// 写 CSV 用的格式：只有数值。
     pub fn format_plain(&self, bytes: &[u8]) -> String {
         let raw = raw_u64(bytes);

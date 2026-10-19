@@ -243,6 +243,11 @@ impl<'a> Sampler<'a> {
         &self.items
     }
 
+    /// 采样期间探针仍接受厂商的 READ、WRITE 命令（例如在线改参数），用这个拿到探针。
+    pub fn probe_mut(&mut self) -> &mut Probe {
+        self.probe
+    }
+
     pub fn stats(&self) -> Stats {
         self.stats
     }

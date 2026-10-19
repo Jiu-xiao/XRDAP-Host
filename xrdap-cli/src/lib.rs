@@ -56,8 +56,8 @@ pub struct Cli {
 #[derive(Args, Debug, Clone)]
 #[command(next_help_heading = "连接选项")]
 pub struct ConnOpts {
-    /// 用 USB（CMSIS-DAP v2）连接；插着多个探针时写序列号
-    #[arg(long, global = true, num_args = 0..=1, default_missing_value = "", value_name = "序列号")]
+    /// 用 USB（CMSIS-DAP v2）连接；插着多个探针时写成 --usb=序列号
+    #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "", value_name = "序列号")]
     pub usb: Option<String>,
 
     /// 用串口连接，例如 COM35 或 /dev/ttyUSB0
@@ -529,7 +529,7 @@ struct Output<'a> {
 impl Output<'_> {
     fn header(&mut self) -> CliResult {
         if let Some(csv) = &mut self.csv {
-            let mut line = String::from("host_time,t,tick");
+            let mut line = String::from("host_time,t,sample_tick");
             for t in &self.targets {
                 line.push(',');
                 line.push_str(&csv_field(&t.name));

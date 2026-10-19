@@ -25,7 +25,7 @@ cargo build --release
 
 变量的地址和类型取自目标程序 ELF 里的 DWARF 调试信息（编译时加 `-g`），可以写结构体成员、数组下标、指针和类型转换，例如 `state.speed`、`motor[1].pid->out`、`head->next->value`、`(uint32_t***)p`；没有 ELF 时直接写地址和类型，例如 `0x20000010:u32`。xrdap 先完成 SWD 连接和调试域上电，再发送探针的厂商命令（命令格式见 [XRDAP-ESP32-S3 的 docs/protocol.md](https://github.com/Jiu-xiao/XRDAP-ESP32-S3/blob/main/docs/protocol.md)）。
 
-连接方式用 `--usb`、`--serial COM35` 或 `--tcp 192.168.1.50` 指定，不写时用 USB；插着多个探针时用 `--usb <序列号>` 选择，`xrdap list` 列出序列号。SWD 时钟用 `--clock` 设置，默认 4 MHz。
+连接方式用 `--usb`、`--serial COM35` 或 `--tcp 192.168.1.50` 指定，不写时用 USB；插着多个探针时用 `--usb=<序列号>` 选择，`xrdap list` 列出序列号。SWD 时钟用 `--clock` 设置，默认 4 MHz。
 
 以测试程序 [g431-test.c](xrdap/tests/fixtures/g431-test.c) 为例，读几个变量，其中 `chain_p1` 是三级指针链，`null_p1` 是空指针：
 
@@ -51,10 +51,10 @@ v_u8 ← 0x5A，读回 90 (0x5A)
 写入 log.csv，按 Ctrl-C 停止
 ```
 
-CSV 每帧一行，`host_time` 列是按 SUB_READ 往返时间换算到电脑时钟的 Unix 时间，`t` 列是相对第一帧的探针时间，该拍没有采的变量为空，读取失败为 `ERR`：
+CSV 每帧一行，`host_time` 列是按 SUB_READ 往返时间换算到电脑时钟的 Unix 时间，`t` 列是相对第一帧的探针时间，`sample_tick` 是探针的节拍序号，该拍没有采的变量为空，读取失败为 `ERR`：
 
 ```
-host_time,t,tick,cnt_a,cnt_b,v_u32
+host_time,t,sample_tick,cnt_a,cnt_b,v_u32
 1792345704.807567,0.000000,0,0,,2309737967
 1792345704.808567,0.001000,1,1,,
 1792345704.809567,0.002000,2,2,,

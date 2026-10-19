@@ -115,7 +115,7 @@ fn watch_prints_and_writes_csv() {
     let text = std::fs::read_to_string(&csv).unwrap();
     let _ = std::fs::remove_file(&csv);
     let mut lines = text.lines();
-    assert_eq!(lines.next().unwrap(), "host_time,t,tick,cnt_a,cnt_b,v_u16,*null_p1");
+    assert_eq!(lines.next().unwrap(), "host_time,t,sample_tick,cnt_a,cnt_b,v_u16,*null_p1");
     let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
     assert!(rows.len() > 250, "{} 行", rows.len());
     for r in &rows {
@@ -187,4 +187,14 @@ fn watch_stops_on_ctrl_c() {
 fn connection_options_are_exclusive() {
     let e = xrdap(&["--tcp", "127.0.0.1", "info"]).unwrap_err();
     assert!(e.contains("只能选一个"), "{e}");
+}
+
+#[test]
+fn usb_flag_does_not_swallow_subcommand() {
+    use clap::Parser;
+    let cli = xrdap_cli::Cli::try_parse_from(["xrdap", "--usb", "info"]).unwrap();
+    assert!(matches!(cli.cmd, xrdap_cli::Cmd::Info { .. }));
+    assert_eq!(cli.conn.usb.as_deref(), Some(""));
+    let cli = xrdap_cli::Cli::try_parse_from(["xrdap", "--usb=ABC", "list"]).unwrap();
+    assert_eq!(cli.conn.usb.as_deref(), Some("ABC"));
 }
