@@ -9,21 +9,15 @@ use xrdap::cortex::{self, AfterReset, CoreStatus};
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
 use xrdap::fake::FakeProbe;
-use xrdap::transport::serial::SerialTransport;
-use xrdap::transport::tcp::TcpTransport;
+use xrdap::open::{self, Addr, OpenOptions};
 use xrdap::types::SymbolTable;
 use xrdap::vendor::{self, Item, ItemResult, SubItem};
 use xrdap::watch::{HostFrame, Sampler, StartError, Stats};
 
 #[derive(Debug, Clone)]
 pub enum Conn {
-    Usb(Option<String>),
-    Serial {
-        port: String,
-        baud: u32,
-        keep_lines: bool,
-    },
-    Tcp(String),
+    /// 真探针：USB、串口或 TCP；`baud` 只对串口有用
+    Probe { addr: Addr, baud: u32 },
     /// 进程内的模拟探针；有 ELF 时按 ELF 填内存
     Fake(Option<PathBuf>),
 }
@@ -90,19 +84,14 @@ const TIMEOUT: Duration = Duration::from_millis(2000);
 fn open(conn: &Conn) -> Result<Probe, String> {
     let e = |x: xrdap::Error| x.to_string();
     Ok(match conn {
-        Conn::Usb(serial) => Probe::new(Box::new(
-            xrdap::transport::usb::UsbTransport::open(serial.as_deref(), TIMEOUT).map_err(e)?,
-        )),
-        Conn::Serial {
-            port,
-            baud,
-            keep_lines,
-        } => {
-            let mut t = SerialTransport::open(port, *baud, *keep_lines, TIMEOUT).map_err(e)?;
-            t.handshake(Duration::from_secs(10)).map_err(e)?;
-            Probe::new(Box::new(t))
+        Conn::Probe { addr, baud } => {
+            let opts = OpenOptions {
+                timeout: TIMEOUT,
+                baud: *baud,
+                ..OpenOptions::default()
+            };
+            open::open_addr(addr, &opts).map_err(e)?
         }
-        Conn::Tcp(addr) => Probe::new(Box::new(TcpTransport::connect(addr, TIMEOUT).map_err(e)?)),
         Conn::Fake(elf) => {
             let fake = FakeProbe::new();
             if let Some(path) = elf {

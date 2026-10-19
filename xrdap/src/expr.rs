@@ -13,8 +13,9 @@
 
 use std::fmt;
 
+use crate::dap::Probe;
 use crate::types::{Member, SymbolTable, Type, TypeId, ValueType};
-use crate::vendor::{Item, MAX_DEPTH};
+use crate::vendor::{self, Item, MAX_DEPTH};
 use crate::{Error, Result};
 
 /// 解析好的一个变量：可以直接变成厂商条目。
@@ -61,6 +62,39 @@ impl Target {
             s = format!("[{s}{}]", off(d as i64));
         }
         s + &off(self.final_off as i64)
+    }
+
+    /// 读这个变量的当前值（`ty.size` 字节，小端）。探针要先连上目标（[`Probe::connect_swd`]）。
+    pub fn read(&self, probe: &mut Probe) -> Result<Vec<u8>> {
+        let r = probe.read(&[self.item(0)])?;
+        match r.into_iter().next() {
+            Some(v) if v.status == vendor::STATUS_OK => Ok(v.value),
+            Some(v) => Err(self.item_error(v.status)),
+            None => Err(Error::protocol("READ 没有返回结果")),
+        }
+    }
+
+    /// 读出并按类型格式化，例如 `1.5`、`42 (0x2A)`、`RUN (1)`。
+    pub fn read_text(&self, probe: &mut Probe) -> Result<String> {
+        Ok(self.ty.format(&self.read(probe)?))
+    }
+
+    /// 写入 `ty.size` 字节的小端值（可以用 `ty.parse("1.5")` 从文字得到）。
+    pub fn write(&self, probe: &mut Probe, value: &[u8]) -> Result<()> {
+        let r = probe.write(&[(self.item(0), value.to_vec())])?;
+        match r.into_iter().next() {
+            Some(v) if v.status == vendor::STATUS_OK => Ok(()),
+            Some(v) => Err(self.item_error(v.status)),
+            None => Err(Error::protocol("WRITE 没有返回结果")),
+        }
+    }
+
+    fn item_error(&self, status: u8) -> Error {
+        Error::Io(format!(
+            "{}：{}",
+            self.name,
+            vendor::item_status_text(status, &self.chain)
+        ))
     }
 }
 

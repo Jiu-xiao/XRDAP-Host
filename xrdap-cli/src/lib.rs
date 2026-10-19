@@ -8,13 +8,15 @@ use std::time::{Duration, Instant};
 use clap::{ArgAction, Args, Parser, Subcommand};
 use xrdap::cortex::{self, AfterReset};
 use xrdap::dap::{self, Probe};
+use xrdap::discover;
 use xrdap::expr::{Resolver, Target};
 use xrdap::fake::FakeProbe;
-use xrdap::transport::serial::{SerialTransport, DEFAULT_BAUD};
-use xrdap::transport::tcp::TcpTransport;
+use xrdap::open::{self, Addr, OpenOptions, Spec};
+use xrdap::transport::serial::DEFAULT_BAUD;
 use xrdap::types::SymbolTable;
 use xrdap::vendor::{self, Item, SubItem};
 use xrdap::watch::{self, HostFrame, Sampler, StartError};
+use xrdap::wifi;
 
 pub type CliResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -33,7 +35,8 @@ const TEMPLATE: &str = "{about-with-newline}\n用法：{usage}\n\n{all-args}{aft
     disable_version_flag = true,
     disable_help_subcommand = true,
     after_help = "\
-连接方式选一种：--usb、--serial、--tcp；都不写时用 USB。
+用 --probe 指定探针（序列号、usb、COM35、192.168.0.108 等），不写时自动选唯一的那块；
+xrdap list 列出所有探针。
 变量的写法：counter、state.speed、motor[1].pid->out、*ptr、p->q->x、
   (uint32_t***)p 这样的类型转换，或原始地址 0x20000010:u32（类型可以是 u8/u16/u32/u64、
   i8/i16/i32/i64、f32/f64，以及 ELF 里的类型名，可以带 *）。"
@@ -57,11 +60,16 @@ pub struct Cli {
 #[derive(Args, Debug, Clone)]
 #[command(next_help_heading = "连接选项")]
 pub struct ConnOpts {
-    /// 用 USB（CMSIS-DAP v2）连接；插着多个探针时写成 --usb=序列号
+    /// 用哪块探针：序列号（全称或末尾几位）、usb、COM35、192.168.0.108、xrdap-93ef1c.local。
+    /// 不写时自动选唯一的那块；xrdap list 列出所有探针和对应的写法
+    #[arg(short = 'p', long, global = true, value_name = "探针")]
+    pub probe: Option<String>,
+
+    /// 用 USB 连接，等同于 --probe usb；插着多个探针时写成 --usb=序列号
     #[arg(long, global = true, num_args = 0..=1, require_equals = true, default_missing_value = "", value_name = "序列号")]
     pub usb: Option<String>,
 
-    /// 用串口连接，例如 COM35 或 /dev/ttyUSB0
+    /// 用串口连接，等同于 --probe COM35
     #[arg(long, global = true, value_name = "串口")]
     pub serial: Option<String>,
 
@@ -69,11 +77,11 @@ pub struct ConnOpts {
     #[arg(long, global = true, default_value_t = DEFAULT_BAUD, hide_default_value = true, value_name = "波特率")]
     pub baud: u32,
 
-    /// 打开串口后不改 DTR/RTS（默认置为 DTR=1、RTS=0，打开时探针会复位一次）
+    /// 打开串口后不改 DTR/RTS（默认置为 DTR=1、RTS=0）。乐鑫芯片自带的 USB 口自动这样处理
     #[arg(long, global = true)]
     pub keep_lines: bool,
 
-    /// 用 TCP 连接：探针的 IP，或 xrdap-forward 的监听地址，端口默认 3241
+    /// 用 TCP 连接，等同于 --probe 地址：探针的 IP 或主机名、xrdap-forward 的监听地址，端口默认 3241
     #[arg(long, global = true, value_name = "地址[:端口]")]
     pub tcp: Option<String>,
 
@@ -102,7 +110,7 @@ pub struct ConnOpts {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// 列出 USB 上的 XR-DAP 探针
+    /// 列出 USB、串口、局域网上的探针，以及选它们时 --probe 的写法
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     List,
 
@@ -138,6 +146,13 @@ pub enum Cmd {
         assigns: Vec<String>,
     },
 
+    /// 查询、设置、清除探针的 Wi-Fi 热点参数（经 DAP 本身，不用另开串口终端）
+    #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
+    Wifi {
+        #[command(subcommand)]
+        op: WifiCmd,
+    },
+
     /// 停住目标内核
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Halt,
@@ -164,7 +179,6 @@ pub enum Cmd {
         /// 采样周期，例如 1000（µs）、500us、2ms（默认 1ms）
         #[arg(
             long,
-            short = 'p',
             default_value = "1ms",
             hide_default_value = true,
             value_name = "周期"
@@ -189,6 +203,28 @@ pub enum Cmd {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum WifiCmd {
+    /// 显示热点名、是否连接、IP、信号强度（不显示密码）
+    #[command(help_template = TEMPLATE, disable_help_flag = true)]
+    Status,
+
+    /// 保存热点参数，探针随后重启并连接这个热点
+    #[command(help_template = TEMPLATE, disable_help_flag = true)]
+    Set {
+        /// 热点名
+        #[arg(help_heading = "参数", value_name = "热点")]
+        ssid: String,
+        /// 密码，8 到 63 个字节；开放网络不写
+        #[arg(help_heading = "参数", value_name = "密码")]
+        password: Option<String>,
+    },
+
+    /// 清除热点参数，探针随后重启，不再连 Wi-Fi
+    #[command(help_template = TEMPLATE, disable_help_flag = true)]
+    Clear,
+}
+
 fn parse_hz(s: &str) -> Result<u32, String> {
     dap::parse_clock(s).map_err(|e| e.to_string())
 }
@@ -203,20 +239,11 @@ fn load_symbols(conn: &ConnOpts) -> CliResult<SymbolTable> {
 }
 
 fn open_probe(conn: &ConnOpts, syms: &SymbolTable, err: &mut dyn Write) -> CliResult<Probe> {
-    let chosen = [
-        conn.usb.is_some(),
-        conn.serial.is_some(),
-        conn.tcp.is_some(),
-        conn.fake,
-    ]
-    .iter()
-    .filter(|&&b| b)
-    .count();
-    if chosen > 1 {
-        return Err("--usb、--serial、--tcp、--fake 只能选一个".into());
-    }
-    let timeout = Duration::from_millis(conn.timeout_ms);
     if conn.fake {
+        if conn.probe.is_some() || conn.usb.is_some() || conn.serial.is_some() || conn.tcp.is_some()
+        {
+            return Err("--fake 和 --probe、--usb、--serial、--tcp 只能写一个".into());
+        }
         let fake = FakeProbe::new();
         if let Some(path) = &conn.elf {
             fake.load_elf_image(&std::fs::read(path)?)?;
@@ -224,21 +251,59 @@ fn open_probe(conn: &ConnOpts, syms: &SymbolTable, err: &mut dyn Write) -> CliRe
         }
         return Ok(Probe::new(Box::new(fake)));
     }
-    if let Some(addr) = &conn.tcp {
-        return Ok(Probe::new(Box::new(TcpTransport::connect(addr, timeout)?)));
+    let opts = OpenOptions {
+        timeout: Duration::from_millis(conn.timeout_ms),
+        baud: conn.baud,
+        ..OpenOptions::default()
+    };
+    let addr = match probe_spec(conn)? {
+        Spec::Addr(Addr::Serial { port, keep_lines }) => Addr::Serial {
+            port,
+            keep_lines: keep_lines || conn.keep_lines,
+        },
+        Spec::Addr(addr) => addr,
+        Spec::Auto | Spec::Serial(_) => {
+            // 自动选择或按序列号找：先找，再按找到的连接打开
+            return Ok(open::open(conn.probe.as_deref(), &opts)?);
+        }
+    };
+    if matches!(
+        addr,
+        Addr::Serial {
+            keep_lines: false,
+            ..
+        }
+    ) {
+        writeln!(err, "打开 {addr}，等探针应答……")?;
+    }
+    Ok(open::open_addr(&addr, &opts)?)
+}
+
+/// 连接选项合成一个探针说明：--probe，或兼容的 --usb、--serial、--tcp，只能写一个。
+fn probe_spec(conn: &ConnOpts) -> CliResult<Spec> {
+    let mut specs = Vec::new();
+    if let Some(p) = &conn.probe {
+        specs.push(open::parse(Some(p)));
+    }
+    if let Some(sn) = &conn.usb {
+        specs.push(Spec::Addr(Addr::Usb {
+            serial: Some(sn.clone()).filter(|s| !s.is_empty()),
+        }));
     }
     if let Some(port) = &conn.serial {
-        let mut t = SerialTransport::open(port, conn.baud, conn.keep_lines, timeout)?;
-        if !conn.keep_lines {
-            writeln!(err, "打开 {port}，等探针复位后应答……")?;
-        }
-        t.handshake(Duration::from_secs(10))?;
-        return Ok(Probe::new(Box::new(t)));
+        specs.push(Spec::Addr(Addr::Serial {
+            port: port.clone(),
+            keep_lines: false,
+        }));
     }
-    let serial = conn.usb.as_deref().filter(|s| !s.is_empty());
-    Ok(Probe::new(Box::new(
-        xrdap::transport::usb::UsbTransport::open(serial, timeout)?,
-    )))
+    if let Some(host) = &conn.tcp {
+        specs.push(Spec::Addr(Addr::Tcp { host: host.clone() }));
+    }
+    match specs.len() {
+        0 => Ok(Spec::Auto),
+        1 => Ok(specs.remove(0)),
+        _ => Err("--probe、--usb、--serial、--tcp 只能写一个".into()),
+    }
 }
 
 fn connect_target(probe: &mut Probe, conn: &ConnOpts) -> CliResult<dap::TargetInfo> {
@@ -295,6 +360,10 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
             connect_target(&mut probe, &conn)?;
             cmd_write(&mut probe, &list, out)
         }
+        Cmd::Wifi { op } => {
+            let mut probe = open_probe(&conn, &SymbolTable::new(), err)?;
+            cmd_wifi(&mut probe, &op, out)
+        }
         Cmd::Halt | Cmd::Run | Cmd::Reset { .. } => {
             let syms = load_symbols(&conn)?;
             let mut probe = open_probe(&conn, &syms, err)?;
@@ -349,25 +418,26 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
 }
 
 fn cmd_list(out: &mut dyn Write) -> CliResult {
-    let list = xrdap::transport::usb::list()?;
-    if list.is_empty() {
-        writeln!(
-            out,
-            "没有找到 USB 探针（VID:PID {:04X}:{:04X}）",
-            xrdap::transport::usb::VID,
-            xrdap::transport::usb::PID
-        )?;
+    let probes = discover::group(discover::find(&discover::Options::default()));
+    if probes.is_empty() {
+        writeln!(out, "没有找到探针（USB、串口、局域网都没有）")?;
+        return Ok(());
     }
-    for p in list {
-        writeln!(
-            out,
-            "{}  {}  {}（总线 {}，地址 {}）",
-            p.serial.as_deref().unwrap_or("?"),
-            p.product.as_deref().unwrap_or("?"),
-            p.manufacturer.as_deref().unwrap_or(""),
-            p.bus,
-            p.address
-        )?;
+    write!(out, "{}", discover::table(&probes))?;
+    Ok(())
+}
+
+fn cmd_wifi(probe: &mut Probe, op: &WifiCmd, out: &mut dyn Write) -> CliResult {
+    match op {
+        WifiCmd::Status => writeln!(out, "{}", wifi::status(probe)?.describe())?,
+        WifiCmd::Set { ssid, password } => {
+            wifi::set(probe, ssid, password.as_deref().unwrap_or(""))?;
+            writeln!(out, "已保存，探针重启后连接热点 {ssid}")?;
+        }
+        WifiCmd::Clear => {
+            wifi::clear(probe)?;
+            writeln!(out, "已清除，探针重启后不再连 Wi-Fi")?;
+        }
     }
     Ok(())
 }

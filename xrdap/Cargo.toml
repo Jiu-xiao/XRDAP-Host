@@ -6,14 +6,18 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["usb", "elf"]
+default = ["usb", "elf", "discover"]
 # CMSIS-DAP v2 USB Bulk 传输
 usb = ["dep:nusb"]
 # 读 ELF 符号和 DWARF 类型
 elf = ["dep:object", "dep:gimli"]
+# 找探针：串口挨个问 DAP_Info（按 USB VID 挑候选口），局域网用 mDNS
+discover = ["usb", "dep:serialport", "dep:mdns-sd"]
 
 [dependencies]
 serial2 = { workspace = true }
 nusb = { version = "0.2", optional = true }
 object = { version = "0.40", optional = true, default-features = false, features = ["read_core", "elf", "std"] }
 gimli = { version = "0.34", optional = true, default-features = false, features = ["read", "std"] }
+serialport = { version = "4.10", optional = true }
+mdns-sd = { version = "0.21.6", optional = true }

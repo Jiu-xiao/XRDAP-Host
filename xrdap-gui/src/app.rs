@@ -17,12 +17,14 @@ use crate::plot::{Curve, PlotView, MAX_CHARTS};
 use crate::series::Series;
 use crate::worker::{self, Cmd, Conn, CoreCmd, Event};
 use xrdap::cortex::{AfterReset, CoreState, CoreStatus};
+use xrdap::discover::{self, ProbeEntry};
+use xrdap::open::Addr;
+use xrdap::transport::serial::DEFAULT_BAUD;
 
 /// 曲线最多保留的时长和点数（每条）
 const KEEP_S: f64 = 120.0;
 const MAX_POINTS: usize = 500_000;
 const WINDOWS: &[f64] = &[0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0];
-const DEFAULT_BAUD: u32 = 4_000_000;
 const LOG_LINES: usize = 300;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -146,6 +148,9 @@ pub struct App {
 
     kind: Kind,
     usb_list: Vec<(Option<String>, String)>,
+    /// 找到的探针（USB、串口、局域网）；`finding` 不为空时正在后台找
+    found: Vec<ProbeEntry>,
+    finding: Option<Receiver<Vec<ProbeEntry>>>,
     usb_serial: String,
     serial_ports: Vec<String>,
     serial_port: String,
@@ -198,6 +203,16 @@ fn color_for(id: u64) -> Color32 {
     egui::ecolor::Hsva::new(h, 0.75, 0.85, 1.0).into()
 }
 
+/// 序列号的末尾 6 位，例如 …93EF1C；短的原样返回。
+fn short_serial(sn: &str) -> String {
+    let n = sn.chars().count();
+    if n > 8 {
+        format!("…{}", sn.chars().skip(n - 6).collect::<String>())
+    } else {
+        sn.to_string()
+    }
+}
+
 /// 一行、从右往左排：先放的按钮在最右边，最后放的输入框占剩下的宽度。
 fn right_to_left_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
@@ -223,6 +238,8 @@ impl App {
             started: Instant::now(),
             kind: Kind::from_key(&get("xrdap.kind").unwrap_or_default()),
             usb_list: Vec::new(),
+            found: Vec::new(),
+            finding: None,
             usb_serial: get("xrdap.usb").unwrap_or_default(),
             serial_ports: Vec::new(),
             serial_port: get("xrdap.serial").unwrap_or_default(),
@@ -276,6 +293,7 @@ impl App {
         }
         app.refresh_usb();
         app.refresh_serial();
+        app.start_finding(&cc.egui_ctx);
         if !app.elf_path.trim().is_empty() {
             app.load_elf();
         }
@@ -423,28 +441,38 @@ impl App {
 
     fn conn(&self) -> Result<Conn, String> {
         Ok(match self.kind {
-            Kind::Usb => {
-                Conn::Usb(Some(self.usb_serial.trim().to_string()).filter(|s| !s.is_empty()))
-            }
+            Kind::Usb => Conn::Probe {
+                addr: Addr::Usb {
+                    serial: Some(self.usb_serial.trim().to_string()).filter(|s| !s.is_empty()),
+                },
+                baud: DEFAULT_BAUD,
+            },
             Kind::Serial => {
                 if self.serial_port.trim().is_empty() {
                     return Err("先选一个串口".into());
                 }
-                Conn::Serial {
-                    port: self.serial_port.trim().to_string(),
+                Conn::Probe {
+                    addr: Addr::Serial {
+                        port: self.serial_port.trim().to_string(),
+                        keep_lines: self.keep_lines,
+                    },
                     baud: self
                         .baud
                         .trim()
                         .parse()
                         .map_err(|_| "波特率不是整数".to_string())?,
-                    keep_lines: self.keep_lines,
                 }
             }
             Kind::Tcp => {
                 if self.tcp_addr.trim().is_empty() {
                     return Err("先填探针或转发程序的地址".into());
                 }
-                Conn::Tcp(self.tcp_addr.trim().to_string())
+                Conn::Probe {
+                    addr: Addr::Tcp {
+                        host: self.tcp_addr.trim().to_string(),
+                    },
+                    baud: DEFAULT_BAUD,
+                }
             }
             Kind::Fake => Conn::Fake(
                 Some(PathBuf::from(self.elf_path.trim())).filter(|p| !p.as_os_str().is_empty()),
@@ -739,10 +767,90 @@ impl App {
         }
     }
 
+    /// 在后台找 USB、串口、局域网上的探针，找完唤醒界面。
+    fn start_finding(&mut self, ctx: &egui::Context) {
+        if self.finding.is_some() || self.connected {
+            return;
+        }
+        let (tx, rx) = channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let probes = discover::group(discover::find(&discover::Options::default()));
+            let _ = tx.send(probes);
+            ctx.request_repaint();
+        });
+        self.finding = Some(rx);
+    }
+
+    /// 选中一个找到的连接：切到对应的连接方式并填好参数。
+    fn use_found(&mut self, addr: &Addr) {
+        match addr {
+            Addr::Usb { serial } => {
+                self.kind = Kind::Usb;
+                self.usb_serial = serial.clone().unwrap_or_default();
+            }
+            Addr::Serial { port, keep_lines } => {
+                self.kind = Kind::Serial;
+                self.serial_port = port.clone();
+                self.keep_lines = *keep_lines;
+                if !self.serial_ports.contains(port) {
+                    self.serial_ports.push(port.clone());
+                }
+            }
+            Addr::Tcp { host } => {
+                self.kind = Kind::Tcp;
+                self.tcp_addr = host.clone();
+            }
+        }
+    }
+
+    /// 找到的探针：每个连接一行，点一下填进下面的连接参数。
+    fn ui_found(&mut self, ui: &mut egui::Ui) {
+        if let Some(rx) = &self.finding {
+            if let Ok(found) = rx.try_recv() {
+                self.found = found;
+                self.finding = None;
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.label("找到的探针");
+            if self.finding.is_some() {
+                ui.add(egui::Spinner::new());
+            } else if ui.small_button("重新查找").clicked() {
+                self.start_finding(ui.ctx());
+            }
+        });
+        if self.found.is_empty() && self.finding.is_none() {
+            ui.label(RichText::new("没有找到，可以在下面手动填").weak().small());
+        }
+        let mut chosen = None;
+        for p in &self.found {
+            let name = p.serial.as_deref().unwrap_or("（没有序列号）");
+            let product = p.product.as_deref().unwrap_or("");
+            for l in &p.links {
+                let text = format!("{product}  {}  ·  {}", short_serial(name), l.addr);
+                if ui
+                    .selectable_label(false, RichText::new(text).small())
+                    .on_hover_text(format!("{name}\n{}", l.note.as_deref().unwrap_or("")))
+                    .clicked()
+                {
+                    chosen = Some(l.addr.clone());
+                }
+            }
+        }
+        if let Some(addr) = chosen {
+            self.use_found(&addr);
+        }
+    }
+
     // ------------------------------------------------------------------ 界面
 
     fn ui_connection(&mut self, ui: &mut egui::Ui) {
         ui.heading("连接");
+        if !self.connected && !self.connecting {
+            self.ui_found(ui);
+            ui.separator();
+        }
         let editable = !self.connected && !self.connecting;
         let mut refresh_usb = false;
         let mut refresh_serial = false;

@@ -238,7 +238,7 @@ fn watch_stops_on_ctrl_c() {
 #[test]
 fn connection_options_are_exclusive() {
     let e = xrdap(&["--tcp", "127.0.0.1", "info"]).unwrap_err();
-    assert!(e.contains("只能选一个"), "{e}");
+    assert!(e.contains("只能写一个"), "{e}");
 }
 
 #[test]
