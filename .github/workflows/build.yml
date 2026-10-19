@@ -29,12 +29,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
 
       - name: 安装图形界面依赖（Linux）
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxkbcommon-dev
+
+      - name: 格式检查
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --release -- -D warnings
 
       - name: 测试
         run: cargo test --release --workspace

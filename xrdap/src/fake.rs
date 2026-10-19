@@ -212,15 +212,23 @@ impl FakeProbe {
     /// 并让 tick、cnt_a、cnt64 每 1 ms 加一、cnt_b 每 10 ms 加一。
     /// ELF 里没有这些变量时什么都不做，返回 false。
     pub fn apply_g431_fixture(&self, syms: &SymbolTable) -> bool {
-        let addr = |n: &str| {
-            syms.lookup_var(n)
-                .ok()
-                .flatten()
-                .map(|v| v.addr as u32)
-        };
+        let addr = |n: &str| syms.lookup_var(n).ok().flatten().map(|v| v.addr as u32);
         let names = [
-            "v_u8", "v_u16", "v_u32", "v_u64", "chain_final", "chain_p3", "chain_p2", "chain_p1",
-            "null_p1", "bad_p1", "rw_block", "cnt_a", "cnt_b", "tick", "cnt64",
+            "v_u8",
+            "v_u16",
+            "v_u32",
+            "v_u64",
+            "chain_final",
+            "chain_p3",
+            "chain_p2",
+            "chain_p1",
+            "null_p1",
+            "bad_p1",
+            "rw_block",
+            "cnt_a",
+            "cnt_b",
+            "tick",
+            "cnt64",
         ];
         let Some(a) = names.iter().map(|n| addr(n)).collect::<Option<Vec<u32>>>() else {
             return false;
@@ -438,9 +446,9 @@ impl State {
         // 先检查整段都可写，避免写一半
         let ok = (0..data.len()).all(|i| {
             let a = addr.wrapping_add(i as u32);
-            self.regions.iter().any(|r| {
-                r.writable && a >= r.start && ((a - r.start) as usize) < r.data.len()
-            })
+            self.regions
+                .iter()
+                .any(|r| r.writable && a >= r.start && ((a - r.start) as usize) < r.data.len())
         });
         if ok {
             for (i, &b) in data.iter().enumerate() {
@@ -549,7 +557,9 @@ impl State {
         let mut data = Vec::new();
         let mut done = 0u8;
         for _ in 0..count {
-            let Some((&r, rest)) = p.split_first() else { break };
+            let Some((&r, rest)) = p.split_first() else {
+                break;
+            };
             p = rest;
             let ap = r & 1 != 0;
             let read = r & 2 != 0;
@@ -822,7 +832,9 @@ impl State {
         if !self.active {
             return;
         }
-        let Some(cfg) = self.config.as_ref() else { return };
+        let Some(cfg) = self.config.as_ref() else {
+            return;
+        };
         let period = cfg.period_us as u64;
         let items = cfg.items.clone();
         let stop_on_full = cfg.stop_on_full;

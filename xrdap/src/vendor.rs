@@ -47,7 +47,10 @@ pub fn item_status_text(status: u8, chain: &[String]) -> String {
     };
     match status {
         0x00 => "成功".into(),
-        0x10..=0x17 => format!("读{}时 SWD 出错（FAULT 或超时），地址可能无效", level(status - 0x10)),
+        0x10..=0x17 => format!(
+            "读{}时 SWD 出错（FAULT 或超时），地址可能无效",
+            level(status - 0x10)
+        ),
         0x1F => "读写变量时 SWD 出错（FAULT、超时或粘滞错误），地址可能无效".into(),
         0x20..=0x27 => format!("{}所在的地址没有 4 字节对齐", level(status - 0x20)),
         0x2F => "变量地址没有按访问宽度对齐".into(),
@@ -121,7 +124,7 @@ pub struct SubItem {
 impl SubItem {
     /// 第 k 拍是否采这个条目。
     pub fn due(&self, k: u64) -> bool {
-        (k + self.phase as u64) % self.div as u64 == 0
+        (k + self.phase as u64).is_multiple_of(self.div as u64)
     }
 }
 
@@ -243,7 +246,10 @@ pub fn read_response_len(items: &[Item]) -> usize {
 pub fn parse_read(resp: &[u8], items: &[Item]) -> Result<Vec<ItemResult>> {
     require_ok(resp, CMD_READ)?;
     if resp.len() < 3 || resp[2] as usize != items.len() {
-        return Err(Error::protocol(format!("READ 响应的条目数不对：{}", hex(resp))));
+        return Err(Error::protocol(format!(
+            "READ 响应的条目数不对：{}",
+            hex(resp)
+        )));
     }
     let mut pos = 3;
     let mut out = Vec::with_capacity(items.len());
@@ -281,7 +287,10 @@ pub fn write_request(items: &[(Item, Vec<u8>)]) -> Vec<u8> {
 pub fn parse_write(resp: &[u8], items: &[(Item, Vec<u8>)]) -> Result<Vec<ItemResult>> {
     require_ok(resp, CMD_WRITE)?;
     if resp.len() != 3 + 3 * items.len() || resp[2] as usize != items.len() {
-        return Err(Error::protocol(format!("WRITE 响应格式不对：{}", hex(resp))));
+        return Err(Error::protocol(format!(
+            "WRITE 响应格式不对：{}",
+            hex(resp)
+        )));
     }
     Ok(items
         .iter()
@@ -433,7 +442,9 @@ pub fn decode_frames(raw: &[u8], items: &[SubItem], count: u16) -> Result<Vec<Fr
 
 /// 所有条目都到期时一帧的字节数（与探针 SUB_SET 返回的 max_frame_bytes 相同）。
 pub fn max_frame_bytes(items: &[SubItem]) -> usize {
-    FRAME_HEADER + items.len().div_ceil(8) + items.iter().map(|s| s.item.size as usize).sum::<usize>()
+    FRAME_HEADER
+        + items.len().div_ceil(8)
+        + items.iter().map(|s| s.item.size as usize).sum::<usize>()
 }
 
 /// 平均每拍写进环形缓冲的字节数（含每帧 2 字节长度），按 div 折算。
@@ -481,7 +492,7 @@ pub fn assign_phases(items: &mut [SubItem], fixed: &[bool]) {
                     continue;
                 }
                 let g = gcd(d, dj);
-                if (p + g * 1_000_000 - items[j].phase as u64 % g) % g == 0 {
+                if (p + g * 1_000_000 - items[j].phase as u64 % g).is_multiple_of(g) {
                     let lcm = d / g * dj;
                     cost += items[j].item.size as f64 / lcm as f64;
                 }
@@ -509,9 +520,10 @@ mod tests {
 
     #[test]
     fn info_example() {
-        let info =
-            parse_info(&unhex("80 00 01 0F000000 2000 08 00400000 40420F0000000000 32000000"))
-                .unwrap();
+        let info = parse_info(&unhex(
+            "80 00 01 0F000000 2000 08 00400000 40420F0000000000 32000000",
+        ))
+        .unwrap();
         assert_eq!(
             info,
             VendorInfo {
@@ -635,7 +647,10 @@ mod tests {
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].tick, 6);
         assert_eq!(frames[0].timestamp_us, 1_006_000);
-        assert_eq!(frames[0].values, vec![(0, Some(7u32.to_le_bytes().to_vec()))]);
+        assert_eq!(
+            frames[0].values,
+            vec![(0, Some(7u32.to_le_bytes().to_vec()))]
+        );
         assert_eq!(frames[1].tick, 7);
         assert_eq!(frames[1].timestamp_us, 1_007_000);
         assert_eq!(

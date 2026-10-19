@@ -86,7 +86,13 @@ pub struct ConnOpts {
     pub clock: u32,
 
     /// 等待一个响应的超时，毫秒（默认 2000）
-    #[arg(long, global = true, default_value_t = 2000, hide_default_value = true, value_name = "毫秒")]
+    #[arg(
+        long,
+        global = true,
+        default_value_t = 2000,
+        hide_default_value = true,
+        value_name = "毫秒"
+    )]
     pub timeout_ms: u64,
 
     /// 使用内置的模拟探针，不需要硬件（测试用）。配合 --elf 时按 ELF 填模拟内存
@@ -156,7 +162,13 @@ pub enum Cmd {
         exprs: Vec<String>,
 
         /// 采样周期，例如 1000（µs）、500us、2ms（默认 1ms）
-        #[arg(long, short = 'p', default_value = "1ms", hide_default_value = true, value_name = "周期")]
+        #[arg(
+            long,
+            short = 'p',
+            default_value = "1ms",
+            hide_default_value = true,
+            value_name = "周期"
+        )]
         period: String,
 
         /// 把每一帧写进 CSV 文件。不到期的格为空，读取失败的格为 ERR
@@ -178,21 +190,7 @@ pub enum Cmd {
 }
 
 fn parse_hz(s: &str) -> Result<u32, String> {
-    let t = s.trim().to_ascii_lowercase();
-    let t = t.strip_suffix("hz").unwrap_or(&t);
-    let (num, scale) = if let Some(n) = t.strip_suffix('m') {
-        (n, 1e6)
-    } else if let Some(n) = t.strip_suffix('k') {
-        (n, 1e3)
-    } else {
-        (t, 1.0)
-    };
-    let v: f64 = num.parse().map_err(|_| format!("时钟 {s} 写得不对，例如 4M、500k"))?;
-    let hz = (v * scale).round();
-    if !(1.0..=100e6).contains(&hz) {
-        return Err(format!("时钟 {s} 超出范围"));
-    }
-    Ok(hz as u32)
+    dap::parse_clock(s).map_err(|e| e.to_string())
 }
 
 // ------------------------------------------------------------------ 连接
@@ -205,10 +203,15 @@ fn load_symbols(conn: &ConnOpts) -> CliResult<SymbolTable> {
 }
 
 fn open_probe(conn: &ConnOpts, syms: &SymbolTable, err: &mut dyn Write) -> CliResult<Probe> {
-    let chosen = [conn.usb.is_some(), conn.serial.is_some(), conn.tcp.is_some(), conn.fake]
-        .iter()
-        .filter(|&&b| b)
-        .count();
+    let chosen = [
+        conn.usb.is_some(),
+        conn.serial.is_some(),
+        conn.tcp.is_some(),
+        conn.fake,
+    ]
+    .iter()
+    .filter(|&&b| b)
+    .count();
     if chosen > 1 {
         return Err("--usb、--serial、--tcp、--fake 只能选一个".into());
     }
@@ -300,7 +303,11 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
                 Cmd::Halt => cortex::halt(&mut probe)?,
                 Cmd::Run => cortex::resume(&mut probe)?,
                 Cmd::Reset { halt } => {
-                    let after = if halt { AfterReset::Halt } else { AfterReset::Run };
+                    let after = if halt {
+                        AfterReset::Halt
+                    } else {
+                        AfterReset::Run
+                    };
                     cortex::reset(&mut probe, after)?
                 }
                 _ => unreachable!(),
@@ -408,8 +415,14 @@ fn cmd_info(probe: &mut Probe, conn: &ConnOpts, target: bool, out: &mut dyn Writ
         .ok()
         .and_then(|d| d.first().copied())
         .unwrap_or(1);
-    writeln!(out, "探针：{vendor_name} {product}，序列号 {serial}，固件 {fw}")?;
-    writeln!(out, "CMSIS-DAP：{proto}，包长 {packet} 字节，最多 {count} 个包在途")?;
+    writeln!(
+        out,
+        "探针：{vendor_name} {product}，序列号 {serial}，固件 {fw}"
+    )?;
+    writeln!(
+        out,
+        "CMSIS-DAP：{proto}，包长 {packet} 字节，最多 {count} 个包在途"
+    )?;
     match probe.vendor_info() {
         Ok(info) => {
             writeln!(
@@ -427,7 +440,10 @@ fn cmd_info(probe: &mut Probe, conn: &ConnOpts, target: bool, out: &mut dyn Writ
             let calib = if info.access_us == 0 {
                 "单次 SWD 访问耗时还没有标定（每次 SUB_SET 时按当前时钟标定）".to_string()
             } else {
-                format!("单次 SWD 访问耗时 {} µs（上次 SUB_SET 时标定）", info.access_us)
+                format!(
+                    "单次 SWD 访问耗时 {} µs（上次 SUB_SET 时标定）",
+                    info.access_us
+                )
             };
             writeln!(
                 out,
@@ -444,9 +460,12 @@ fn cmd_info(probe: &mut Probe, conn: &ConnOpts, target: bool, out: &mut dyn Writ
                 let core = cortex::info(probe).map(|i| i.describe());
                 let state = cortex::status(probe);
                 match (core, state) {
-                    (Ok(c), Ok(st)) => {
-                        writeln!(out, "内核：{c}，{}（DHCSR 0x{:08X}）", st.state.text(), st.dhcsr)?
-                    }
+                    (Ok(c), Ok(st)) => writeln!(
+                        out,
+                        "内核：{c}，{}（DHCSR 0x{:08X}）",
+                        st.state.text(),
+                        st.dhcsr
+                    )?,
                     (Err(e), _) | (_, Err(e)) => writeln!(out, "内核：读不到（{e}）")?,
                 }
             }
@@ -488,7 +507,11 @@ fn cmd_read(probe: &mut Probe, targets: &[Target], out: &mut dyn Write) -> CliRe
     Ok(())
 }
 
-fn cmd_write(probe: &mut Probe, list: &[(Target, String, Vec<u8>)], out: &mut dyn Write) -> CliResult {
+fn cmd_write(
+    probe: &mut Probe,
+    list: &[(Target, String, Vec<u8>)],
+    out: &mut dyn Write,
+) -> CliResult {
     let items: Vec<(Item, Vec<u8>)> = list
         .iter()
         .enumerate()
@@ -550,14 +573,6 @@ fn ljust(s: &str, w: usize) -> String {
     format!("{s}{}", " ".repeat(pad))
 }
 
-fn csv_field(s: &str) -> String {
-    if s.contains([',', '"', '\n']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_string()
-    }
-}
-
 struct Output<'a> {
     targets: Vec<Target>,
     csv: Option<std::io::BufWriter<std::fs::File>>,
@@ -572,11 +587,7 @@ struct Output<'a> {
 impl Output<'_> {
     fn header(&mut self) -> CliResult {
         if let Some(csv) = &mut self.csv {
-            let mut line = String::from("host_time,t,sample_tick");
-            for t in &self.targets {
-                line.push(',');
-                line.push_str(&csv_field(&t.name));
-            }
+            let line = xrdap::csv::header(self.targets.iter().map(|t| t.name.as_str()));
             writeln!(csv, "{line}")?;
             return Ok(());
         }
@@ -597,21 +608,10 @@ impl Output<'_> {
                 .values
                 .iter()
                 .zip(&self.targets)
-                .map(|(v, t)| match v {
-                    None => None,
-                    Some(None) => Some("ERR".to_string()),
-                    Some(Some(b)) => Some(t.ty.format_plain(b)),
-                })
+                .map(|(v, t)| xrdap::csv::cell(&t.ty, v))
                 .collect();
             if let Some(csv) = &mut self.csv {
-                let mut line = format!("{:.6},{t:.6},{}", f.host_unix_us as f64 / 1e6, f.tick);
-                for c in &cells {
-                    line.push(',');
-                    if let Some(c) = c {
-                        line.push_str(c);
-                    }
-                }
-                writeln!(csv, "{line}")?;
+                writeln!(csv, "{}", xrdap::csv::row(f, t, &cells))?;
             }
             for (slot, c) in self.latest.iter_mut().zip(&cells) {
                 if c.is_some() {
@@ -771,7 +771,10 @@ pub fn cmd_watch(
         )?;
     }
     if st.skipped > 0 {
-        writeln!(output.out, "提示：探针来不及按这个周期采样，可以增大周期、加分频或减少变量")?;
+        writeln!(
+            output.out,
+            "提示：探针来不及按这个周期采样，可以增大周期、加分频或减少变量"
+        )?;
     }
     if st.dropped > 0 {
         writeln!(output.out, "提示：读得太慢，缓冲满了，可以加分频或减少变量")?;

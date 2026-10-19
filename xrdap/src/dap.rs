@@ -30,9 +30,32 @@ const CDBGPWRUPACK: u32 = 1 << 29;
 
 /// SWD 线复位（56 个 1）+ JTAG 转 SWD（0xE79E）+ 线复位，共 128 位。
 const JTAG_TO_SWD: [u8; 16] = [
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x9E, 0xE7, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-    0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x9E, 0xE7, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 ];
+
+/// 解析 SWD 时钟：`4000000`、`4M`、`500k`、`1.5MHz`。范围 1 Hz 到 100 MHz。
+pub fn parse_clock(s: &str) -> Result<u32> {
+    let t = s.trim().to_ascii_lowercase();
+    let t = t.strip_suffix("hz").unwrap_or(&t);
+    let (num, scale) = if let Some(n) = t.strip_suffix('m') {
+        (n, 1e6)
+    } else if let Some(n) = t.strip_suffix('k') {
+        (n, 1e3)
+    } else {
+        (t, 1.0)
+    };
+    let v: f64 = num
+        .trim()
+        .parse()
+        .map_err(|_| Error::usage(format!("时钟 {s} 写得不对，例如 4M、500k")))?;
+    let hz = (v * scale).round();
+    if !(1.0..=100e6).contains(&hz) {
+        return Err(Error::usage(format!(
+            "时钟 {s} 超出范围（1 Hz 到 100 MHz）"
+        )));
+    }
+    Ok(hz as u32)
+}
 
 /// 连接目标后得到的信息。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +70,11 @@ impl TargetInfo {
         let designer = (d >> 1) & 0x7FF;
         let version = (d >> 12) & 0xF;
         let partno = (d >> 20) & 0xFF;
-        let who = if designer == 0x23B { "ARM" } else { "其他厂商" };
+        let who = if designer == 0x23B {
+            "ARM"
+        } else {
+            "其他厂商"
+        };
         format!(
             "DPIDR 0x{d:08X}（{who}，设计者代码 0x{designer:03X}，DPv{version}，部件号 0x{partno:02X}）"
         )
@@ -62,10 +89,7 @@ pub struct Probe {
 
 impl Probe {
     pub fn new(t: Box<dyn Transport>) -> Self {
-        Self {
-            t,
-            packet_size: 64,
-        }
+        Self { t, packet_size: 64 }
     }
 
     pub fn describe(&self) -> String {
@@ -232,7 +256,10 @@ impl Probe {
         req.extend_from_slice(&clock_hz.to_le_bytes());
         self.expect_ok(&req, "DAP_SWJ_Clock")?;
         // 空闲 0 周期，WAIT 重试 100 次，匹配重试 0 次
-        self.expect_ok(&[0x04, 0x00, 100, 0x00, 0x00, 0x00], "DAP_TransferConfigure")?;
+        self.expect_ok(
+            &[0x04, 0x00, 100, 0x00, 0x00, 0x00],
+            "DAP_TransferConfigure",
+        )?;
         self.expect_ok(&[0x13, 0x00], "DAP_SWD_Configure")?;
         let mut seq = vec![0x12, 128];
         seq.extend_from_slice(&JTAG_TO_SWD);
@@ -272,7 +299,11 @@ impl Probe {
     }
 
     /// 把条目分成多个 READ：每个最多 32 个条目，响应放得进一个包。
-    fn chunks<T>(&self, items: &[T], resp_len: impl Fn(&[T]) -> usize) -> Vec<std::ops::Range<usize>> {
+    fn chunks<T>(
+        &self,
+        items: &[T],
+        resp_len: impl Fn(&[T]) -> usize,
+    ) -> Vec<std::ops::Range<usize>> {
         let mut out = Vec::new();
         let mut start = 0;
         while start < items.len() {
@@ -309,7 +340,10 @@ impl Probe {
         let mut out = Vec::with_capacity(items.len());
         let packet = self.packet_size;
         let req_len = |p: &[(Item, Vec<u8>)]| {
-            2 + p.iter().map(|(i, v)| i.encoded_len() + v.len()).sum::<usize>()
+            2 + p
+                .iter()
+                .map(|(i, v)| i.encoded_len() + v.len())
+                .sum::<usize>()
         };
         for r in self.chunks(items, |p| req_len(p).max(3 + 3 * p.len())) {
             let part = &items[r];
@@ -322,7 +356,12 @@ impl Probe {
         Ok(out)
     }
 
-    pub fn sub_set(&mut self, period_us: u32, flags: u8, items: &[SubItem]) -> Result<SubSetResult> {
+    pub fn sub_set(
+        &mut self,
+        period_us: u32,
+        flags: u8,
+        items: &[SubItem],
+    ) -> Result<SubSetResult> {
         let resp = self.xfer(&vendor::sub_set_request(period_us, flags, items))?;
         vendor::parse_sub_set(&resp)
     }
@@ -336,5 +375,20 @@ impl Probe {
     pub fn sub_read(&mut self, max_bytes: u16) -> Result<(SubRead, Instant, Instant)> {
         let (resp, before, after) = self.xfer_timed(&vendor::sub_read_request(max_bytes))?;
         Ok((vendor::parse_sub_read(&resp)?, before, after))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clock_strings() {
+        assert_eq!(parse_clock("4M").unwrap(), 4_000_000);
+        assert_eq!(parse_clock("500k").unwrap(), 500_000);
+        assert_eq!(parse_clock("1.5MHz").unwrap(), 1_500_000);
+        assert_eq!(parse_clock(" 1000000 ").unwrap(), 1_000_000);
+        assert!(parse_clock("fast").is_err());
+        assert!(parse_clock("200M").is_err());
     }
 }

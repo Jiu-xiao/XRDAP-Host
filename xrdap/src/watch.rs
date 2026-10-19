@@ -37,7 +37,11 @@ pub fn parse_spec(text: &str) -> Result<(String, u16, Option<u16>)> {
     let Some((expr, rest)) = text.rsplit_once('@') else {
         return Ok((text.trim().to_string(), 1, None));
     };
-    let bad = || Error::usage(format!("{text}：分频要写成 变量@分频 或 变量@分频:相位，例如 speed@10"));
+    let bad = || {
+        Error::usage(format!(
+            "{text}：分频要写成 变量@分频 或 变量@分频:相位，例如 speed@10"
+        ))
+    };
     let (div, phase) = match rest.split_once(':') {
         Some((d, p)) => (d, Some(p)),
         None => (rest, None),
@@ -360,7 +364,10 @@ mod tests {
         assert!(parse_period("fast").is_err());
         assert_eq!(parse_spec("cnt_a").unwrap(), ("cnt_a".into(), 1, None));
         assert_eq!(parse_spec("a.b@10").unwrap(), ("a.b".into(), 10, None));
-        assert_eq!(parse_spec("0x20000000:u32@10:3").unwrap(), ("0x20000000:u32".into(), 10, Some(3)));
+        assert_eq!(
+            parse_spec("0x20000000:u32@10:3").unwrap(),
+            ("0x20000000:u32".into(), 10, Some(3))
+        );
         assert!(parse_spec("x@0").is_err());
         assert!(parse_spec("x@10:10").is_err());
         assert_eq!(suggest_period(1234), 1550);
@@ -374,7 +381,11 @@ mod tests {
         // 往返 10 ms：中点 5 ms，探针时间 1 000 000 -> 偏移 unix0 + 5000 - 1e6
         s.update(t0, t0 + Duration::from_millis(10), 1_000_000);
         // 往返 1 ms：中点 20.5 ms，探针时间 1 020 000
-        s.update(t0 + Duration::from_millis(20), t0 + Duration::from_millis(21), 1_020_000);
+        s.update(
+            t0 + Duration::from_millis(20),
+            t0 + Duration::from_millis(21),
+            1_020_000,
+        );
         let (off, err) = s.offset().unwrap();
         assert_eq!(off, clock.unix0_us + 20_500 - 1_020_000);
         assert_eq!(err, 500);

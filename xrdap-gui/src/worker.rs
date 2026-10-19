@@ -18,7 +18,11 @@ use xrdap::watch::{HostFrame, Sampler, StartError, Stats};
 #[derive(Debug, Clone)]
 pub enum Conn {
     Usb(Option<String>),
-    Serial { port: String, baud: u32, keep_lines: bool },
+    Serial {
+        port: String,
+        baud: u32,
+        keep_lines: bool,
+    },
     Tcp(String),
     /// 进程内的模拟探针；有 ELF 时按 ELF 填内存
     Fake(Option<PathBuf>),
@@ -30,7 +34,12 @@ pub enum Cmd {
     /// 读一次，tag 原样带回
     Read(u64, Vec<Target>),
     Write(Target, Vec<u8>),
-    Start { targets: Vec<Target>, divs: Vec<u16>, period_us: u32, stop_on_full: bool },
+    Start {
+        targets: Vec<Target>,
+        divs: Vec<u16>,
+        period_us: u32,
+        stop_on_full: bool,
+    },
     Stop,
     /// 读内核状态；界面每隔一段时间发一次
     PollCore,
@@ -45,20 +54,35 @@ pub enum CoreCmd {
 }
 
 pub enum Event {
-    Connected { probe: String, target: String },
+    Connected {
+        probe: String,
+        target: String,
+    },
     Disconnected,
     Error(String),
     ReadDone(u64, Vec<ItemResult>),
-    WriteDone { name: String, ok: bool, text: String },
-    Started { est_frame_us: u32, phases: Vec<(u16, u16)> },
-    Rejected { est_frame_us: u32 },
+    WriteDone {
+        name: String,
+        ok: bool,
+        text: String,
+    },
+    Started {
+        est_frame_us: u32,
+        phases: Vec<(u16, u16)>,
+    },
+    Rejected {
+        est_frame_us: u32,
+    },
     Frames(Vec<HostFrame>),
     Stats(Stats),
     Stopped,
     /// 内核型号（连接后读一次）
     CoreInfo(String),
     /// 内核状态；cmd 为 Some 时是停住、继续、复位的结果
-    Core { cmd: Option<CoreCmd>, status: Result<CoreStatus, String> },
+    Core {
+        cmd: Option<CoreCmd>,
+        status: Result<CoreStatus, String>,
+    },
 }
 
 const TIMEOUT: Duration = Duration::from_millis(2000);
@@ -69,7 +93,11 @@ fn open(conn: &Conn) -> Result<Probe, String> {
         Conn::Usb(serial) => Probe::new(Box::new(
             xrdap::transport::usb::UsbTransport::open(serial.as_deref(), TIMEOUT).map_err(e)?,
         )),
-        Conn::Serial { port, baud, keep_lines } => {
+        Conn::Serial {
+            port,
+            baud,
+            keep_lines,
+        } => {
             let mut t = SerialTransport::open(port, *baud, *keep_lines, TIMEOUT).map_err(e)?;
             t.handshake(Duration::from_secs(10)).map_err(e)?;
             Probe::new(Box::new(t))
@@ -89,7 +117,11 @@ fn open(conn: &Conn) -> Result<Probe, String> {
 }
 
 fn items_of(targets: &[Target]) -> Vec<Item> {
-    targets.iter().enumerate().map(|(i, t)| t.item(i as u16)).collect()
+    targets
+        .iter()
+        .enumerate()
+        .map(|(i, t)| t.item(i as u16))
+        .collect()
 }
 
 fn write_one(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
@@ -100,17 +132,28 @@ fn write_one(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
             let back = probe.read(&[item]).ok().and_then(|v| v.into_iter().next());
             let text = match back {
                 Some(b) if b.status == 0 => format!("读回 {}", target.ty.format(&b.value)),
-                Some(b) => format!("读回失败：{}", vendor::item_status_text(b.status, &target.chain)),
+                Some(b) => format!(
+                    "读回失败：{}",
+                    vendor::item_status_text(b.status, &target.chain)
+                ),
                 None => "读回失败".into(),
             };
-            Event::WriteDone { name: target.name.clone(), ok: true, text }
+            Event::WriteDone {
+                name: target.name.clone(),
+                ok: true,
+                text,
+            }
         }
         Ok(r) => Event::WriteDone {
             name: target.name.clone(),
             ok: false,
             text: vendor::item_status_text(r.first().map_or(0xFF, |r| r.status), &target.chain),
         },
-        Err(e) => Event::WriteDone { name: target.name.clone(), ok: false, text: e.to_string() },
+        Err(e) => Event::WriteDone {
+            name: target.name.clone(),
+            ok: false,
+            text: e.to_string(),
+        },
     }
 }
 
@@ -120,11 +163,17 @@ fn core_cmd(probe: &mut Probe, cmd: CoreCmd) -> Event {
         CoreCmd::Resume => cortex::resume(probe),
         CoreCmd::Reset(after) => cortex::reset(probe, after),
     };
-    Event::Core { cmd: Some(cmd), status: status.map_err(|e| e.to_string()) }
+    Event::Core {
+        cmd: Some(cmd),
+        status: status.map_err(|e| e.to_string()),
+    }
 }
 
 fn poll_core(probe: &mut Probe) -> Event {
-    Event::Core { cmd: None, status: cortex::status(probe).map_err(|e| e.to_string()) }
+    Event::Core {
+        cmd: None,
+        status: cortex::status(probe).map_err(|e| e.to_string()),
+    }
 }
 
 pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'static) {
@@ -132,7 +181,12 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
     let send = |ev: Event| {
         let quiet = matches!(
             ev,
-            Event::Frames(_) | Event::Stats(_) | Event::Core { cmd: None, status: Ok(_) }
+            Event::Frames(_)
+                | Event::Stats(_)
+                | Event::Core {
+                    cmd: None,
+                    status: Ok(_)
+                }
         );
         let _ = tx.send(ev);
         if !quiet {
@@ -153,11 +207,16 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
             Cmd::Connect(conn, clock) => {
                 probe = None;
                 match open(&conn).and_then(|mut p| {
-                    let t = p.connect_swd(clock).map_err(|e| format!("连接目标失败：{e}"))?;
+                    let t = p
+                        .connect_swd(clock)
+                        .map_err(|e| format!("连接目标失败：{e}"))?;
                     Ok((p, t))
                 }) {
                     Ok((mut p, t)) => {
-                        send(Event::Connected { probe: p.describe(), target: t.describe() });
+                        send(Event::Connected {
+                            probe: p.describe(),
+                            target: t.describe(),
+                        });
                         match cortex::info(&mut p) {
                             Ok(i) => send(Event::CoreInfo(i.describe())),
                             Err(e) => send(Event::CoreInfo(format!("读不到 CPUID（{e}）"))),
@@ -193,7 +252,12 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                 Some(p) => send(core_cmd(p, c)),
                 None => send(Event::Error("还没有连接".into())),
             },
-            Cmd::Start { targets, divs, period_us, stop_on_full } => {
+            Cmd::Start {
+                targets,
+                divs,
+                period_us,
+                stop_on_full,
+            } => {
                 let Some(p) = probe.as_mut() else {
                     send(Event::Error("还没有连接".into()));
                     continue;
@@ -202,7 +266,11 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                     .iter()
                     .zip(&divs)
                     .enumerate()
-                    .map(|(i, (t, d))| SubItem { item: t.item(i as u16), div: *d, phase: 0 })
+                    .map(|(i, (t, d))| SubItem {
+                        item: t.item(i as u16),
+                        div: *d,
+                        phase: 0,
+                    })
                     .collect();
                 let fixed = vec![false; items.len()];
                 vendor::assign_phases(&mut items, &fixed);
@@ -210,7 +278,9 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                 let mut sampler = match Sampler::start(p, items, period_us, stop_on_full) {
                     Ok(s) => s,
                     Err(StartError::Rejected(r)) => {
-                        send(Event::Rejected { est_frame_us: r.est_frame_us.unwrap_or(0) });
+                        send(Event::Rejected {
+                            est_frame_us: r.est_frame_us.unwrap_or(0),
+                        });
                         continue;
                     }
                     Err(StartError::Other(e)) => {
@@ -227,10 +297,12 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Send + 'stati
                 let err = loop {
                     match rx.try_recv() {
                         Ok(Cmd::Write(t, b)) => send(write_one(sampler.probe_mut(), &t, &b)),
-                        Ok(Cmd::Read(tag, targets)) => match sampler.probe_mut().read(&items_of(&targets)) {
-                            Ok(r) => send(Event::ReadDone(tag, r)),
-                            Err(e) => send(Event::Error(format!("读取失败：{e}"))),
-                        },
+                        Ok(Cmd::Read(tag, targets)) => {
+                            match sampler.probe_mut().read(&items_of(&targets)) {
+                                Ok(r) => send(Event::ReadDone(tag, r)),
+                                Err(e) => send(Event::Error(format!("读取失败：{e}"))),
+                            }
+                        }
                         Ok(Cmd::PollCore) => send(poll_core(sampler.probe_mut())),
                         Ok(Cmd::Core(c)) => send(core_cmd(sampler.probe_mut(), c)),
                         Ok(Cmd::Stop) => break None,

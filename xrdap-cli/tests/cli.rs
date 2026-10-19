@@ -45,12 +45,25 @@ fn info_shows_probe_and_target() {
 fn read_values_and_item_errors() {
     let elf = fixture("g431-test.elf");
     let out = xrdap(&[
-        "--elf", &elf, "read", "v_u8", "v_u64", "***(uint32_t***)chain_p1", "*null_p1", "*bad_p1",
+        "--elf",
+        &elf,
+        "read",
+        "v_u8",
+        "v_u64",
+        "***(uint32_t***)chain_p1",
+        "*null_p1",
+        "*bad_p1",
     ])
     .unwrap();
     let lines: Vec<&str> = out.lines().collect();
-    assert!(lines[0].starts_with("v_u8") && lines[0].ends_with("= 165 (0xA5)"), "{out}");
-    assert!(lines[1].ends_with("= 81985529216486895 (0x0123456789ABCDEF)"), "{out}");
+    assert!(
+        lines[0].starts_with("v_u8") && lines[0].ends_with("= 165 (0xA5)"),
+        "{out}"
+    );
+    assert!(
+        lines[1].ends_with("= 81985529216486895 (0x0123456789ABCDEF)"),
+        "{out}"
+    );
     assert!(lines[2].ends_with("= 3405691582 (0xCAFEBABE)"), "{out}");
     assert!(lines[3].contains("第 1 级指针 null_p1 为空"), "{out}");
     assert!(lines[4].contains("SWD 出错"), "{out}");
@@ -60,7 +73,13 @@ fn read_values_and_item_errors() {
 fn read_types_and_raw() {
     let elf = fixture("types.elf");
     let out = xrdap(&[
-        "--elf", &elf, "read", "motor[1].pid->out", "state.voltage", "motor[0].mode", "s8",
+        "--elf",
+        &elf,
+        "read",
+        "motor[1].pid->out",
+        "state.voltage",
+        "motor[0].mode",
+        "s8",
         "0x2000007c:u32",
     ])
     .unwrap();
@@ -79,7 +98,12 @@ fn read_types_and_raw() {
 fn write_and_read_back() {
     let elf = fixture("types.elf");
     let out = xrdap(&[
-        "--elf", &elf, "write", "motor[1].pid->out=2.5", "motor[0].speed=-3", "counter=0x10",
+        "--elf",
+        &elf,
+        "write",
+        "motor[1].pid->out=2.5",
+        "motor[0].speed=-3",
+        "counter=0x10",
     ])
     .unwrap();
     assert!(out.contains("motor[1].pid->out ← 2.5，读回 2.5"), "{out}");
@@ -99,8 +123,19 @@ fn watch_prints_and_writes_csv() {
     let csv = std::env::temp_dir().join(format!("xrdap-test-{}.csv", std::process::id()));
     let csv_s = csv.to_string_lossy().into_owned();
     let out = xrdap(&[
-        "--elf", &elf, "watch", "cnt_a", "cnt_b@10", "v_u16@5:2", "*null_p1@20", "--period", "1ms",
-        "--duration", "0.3", "--csv", &csv_s,
+        "--elf",
+        &elf,
+        "watch",
+        "cnt_a",
+        "cnt_b@10",
+        "v_u16@5:2",
+        "*null_p1@20",
+        "--period",
+        "1ms",
+        "--duration",
+        "0.3",
+        "--csv",
+        &csv_s,
     ])
     .unwrap();
     assert!(out.contains("采样 4 个变量，周期 1000 µs"), "{out}");
@@ -115,14 +150,17 @@ fn watch_prints_and_writes_csv() {
     let text = std::fs::read_to_string(&csv).unwrap();
     let _ = std::fs::remove_file(&csv);
     let mut lines = text.lines();
-    assert_eq!(lines.next().unwrap(), "host_time,t,sample_tick,cnt_a,cnt_b,v_u16,*null_p1");
+    assert_eq!(
+        lines.next().unwrap(),
+        "host_time,t,sample_tick,cnt_a,cnt_b,v_u16,*null_p1"
+    );
     let rows: Vec<Vec<&str>> = lines.map(|l| l.split(',').collect()).collect();
     assert!(rows.len() > 250, "{} 行", rows.len());
     for r in &rows {
         let k: u64 = r[2].parse().unwrap();
         assert!(!r[3].is_empty());
-        assert_eq!(r[4].is_empty(), (k + phase_b) % 10 != 0, "k={k}");
-        assert_eq!(r[5].is_empty(), (k + 2) % 5 != 0, "k={k}");
+        assert_eq!(r[4].is_empty(), !(k + phase_b).is_multiple_of(10), "k={k}");
+        assert_eq!(r[5].is_empty(), !(k + 2).is_multiple_of(5), "k={k}");
         if !r[5].is_empty() {
             assert_eq!(r[5], "4660");
         }
@@ -143,7 +181,10 @@ fn watch_prints_and_writes_csv() {
 fn watch_rejected_suggests_period() {
     let elf = fixture("g431-test.elf");
     let e = xrdap(&["--elf", &elf, "watch", "cnt_a", "v_u64", "--period", "20us"]).unwrap_err();
-    assert!(e.contains("探针拒绝了这个配置") && e.contains("--period"), "{e}");
+    assert!(
+        e.contains("探针拒绝了这个配置") && e.contains("--period"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -173,13 +214,24 @@ fn watch_stops_on_ctrl_c() {
     };
     let mut out = Vec::new();
     let mut err = Vec::new();
-    cmd_watch(&mut probe, vec![(t, 1, None)], &opts, &mut out, &mut err, &stop).unwrap();
+    cmd_watch(
+        &mut probe,
+        vec![(t, 1, None)],
+        &opts,
+        &mut out,
+        &mut err,
+        &stop,
+    )
+    .unwrap();
     h.join().unwrap();
     assert!(!fake.is_sampling());
     let text = String::from_utf8(out).unwrap();
     assert!(text.contains("已停止"), "{text}");
     // --all 时每帧一行：帧数与行数一致
-    let frames = text.lines().filter(|l| l.trim_start().starts_with("0.") || l.trim_start().starts_with("1.")).count();
+    let frames = text
+        .lines()
+        .filter(|l| l.trim_start().starts_with("0.") || l.trim_start().starts_with("1."))
+        .count();
     assert!(frames > 100, "{frames}");
 }
 

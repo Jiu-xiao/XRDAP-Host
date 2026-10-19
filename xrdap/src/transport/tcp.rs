@@ -5,7 +5,9 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use super::Transport;
-use crate::frame::{parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE};
+use crate::frame::{
+    parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
+};
 use crate::{Error, Result};
 
 pub const DEFAULT_PORT: u16 = 3241;
@@ -36,7 +38,9 @@ impl TcpTransport {
         }
         Err(Error::Io(format!(
             "连不上 {full}：{}",
-            last_err.map(|e| e.to_string()).unwrap_or_else(|| "没有可用的地址".into())
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "没有可用的地址".into())
         )))
     }
 }

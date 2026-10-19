@@ -97,7 +97,10 @@ impl UsbTransport {
         // 找 CMSIS-DAP v2 接口：厂商类、两个 Bulk 端点，接口名带 "CMSIS-DAP" 的优先。
         let named: Vec<u8> = info
             .interfaces()
-            .filter(|i| i.interface_string().is_some_and(|s| s.contains("CMSIS-DAP")))
+            .filter(|i| {
+                i.interface_string()
+                    .is_some_and(|s| s.contains("CMSIS-DAP"))
+            })
             .map(|i| i.interface_number())
             .collect();
         let config = device
@@ -128,12 +131,16 @@ impl UsbTransport {
         let &(number, in_addr, out_addr) = candidates
             .first()
             .ok_or_else(|| Error::Io("设备上没有 CMSIS-DAP v2 的 Bulk 接口".into()))?;
-        drop(config);
 
         let interface = device
             .detach_and_claim_interface(number)
             .wait()
-            .map_err(|e| usb_err(&format!("占用接口 {number} 失败（被别的程序占用，或没有装 WinUSB 驱动）"), e))?;
+            .map_err(|e| {
+                usb_err(
+                    &format!("占用接口 {number} 失败（被别的程序占用，或没有装 WinUSB 驱动）"),
+                    e,
+                )
+            })?;
         let ep_out = interface
             .endpoint::<Bulk, Out>(out_addr)
             .map_err(|e| usb_err("打开 OUT 端点失败", e))?;
@@ -169,7 +176,7 @@ impl Transport for UsbTransport {
         done.status.map_err(|e| usb_err("USB 发送失败", e))?;
         // 请求长度正好是端点最大包长的整数倍时，没有短包标志传输结束，探针会一直等；补一个零长度包。
         let mps = self.ep_out.max_packet_size().max(1);
-        if !request.is_empty() && request.len() % mps == 0 {
+        if !request.is_empty() && request.len().is_multiple_of(mps) {
             let zlp = self
                 .ep_out
                 .transfer_blocking(Buffer::from(Vec::<u8>::new()), self.timeout);

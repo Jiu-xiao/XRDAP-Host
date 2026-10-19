@@ -12,14 +12,19 @@ use std::net::{TcpListener, TcpStream};
 use std::time::Duration;
 
 use clap::Parser;
-use xrdap::frame::{parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE};
+use xrdap::frame::{
+    parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
+};
 use xrdap::transport::serial::SerialTransport;
 
 /// SUB_CTRL 停止采样
 const STOP_SAMPLING: [u8; 2] = [0x84, 0x00];
 
 #[derive(Parser, Debug)]
-#[command(name = "xrdap-forward", about = "XR-DAP 串口转 TCP，供 OpenOCD 的 cmsis-dap tcp 后端使用")]
+#[command(
+    name = "xrdap-forward",
+    about = "XR-DAP 串口转 TCP，供 OpenOCD 的 cmsis-dap tcp 后端使用"
+)]
 struct Args {
     /// 探针的串口，例如 COM35 或 /dev/ttyUSB0
     #[arg(long)]
@@ -56,7 +61,10 @@ fn handshake(link: &mut SerialTransport) -> Result<(), String> {
 }
 
 fn handle_client(stream: &mut TcpStream, link: &mut SerialTransport, verbose: bool) {
-    let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+    let peer = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_default();
     let mut header = [0u8; TCP_HEADER_LEN];
     loop {
         if let Err(e) = stream.read_exact(&mut header) {
@@ -116,7 +124,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
         let _ = stream.set_nodelay(true);
-        let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
+        let peer = stream
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
         println!("[{peer}] 已连接");
         handle_client(&mut stream, &mut link, args.verbose);
         // 客户端开过采样的话替它停掉，否则探针会一直独占 SWD，直到串口租期过期。
@@ -173,6 +184,9 @@ mod tests {
 
     #[test]
     fn tcp_response_frame() {
-        assert_eq!(tcp_frame(&[0x84, 0x00], TCP_TYPE_RESPONSE), b"DAP\0\x02\x00\x02\x00\x84\x00");
+        assert_eq!(
+            tcp_frame(&[0x84, 0x00], TCP_TYPE_RESPONSE),
+            b"DAP\0\x02\x00\x02\x00\x84\x00"
+        );
     }
 }

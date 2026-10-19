@@ -18,8 +18,8 @@ fn derr(e: gimli::Error) -> Error {
 
 /// 读 ELF 文件。
 pub fn load(path: &Path) -> Result<SymbolTable> {
-    let data = std::fs::read(path)
-        .map_err(|e| Error::usage(format!("读不了 {}：{e}", path.display())))?;
+    let data =
+        std::fs::read(path).map_err(|e| Error::usage(format!("读不了 {}：{e}", path.display())))?;
     load_bytes(&data).map_err(|e| Error::usage(format!("{}：{e}", path.display())))
 }
 
@@ -147,7 +147,9 @@ impl<'a, 'd> Loader<'a, 'd> {
         match v {
             AttributeValue::UnitRef(o) => Some((unit, o)),
             AttributeValue::DebugInfoRef(d) => {
-                let i = (0..self.units.len()).rev().find(|&i| self.unit_start(i) <= d.0)?;
+                let i = (0..self.units.len())
+                    .rev()
+                    .find(|&i| self.unit_start(i) <= d.0)?;
                 Some((i, UnitOffset(d.0 - self.unit_start(i))))
             }
             _ => None,
@@ -229,7 +231,9 @@ impl<'a, 'd> Loader<'a, 'd> {
                 }
                 gimli::DW_AT_declaration => d.declaration = matches!(v, AttributeValue::Flag(true)),
                 gimli::DW_AT_location => d.location = self.exprloc_address(unit, v),
-                gimli::DW_AT_data_member_location => d.member_offset = self.member_location(unit, v),
+                gimli::DW_AT_data_member_location => {
+                    d.member_offset = self.member_location(unit, v)
+                }
                 gimli::DW_AT_bit_size => d.bit_size = v.udata_value(),
                 gimli::DW_AT_data_bit_offset => d.data_bit_offset = v.udata_value(),
                 gimli::DW_AT_count => d.count = v.udata_value(),
@@ -447,13 +451,22 @@ impl<'a, 'd> Loader<'a, 'd> {
         self.scan_scope(unit, root_off, "", &unit_name)
     }
 
-    fn scan_scope(&mut self, unit: usize, off: UnitOffset, prefix: &str, unit_name: &str) -> Result<()> {
+    fn scan_scope(
+        &mut self,
+        unit: usize,
+        off: UnitOffset,
+        prefix: &str,
+        unit_name: &str,
+    ) -> Result<()> {
         let scope = self.read_die(unit, off)?;
         for &c in &scope.children {
             let d = self.read_die(unit, c)?;
             match d.tag {
                 gimli::DW_TAG_namespace => {
-                    let ns = d.name.clone().unwrap_or_else(|| "(anonymous namespace)".into());
+                    let ns = d
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "(anonymous namespace)".into());
                     self.scan_scope(unit, c, &format!("{prefix}{ns}::"), unit_name)?;
                 }
                 gimli::DW_TAG_variable => {
@@ -464,15 +477,21 @@ impl<'a, 'd> Loader<'a, 'd> {
                         name = name.or(spec.name);
                         ty = ty.or(spec.ty);
                     }
-                    let (Some(name), Some(ty)) = (name, ty) else { continue };
+                    let (Some(name), Some(ty)) = (name, ty) else {
+                        continue;
+                    };
                     let ty = self.type_at(ty.0, ty.1)?;
                     let full = format!("{prefix}{name}");
-                    self.syms.vars.entry(full.clone()).or_default().push(Variable {
-                        name: full,
-                        addr,
-                        ty,
-                        unit: unit_name.to_string(),
-                    });
+                    self.syms
+                        .vars
+                        .entry(full.clone())
+                        .or_default()
+                        .push(Variable {
+                            name: full,
+                            addr,
+                            ty,
+                            unit: unit_name.to_string(),
+                        });
                 }
                 _ => {}
             }

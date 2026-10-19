@@ -376,7 +376,10 @@ pub enum ScalarKind {
     Float,
     Bool,
     Pointer,
-    Enum { signed: bool, values: Vec<(i64, String)> },
+    Enum {
+        signed: bool,
+        values: Vec<(i64, String)>,
+    },
 }
 
 /// 一个标量变量怎么解释：类别、字节数、类型名。
@@ -498,7 +501,12 @@ impl ValueType {
     pub fn parse(&self, text: &str) -> Result<Vec<u8>> {
         let text = text.trim();
         let size = self.size as usize;
-        let bad = |why: &str| Error::usage(format!("值 {text} 不能写给 {} 类型的变量：{why}", self.name));
+        let bad = |why: &str| {
+            Error::usage(format!(
+                "值 {text} 不能写给 {} 类型的变量：{why}",
+                self.name
+            ))
+        };
         match &self.kind {
             ScalarKind::Float => {
                 let v: f64 = text.parse().map_err(|_| bad("不是数"))?;
@@ -520,16 +528,24 @@ impl ValueType {
             }
             kind => {
                 let v = match kind {
-                    ScalarKind::Enum { values, .. } => match values.iter().find(|(_, n)| n == text) {
+                    ScalarKind::Enum { values, .. } => match values.iter().find(|(_, n)| n == text)
+                    {
                         Some((v, _)) => *v as i128,
                         None => parse_int(text).ok_or_else(|| bad("不是整数，也不是枚举名"))?,
                     },
                     _ => parse_int(text).ok_or_else(|| bad("不是整数"))?,
                 };
                 let bits = size as u32 * 8;
-                let umax: i128 = if bits >= 64 { u64::MAX as i128 } else { (1i128 << bits) - 1 };
+                let umax: i128 = if bits >= 64 {
+                    u64::MAX as i128
+                } else {
+                    (1i128 << bits) - 1
+                };
                 let smin: i128 = -(1i128 << (bits - 1));
-                let signed = matches!(kind, ScalarKind::Signed | ScalarKind::Enum { signed: true, .. });
+                let signed = matches!(
+                    kind,
+                    ScalarKind::Signed | ScalarKind::Enum { signed: true, .. }
+                );
                 // 有符号变量：十进制按有符号范围检查，十六进制、二进制可以直接写原始位（0xFF 写给 int8_t 为 -1）
                 let raw_bits = {
                     let t = text.trim_start_matches(['+', '-']).to_ascii_lowercase();
@@ -575,8 +591,14 @@ mod tests {
         assert!(vt("i8").parse("200").is_err());
         assert_eq!(vt("i8").parse("0xFF").unwrap(), vec![0xFF]);
         assert_eq!(vt("i8").parse("127").unwrap(), vec![0x7F]);
-        assert_eq!(vt("u64").parse("0xFFFFFFFFFFFFFFFF").unwrap(), vec![0xFF; 8]);
-        assert_eq!(vt("f32").parse("2.5").unwrap(), 2.5f32.to_le_bytes().to_vec());
+        assert_eq!(
+            vt("u64").parse("0xFFFFFFFFFFFFFFFF").unwrap(),
+            vec![0xFF; 8]
+        );
+        assert_eq!(
+            vt("f32").parse("2.5").unwrap(),
+            2.5f32.to_le_bytes().to_vec()
+        );
         assert_eq!(vt("i64").format_plain(&(-5i64).to_le_bytes()), "-5");
     }
 }

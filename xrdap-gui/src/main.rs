@@ -17,5 +17,9 @@ fn main() -> eframe::Result {
             .with_title("XR-DAP"),
         ..Default::default()
     };
-    eframe::run_native("xrdap-gui", opts, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
+    eframe::run_native(
+        "xrdap-gui",
+        opts,
+        Box::new(|cc| Ok(Box::new(app::App::new(cc)))),
+    )
 }

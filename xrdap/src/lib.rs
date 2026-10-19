@@ -8,11 +8,13 @@
 //! - [`types`]、[`expr`]：变量类型和表达式解析，把 `motor[1].pid->out` 变成厂商条目。
 //! - [`elf`]：从 ELF 的 DWARF 读变量和类型。
 //! - [`watch`]：采样循环和探针时间到电脑时间的换算。
+//! - [`csv`]：采样记录的 CSV 格式。
 //! - [`fake`]：进程内的模拟探针，测试用。
 //!
 //! 协议见仓库的 `docs/protocol.md`。
 
 pub mod cortex;
+pub mod csv;
 pub mod dap;
 #[cfg(feature = "elf")]
 pub mod elf;

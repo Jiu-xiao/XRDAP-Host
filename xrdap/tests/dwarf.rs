@@ -59,7 +59,10 @@ fn g431_variables_match_symbol_table() {
     }
     assert_eq!(resolve(&mut s, "v_u64").ty.kind, ScalarKind::Unsigned);
     assert_eq!(resolve(&mut s, "chain_p1").ty.kind, ScalarKind::Pointer);
-    assert_eq!(resolve(&mut s, "rw_block[3]").direct_addr(), Some(0x2000_004C));
+    assert_eq!(
+        resolve(&mut s, "rw_block[3]").direct_addr(),
+        Some(0x2000_004C)
+    );
 }
 
 #[test]
@@ -67,11 +70,18 @@ fn g431_pointer_chain() {
     let mut s = g431_elf();
     // chain_p1 声明为 uint32_t *，实际指向 chain_p2；三级要先转换类型
     let t = resolve(&mut s, "***(uint32_t***)chain_p1");
-    assert_eq!((t.base, t.derefs.clone(), t.final_off), (0x2000_0034, vec![0, 0, 0], 0));
+    assert_eq!(
+        (t.base, t.derefs.clone(), t.final_off),
+        (0x2000_0034, vec![0, 0, 0], 0)
+    );
     assert_eq!(t.ty.size, 4);
     assert_eq!(
         t.chain,
-        vec!["(uint32_t***)chain_p1", "*(uint32_t***)chain_p1", "**(uint32_t***)chain_p1"]
+        vec![
+            "(uint32_t***)chain_p1",
+            "*(uint32_t***)chain_p1",
+            "**(uint32_t***)chain_p1"
+        ]
     );
     let t = resolve(&mut s, "*chain_p3");
     assert_eq!((t.base, t.derefs.clone()), (0x2000_002C, vec![0]));
@@ -92,24 +102,45 @@ fn struct_array_pointer_paths() {
     assert_eq!(t.ty.kind, ScalarKind::Float);
 
     let t = resolve(&mut s, "motor[1].pid->out");
-    assert_eq!((t.base, t.derefs.clone(), t.final_off), (0x2000_0050, vec![0], 12));
+    assert_eq!(
+        (t.base, t.derefs.clone(), t.final_off),
+        (0x2000_0050, vec![0], 12)
+    );
     assert_eq!(t.chain, vec!["motor[1].pid"]);
     assert_eq!(t.ty.size, 4);
 
     let t = resolve(&mut s, "motor[0].angle");
     assert_eq!((t.direct_addr(), t.ty.size), (Some(0x2000_0038), 8));
     assert_eq!(t.ty.kind, ScalarKind::Float);
-    assert_eq!(resolve(&mut s, "motor[0].temps[2]").direct_addr(), Some(0x2000_0042));
-    assert_eq!(resolve(&mut s, "motor[0].flags.raw").direct_addr(), Some(0x2000_0044));
-    assert_eq!(resolve(&mut s, "motor[0].speed").ty.kind, ScalarKind::Signed);
+    assert_eq!(
+        resolve(&mut s, "motor[0].temps[2]").direct_addr(),
+        Some(0x2000_0042)
+    );
+    assert_eq!(
+        resolve(&mut s, "motor[0].flags.raw").direct_addr(),
+        Some(0x2000_0044)
+    );
+    assert_eq!(
+        resolve(&mut s, "motor[0].speed").ty.kind,
+        ScalarKind::Signed
+    );
 
     let t = resolve(&mut s, "active->speed");
-    assert_eq!((t.base, t.derefs.clone(), t.final_off), (0x2000_00C4, vec![0], 0));
+    assert_eq!(
+        (t.base, t.derefs.clone(), t.final_off),
+        (0x2000_00C4, vec![0], 0)
+    );
     let t = resolve(&mut s, "(*active).current");
-    assert_eq!((t.base, t.derefs.clone(), t.final_off), (0x2000_00C4, vec![0], 2));
+    assert_eq!(
+        (t.base, t.derefs.clone(), t.final_off),
+        (0x2000_00C4, vec![0], 2)
+    );
 
     let t = resolve(&mut s, "head->next->next->value");
-    assert_eq!((t.base, t.derefs.clone(), t.final_off), (0x2000_00EC, vec![0, 4, 4], 0));
+    assert_eq!(
+        (t.base, t.derefs.clone(), t.final_off),
+        (0x2000_00EC, vec![0, 4, 4], 0)
+    );
     assert_eq!(t.chain, vec!["head", "head->next", "head->next->next"]);
 
     let t = resolve(&mut s, "*ptr");
@@ -117,19 +148,37 @@ fn struct_array_pointer_paths() {
     let t = resolve(&mut s, "ptr[0]");
     assert_eq!((t.base, t.derefs.clone()), (0x2000_00C0, vec![0]));
 
-    assert_eq!(resolve(&mut s, "matrix[1][2]").direct_addr(), Some(0x2000_00BC));
-    assert_eq!(resolve(&mut s, "state.voltage").direct_addr(), Some(0x2000_0070));
+    assert_eq!(
+        resolve(&mut s, "matrix[1][2]").direct_addr(),
+        Some(0x2000_00BC)
+    );
+    assert_eq!(
+        resolve(&mut s, "state.voltage").direct_addr(),
+        Some(0x2000_0070)
+    );
     assert_eq!(resolve(&mut s, "state.enabled").ty.kind, ScalarKind::Bool);
     // enabled 在 +12，pair 按 2 字节对齐在 +14，hi 在 +16
-    assert_eq!(resolve(&mut s, "state.pair.hi").direct_addr(), Some(0x2000_0078));
+    assert_eq!(
+        resolve(&mut s, "state.pair.hi").direct_addr(),
+        Some(0x2000_0078)
+    );
     assert_eq!(resolve(&mut s, "word.f").direct_addr(), Some(0x2000_00C8));
-    assert_eq!(resolve(&mut s, "word.bytes[3]").direct_addr(), Some(0x2000_00CB));
+    assert_eq!(
+        resolve(&mut s, "word.bytes[3]").direct_addr(),
+        Some(0x2000_00CB)
+    );
     assert_eq!(resolve(&mut s, "s8").ty.kind, ScalarKind::Signed);
     assert_eq!(resolve(&mut s, "neg64").ty.size, 8);
     assert_eq!(resolve(&mut s, "ratio").ty.kind, ScalarKind::Float);
     assert_eq!(resolve(&mut s, "cv").direct_addr(), Some(0x0800_0020));
-    assert_eq!(resolve(&mut s, "file_static").direct_addr(), Some(0x2000_00D0));
-    assert!(matches!(resolve(&mut s, "motor[1].mode").ty.kind, ScalarKind::Enum { .. }));
+    assert_eq!(
+        resolve(&mut s, "file_static").direct_addr(),
+        Some(0x2000_00D0)
+    );
+    assert!(matches!(
+        resolve(&mut s, "motor[1].mode").ty.kind,
+        ScalarKind::Enum { .. }
+    ));
     // 类型名可以用在转换里
     let t = resolve(&mut s, "((pid_ctrl_t*)0x20000000)->ki");
     assert_eq!(t.direct_addr(), Some(0x2000_0004));
@@ -145,7 +194,10 @@ fn clear_errors() {
     let e = resolve_err(&mut s, "motor[2].speed");
     assert!(e.contains("越界"), "{e}");
     let e = resolve_err(&mut s, "pids[0]");
-    assert!(e.contains("不是能直接读写的数值") && e.contains("kp"), "{e}");
+    assert!(
+        e.contains("不是能直接读写的数值") && e.contains("kp"),
+        "{e}"
+    );
     let e = resolve_err(&mut s, "state.nope");
     assert!(e.contains("没有成员 nope"), "{e}");
     let e = resolve_err(&mut s, "*counter");

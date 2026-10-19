@@ -271,8 +271,14 @@ mod tests {
         let s = CoreStatus::from_dhcsr(0x0003_0003);
         assert_eq!(s.state, CoreState::Halted);
         assert!(s.debug_enabled);
-        assert_eq!(CoreStatus::from_dhcsr(0x0001_0000).state, CoreState::Running);
-        assert_eq!(CoreStatus::from_dhcsr(0x0005_0000).state, CoreState::Sleeping);
+        assert_eq!(
+            CoreStatus::from_dhcsr(0x0001_0000).state,
+            CoreState::Running
+        );
+        assert_eq!(
+            CoreStatus::from_dhcsr(0x0005_0000).state,
+            CoreState::Sleeping
+        );
         assert_eq!(CoreStatus::from_dhcsr(0x000B_0001).state, CoreState::Lockup);
         assert!(CoreStatus::from_dhcsr(0x0201_0000).reset_seen);
     }
@@ -281,6 +287,9 @@ mod tests {
     fn decode_cpuid() {
         assert_eq!(CoreInfo { cpuid: 0x410F_C241 }.describe(), "Cortex-M4 r0p1");
         assert_eq!(CoreInfo { cpuid: 0x411F_C271 }.describe(), "Cortex-M7 r1p1");
-        assert_eq!(CoreInfo { cpuid: 0x1234_5678 }.describe(), "CPUID 0x12345678");
+        assert_eq!(
+            CoreInfo { cpuid: 0x1234_5678 }.describe(),
+            "CPUID 0x12345678"
+        );
     }
 }

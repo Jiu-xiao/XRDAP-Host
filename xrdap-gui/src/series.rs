@@ -10,7 +10,11 @@ pub struct Series {
 
 impl Series {
     pub fn new(keep_s: f64, max_points: usize) -> Self {
-        Self { pts: VecDeque::new(), keep_s, max_points }
+        Self {
+            pts: VecDeque::new(),
+            keep_s,
+            max_points,
+        }
     }
 
     pub fn clear(&mut self) {

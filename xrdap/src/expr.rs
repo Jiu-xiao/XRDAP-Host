@@ -467,9 +467,9 @@ impl<'a> Resolver<'a> {
                     let mut l = loc.clone();
                     l.fin += m.offset as i64;
                     match (&m.name, m.bit_size) {
-                        (Some(n), Some(bits)) => self
-                            .notes
-                            .push(format!("跳过位域 {name}.{n}（{bits} 位）")),
+                        (Some(n), Some(bits)) => {
+                            self.notes.push(format!("跳过位域 {name}.{n}（{bits} 位）"))
+                        }
                         (None, _) => self.expand(name, &l, m.ty, out)?,
                         (Some(n), None) => self.expand(&format!("{name}.{n}"), &l, m.ty, out)?,
                     }
@@ -504,8 +504,7 @@ impl<'a> Resolver<'a> {
             )));
         }
         let to_u32 = |v: i128| -> Result<u32> {
-            u32::try_from(v)
-                .map_err(|_| Error::usage(format!("{name} 的地址 0x{v:X} 超出 32 位")))
+            u32::try_from(v).map_err(|_| Error::usage(format!("{name} 的地址 0x{v:X} 超出 32 位")))
         };
         let to_i16 = |v: i64| -> Result<i16> {
             i16::try_from(v).map_err(|_| {
@@ -631,7 +630,14 @@ impl<'a> Resolver<'a> {
         let hint = if similar.is_empty() {
             String::new()
         } else {
-            format!("，相近的有 {}", similar.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("、"))
+            format!(
+                "，相近的有 {}",
+                similar
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("、")
+            )
         };
         Err(Error::usage(format!("ELF 里找不到变量 {name}{hint}")))
     }
@@ -719,15 +725,17 @@ impl<'a> Resolver<'a> {
                 declaration: true, ..
             } => Err(Error::usage(format!(
                 "{shown} {} {} 只有声明，ELF 里没有它的定义",
-                if sep.is_empty() { "指向的类型" } else { "的类型" },
+                if sep.is_empty() {
+                    "指向的类型"
+                } else {
+                    "的类型"
+                },
                 self.syms.name_of(ty)
             ))),
             Type::Struct { members, .. } => {
                 let Some((off, m)) = self.find_member(members, name) else {
-                    let names: Vec<String> = members
-                        .iter()
-                        .filter_map(|m| m.name.clone())
-                        .collect();
+                    let names: Vec<String> =
+                        members.iter().filter_map(|m| m.name.clone()).collect();
                     return Err(Error::usage(format!(
                         "{} 没有成员 {name}（成员有 {}）",
                         self.syms.name_of(ty),
@@ -769,10 +777,7 @@ impl<'a> Resolver<'a> {
             elem
         };
         let stride = self.syms.size_of(sub).ok_or_else(|| {
-            Error::usage(format!(
-                "数组元素 {} 的大小未知",
-                self.syms.name_of(sub)
-            ))
+            Error::usage(format!("数组元素 {} 的大小未知", self.syms.name_of(sub)))
         })?;
         Ok((sub, dims[0], stride))
     }
@@ -784,7 +789,9 @@ impl<'a> Resolver<'a> {
         let full = self.syms.complete(ty);
         match self.syms.get(full).clone() {
             Type::Array { .. } => {
-                let Val::L { mut loc, .. } = v else { unreachable!() };
+                let Val::L { mut loc, .. } = v else {
+                    unreachable!()
+                };
                 let (elem, count, stride) = self.array_step(full)?;
                 if let Some(n) = count {
                     if i >= n {
@@ -798,7 +805,9 @@ impl<'a> Resolver<'a> {
             }
             Type::Pointer { .. } => {
                 let target = self.deref(v, text)?;
-                let Val::L { mut loc, ty } = target else { unreachable!() };
+                let Val::L { mut loc, ty } = target else {
+                    unreachable!()
+                };
                 if i > 0 {
                     let stride = self.syms.size_of(ty).ok_or_else(|| {
                         Error::usage(format!("{text} 指向的类型大小未知，不能取下标"))
@@ -829,9 +838,7 @@ impl<'a> Resolver<'a> {
                         "{text}：{} 有 {} 字节，{} 有 {} 字节，只能在同样大小的类型之间转换",
                         a.name, a.size, b.name, b.size
                     ))),
-                    _ => Err(Error::usage(format!(
-                        "{text}：只能转换数值和指针"
-                    ))),
+                    _ => Err(Error::usage(format!("{text}：只能转换数值和指针"))),
                 }
             }
         }
@@ -849,7 +856,10 @@ mod tests {
         let t = r.resolve("0x20000010:u32").unwrap();
         assert_eq!((t.base, t.ty.size, t.derefs.len()), (0x2000_0010, 4, 0));
         let t = r.resolve("*0x20000034:u32*").unwrap();
-        assert_eq!((t.base, t.derefs.clone(), t.final_off), (0x2000_0034, vec![0], 0));
+        assert_eq!(
+            (t.base, t.derefs.clone(), t.final_off),
+            (0x2000_0034, vec![0], 0)
+        );
         let t = r.resolve("***(u32***)0x20000034:u32").unwrap();
         assert_eq!(t.derefs, vec![0, 0, 0]);
         assert_eq!(t.chain.len(), 3);
@@ -861,7 +871,11 @@ mod tests {
         assert!(r.resolve("0x20000000").is_err());
         assert!(r.resolve("*0x20000000").is_err());
         assert!(r.resolve("0x20000000:foo").is_err());
-        assert!(r.resolve("counter").unwrap_err().to_string().contains("--elf"));
+        assert!(r
+            .resolve("counter")
+            .unwrap_err()
+            .to_string()
+            .contains("--elf"));
         assert!(r.resolve("0x20000000:u32 +").is_err());
     }
 }

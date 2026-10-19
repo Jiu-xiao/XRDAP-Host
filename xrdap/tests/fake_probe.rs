@@ -34,13 +34,18 @@ fn targets(syms: &mut SymbolTable, exprs: &[&str]) -> Vec<xrdap::expr::Target> {
 }
 
 fn items(t: &[xrdap::expr::Target]) -> Vec<Item> {
-    t.iter().enumerate().map(|(i, t)| t.item(i as u16)).collect()
+    t.iter()
+        .enumerate()
+        .map(|(i, t)| t.item(i as u16))
+        .collect()
 }
 
 #[test]
 fn vendor_commands_need_connect() {
     let (_fake, mut probe, _) = g431();
-    let resp = probe.xfer(&vendor::read_request(&[Item::direct(1, 4, 0x2000_001C)])).unwrap();
+    let resp = probe
+        .xfer(&vendor::read_request(&[Item::direct(1, 4, 0x2000_001C)]))
+        .unwrap();
     assert_eq!(resp, vec![0x81, 0x04]);
     let err = probe.read(&[Item::direct(1, 4, 0x2000_001C)]).unwrap_err();
     assert!(err.to_string().contains("没有连接目标"), "{err}");
@@ -59,10 +64,22 @@ fn read_status_matrix_like_hardware() {
     probe.connect_swd(4_000_000).unwrap();
     let t = targets(
         &mut syms,
-        &["v_u8", "v_u16", "v_u32", "v_u64", "***(uint32_t***)chain_p1", "*null_p1", "*bad_p1"],
+        &[
+            "v_u8",
+            "v_u16",
+            "v_u32",
+            "v_u64",
+            "***(uint32_t***)chain_p1",
+            "*null_p1",
+            "*bad_p1",
+        ],
     );
     let r = probe.read(&items(&t)).unwrap();
-    let vals: Vec<String> = t.iter().zip(&r).map(|(t, r)| t.ty.format(&r.value)).collect();
+    let vals: Vec<String> = t
+        .iter()
+        .zip(&r)
+        .map(|(t, r)| t.ty.format(&r.value))
+        .collect();
     assert_eq!(vals[0], "165 (0xA5)");
     assert_eq!(vals[1], "4660 (0x1234)");
     assert_eq!(vals[2], "2309737967 (0x89ABCDEF)");
@@ -74,12 +91,48 @@ fn read_status_matrix_like_hardware() {
 
     // 与 run_vendor_usb.py 的状态表相同
     let bad = [
-        (Item { derefs: vec![0], ..Item::direct(0x10, 4, 0x2000_0038) }, 0x30),
-        (Item { derefs: vec![0], ..Item::direct(0x11, 4, 0xFFFF_F000) }, 0x10),
-        (Item { derefs: vec![1], ..Item::direct(0x12, 4, 0x2000_003C) }, 0x20),
-        (Item { final_off: 1, ..Item::direct(0x13, 4, 0x2000_001C) }, 0x2F),
-        (Item { derefs: vec![0, 0], ..Item::direct(0x15, 4, 0x2000_003C) }, 0x11),
-        (Item { derefs: vec![0], ..Item::direct(0x16, 4, 0x2000_003C) }, 0x1F),
+        (
+            Item {
+                derefs: vec![0],
+                ..Item::direct(0x10, 4, 0x2000_0038)
+            },
+            0x30,
+        ),
+        (
+            Item {
+                derefs: vec![0],
+                ..Item::direct(0x11, 4, 0xFFFF_F000)
+            },
+            0x10,
+        ),
+        (
+            Item {
+                derefs: vec![1],
+                ..Item::direct(0x12, 4, 0x2000_003C)
+            },
+            0x20,
+        ),
+        (
+            Item {
+                final_off: 1,
+                ..Item::direct(0x13, 4, 0x2000_001C)
+            },
+            0x2F,
+        ),
+        (
+            Item {
+                derefs: vec![0, 0],
+                ..Item::direct(0x15, 4, 0x2000_003C)
+            },
+            0x11,
+        ),
+        (
+            Item {
+                derefs: vec![0],
+                ..Item::direct(0x16, 4, 0x2000_003C)
+            },
+            0x1F,
+        ),
         (Item::direct(0x14, 4, 0x2000_001C), 0x00),
     ];
     let list: Vec<Item> = bad.iter().map(|(i, _)| i.clone()).collect();
@@ -93,7 +146,10 @@ fn read_status_matrix_like_hardware() {
 fn write_then_read_back() {
     let (fake, mut probe, mut syms) = g431();
     probe.connect_swd(4_000_000).unwrap();
-    let t = targets(&mut syms, &["v_u8", "v_u16", "v_u64", "rw_block[0]", "*chain_p3"]);
+    let t = targets(
+        &mut syms,
+        &["v_u8", "v_u16", "v_u64", "rw_block[0]", "*chain_p3"],
+    );
     let values = ["0x5A", "0xBEAF", "0x8877665544332211", "0xDEADBEEF", "7"];
     let list: Vec<(Item, Vec<u8>)> = t
         .iter()
@@ -117,7 +173,9 @@ fn write_then_read_back() {
 fn many_items_split_into_several_reads() {
     let (fake, mut probe, _) = g431();
     probe.connect_swd(4_000_000).unwrap();
-    let list: Vec<Item> = (0..40).map(|i| Item::direct(i, 4, 0x2000_0040 + 4 * (i as u32 % 8))).collect();
+    let list: Vec<Item> = (0..40)
+        .map(|i| Item::direct(i, 4, 0x2000_0040 + 4 * (i as u32 % 8)))
+        .collect();
     let before = fake.requests().len();
     let r = probe.read(&list).unwrap();
     assert_eq!(r.len(), 40);
@@ -137,7 +195,17 @@ fn sub(t: &xrdap::expr::Target, id: u16, div: u16, phase: u16) -> SubItem {
 fn sampling_with_divided_items() {
     let (_fake, mut probe, mut syms) = g431();
     probe.connect_swd(4_000_000).unwrap();
-    let t = targets(&mut syms, &["cnt_a", "tick", "cnt_b", "cnt64", "v_u32", "***(uint32_t***)chain_p1"]);
+    let t = targets(
+        &mut syms,
+        &[
+            "cnt_a",
+            "tick",
+            "cnt_b",
+            "cnt64",
+            "v_u32",
+            "***(uint32_t***)chain_p1",
+        ],
+    );
     let mut list = vec![
         sub(&t[0], 0, 1, 0),
         sub(&t[1], 1, 1, 0),
@@ -149,7 +217,10 @@ fn sampling_with_divided_items() {
     vendor::assign_phases(&mut list, &[false; 6]);
     assert_ne!(list[4].phase, list[5].phase);
     let mut s = Sampler::start(&mut probe, list.clone(), 1000, false).unwrap();
-    assert_eq!(s.setup.max_frame_bytes, Some(10 + 1 + 4 + 4 + 4 + 8 + 4 + 4));
+    assert_eq!(
+        s.setup.max_frame_bytes,
+        Some(10 + 1 + 4 + 4 + 4 + 8 + 4 + 4)
+    );
     let mut frames = Vec::new();
     let end = Instant::now() + Duration::from_millis(300);
     while Instant::now() < end {
@@ -161,14 +232,27 @@ fn sampling_with_divided_items() {
     let stats = s.stats();
     drop(s);
     assert!(frames.len() > 200, "{} 帧", frames.len());
-    assert_eq!((stats.missing, stats.dropped, stats.skipped, stats.failed_values), (0, 0, 0, 0));
+    assert_eq!(
+        (
+            stats.missing,
+            stats.dropped,
+            stats.skipped,
+            stats.failed_values
+        ),
+        (0, 0, 0, 0)
+    );
     for w in frames.windows(2) {
         assert_eq!(w[1].tick, w[0].tick + 1);
         assert_eq!(w[1].probe_us - w[0].probe_us, 1000);
     }
     for f in &frames {
         for (i, item) in list.iter().enumerate() {
-            assert_eq!(f.values[i].is_some(), item.due(f.tick), "k={} 条目 {i}", f.tick);
+            assert_eq!(
+                f.values[i].is_some(),
+                item.due(f.tick),
+                "k={} 条目 {i}",
+                f.tick
+            );
         }
         if let Some(Some(v)) = &f.values[4] {
             assert_eq!(v, &0x89AB_CDEFu32.to_le_bytes());
@@ -188,7 +272,11 @@ fn sampling_rejected_reports_estimate() {
     let (_fake, mut probe, mut syms) = g431();
     probe.connect_swd(4_000_000).unwrap();
     let t = targets(&mut syms, &["cnt_a", "v_u64", "***(uint32_t***)chain_p1"]);
-    let list = vec![sub(&t[0], 0, 1, 0), sub(&t[1], 1, 1, 0), sub(&t[2], 2, 1, 0)];
+    let list = vec![
+        sub(&t[0], 0, 1, 0),
+        sub(&t[1], 1, 1, 0),
+        sub(&t[2], 2, 1, 0),
+    ];
     let res = Sampler::start(&mut probe, list, 20, false);
     match res {
         Err(StartError::Rejected(r)) => {
@@ -263,9 +351,18 @@ fn tcp_transport_round_trip() {
     probe.connect_swd(4_000_000).unwrap();
     let r = probe.read(&[Item::direct(1, 2, 0x2000_001A)]).unwrap();
     assert_eq!(r[0].value, 0x1234u16.to_le_bytes());
-    assert_eq!(xrdap::transport::tcp::with_default_port("192.168.0.108"), "192.168.0.108:3241");
-    assert_eq!(xrdap::transport::tcp::with_default_port("localhost:5000"), "localhost:5000");
-    assert_eq!(xrdap::transport::tcp::with_default_port("::1"), "[::1]:3241");
+    assert_eq!(
+        xrdap::transport::tcp::with_default_port("192.168.0.108"),
+        "192.168.0.108:3241"
+    );
+    assert_eq!(
+        xrdap::transport::tcp::with_default_port("localhost:5000"),
+        "localhost:5000"
+    );
+    assert_eq!(
+        xrdap::transport::tcp::with_default_port("::1"),
+        "[::1]:3241"
+    );
 }
 
 #[test]
@@ -293,8 +390,14 @@ fn halt_resume_and_reset() {
         u32::from_le_bytes(r[0].value[..4].try_into().unwrap())
     };
 
-    assert_eq!(cortex::info(&mut probe).unwrap().describe(), "Cortex-M4 r0p1");
-    assert_eq!(cortex::status(&mut probe).unwrap().state, CoreState::Running);
+    assert_eq!(
+        cortex::info(&mut probe).unwrap().describe(),
+        "Cortex-M4 r0p1"
+    );
+    assert_eq!(
+        cortex::status(&mut probe).unwrap().state,
+        CoreState::Running
+    );
 
     // 停住后计数器不走
     let s = cortex::halt(&mut probe).unwrap();
