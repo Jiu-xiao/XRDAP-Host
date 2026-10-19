@@ -1,6 +1,6 @@
 # XRDAP-Host
 
-[XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP32-S3) 调试探针的电脑端工具，用 Rust 写，Windows 和 Linux 都能用。
+[XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP)（ESP32-S3、ESP32-C3）调试探针的电脑端工具，用 Rust 写，Windows 和 Linux 都能用。
 
 | 程序 | 作用 |
 |---|---|
@@ -24,7 +24,7 @@ cargo build --release
 
 ## xrdap：按变量名读写和采样
 
-变量的地址和类型取自目标程序 ELF 里的 DWARF 调试信息（编译时加 `-g`），可以写结构体成员、数组下标、指针和类型转换，例如 `state.speed`、`motor[1].pid->out`、`head->next->value`、`(uint32_t***)p`；没有 ELF 时直接写地址和类型，例如 `0x20000010:u32`。xrdap 先完成 SWD 连接和调试域上电，再发送探针的厂商命令（命令格式见 [XRDAP-ESP32-S3 的 docs/protocol.md](https://github.com/Jiu-xiao/XRDAP-ESP32-S3/blob/main/docs/protocol.md)）。
+变量的地址和类型取自目标程序 ELF 里的 DWARF 调试信息（编译时加 `-g`），可以写结构体成员、数组下标、指针和类型转换，例如 `state.speed`、`motor[1].pid->out`、`head->next->value`、`(uint32_t***)p`；没有 ELF 时直接写地址和类型，例如 `0x20000010:u32`。xrdap 先完成 SWD 连接和调试域上电，再发送探针的厂商命令（命令格式见 [XRDAP-ESP 的 docs/protocol.md](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/docs/protocol.md)）。
 
 连接方式用 `--usb`、`--serial COM35` 或 `--tcp 192.168.1.50` 指定，不写时用 USB；插着多个探针时用 `--usb=<序列号>` 选择，`xrdap list` 列出序列号。SWD 时钟用 `--clock` 设置，默认 4 MHz。
 
