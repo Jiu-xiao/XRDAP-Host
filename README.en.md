@@ -8,8 +8,8 @@ Host-side tools for [XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP) debug probes 
 |---|---|---|
 | Rust crate | `xrdap` | Protocol, the three links (USB, serial, TCP), probe discovery and DWARF parsing, callable from other programs |
 | Command line | `xrdap` | Lists probes, reads and writes variables, samples periodically and exports CSV, controls the core, configures Wi-Fi |
-| GUI | `xrdap-gui` | Searches ELF variables into a watch table, plots live curves, writes variables while sampling, records CSV |
-| Serial-to-TCP bridge | `xrdap-forward` | Lets OpenOCD use a serial-connected probe through `cmsis-dap backend tcp` (the S3 on-board serial port, the C3 USB port) |
+| GUI | `xrdap-gui` | Searches ELF variables into a watch table, plots live curves, writes variables while sampling, records CSV, shares the probe as a USB DAP |
+| Forwarding | `xrdap-forward` | Forwards a serial or Wi-Fi probe to OpenOCD's TCP backend, or with `--usbip` exposes it as a standard USB CMSIS-DAP for Keil, pyOCD and probe-rs |
 
 ## Download and build
 
@@ -19,7 +19,7 @@ Each version on [Releases](../../releases) provides the following files, plus a 
 |---|---|
 | `xrdap-windows-x86_64.exe`, `xrdap-linux-x86_64` | Command line |
 | `xrdap-gui-windows-x86_64.exe`, `xrdap-gui-linux-x86_64` | GUI |
-| `xrdap-forward-windows-x86_64.exe`, `xrdap-forward-linux-x86_64` | Serial-to-TCP bridge |
+| `xrdap-forward-windows-x86_64.exe`, `xrdap-forward-linux-x86_64` | Forwarding to OpenOCD or USB/IP |
 
 Building from source requires a Rust toolchain:
 
@@ -251,6 +251,7 @@ The window has the connection and variable settings on the left, the control bar
 - Found probes ("找到的探针"): USB, serial and LAN probes are searched on startup, one link per row; clicking a row fills in the connection parameters. "重新查找" (search again) repeats the search.
 - Connection: choose USB, serial, TCP or simulated (a simulated probe, no hardware), fill in the parameters and the SWD clock, and press "连接" (connect). USB and serial have a "刷新" (refresh) button that lists the devices again.
 - Core state: after connecting, the core model and run state (running, sleeping, halted, lockup) are shown and refreshed every 0.5 seconds, with buttons for halt/resume, reset, and reset-and-halt. They also work while sampling.
+- Share as USB DAP ("共享为 USB DAP"): tick it after connecting and the probe becomes a USB/IP device on local port 3240; after `usbip attach`, Keil, pyOCD, probe-rs and OpenOCD use it as a USB CMSIS-DAP probe. The panel shows the device name, the attach command (with a "复制" (copy) button) and the party currently using it. While shared, the GUI cannot read or write variables, sample or control the core; unticking returns the probe to the GUI and reconnects the target, and the party that has it attached sees the device removed. See [Share as USB DAP (USB/IP)](#share-as-usb-dap-usbip) below.
 - ELF: selects the ELF with `-g` debug information.
 - Add variables: search the global variable list and press `+` to add to the watch table, or type an expression such as `motor[1].pid->out` in the expression box and press "添加" (add). Structs and arrays expand into members. The "只看自己的变量" (own variables only) checkbox hides variables from HAL, CMSIS, RTOS, middleware and the C library, judged by source file path.
 - Control bar: sampling period, start/stop, read once, record CSV, plot window length, normalize, pause following, clear plot. While sampling it shows the frame rate and the counts of probe-dropped frames, skipped ticks, missing frames and failed reads; any non-zero count turns into the warning color. When the target is halted, a note says the variables do not change. When the period is shorter than the probe's estimated frame time, the probe rejects it and the GUI replaces the period with the suggested value.
@@ -315,12 +316,13 @@ fn main() -> xrdap::Result<()> {
 | `watch`, `csv` | Probe-side sampling, CSV records |
 | `cortex` | Core state, halt, resume, reset |
 | `wifi` | Query, set and clear the probe's Wi-Fi |
+| `usbip` | Turns any probe into a USB CMSIS-DAP v2 device over USB/IP |
 | `vendor`, `frame`, `transport` | Vendor command encoding, serial and TCP framing, the three transports |
 | `fake` | In-process simulated probe for tests |
 
 The byte formats of the vendor commands are in [docs/protocol.md of XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/docs/protocol.md).
 
-`xrdap/examples/` holds four examples, run from the repository root. The read/write, sampling and Wi-Fi examples take the probe from the environment variable `XRDAP_PROBE` (same forms as `--probe`); when unset, the only probe is auto-selected.
+`xrdap/examples/` holds five examples, run from the repository root. Every example except `list` takes the probe from the environment variable `XRDAP_PROBE` (same forms as `--probe`); when unset, the only probe is auto-selected.
 
 | Example | Purpose | Command |
 |---|---|---|
@@ -328,6 +330,7 @@ The byte formats of the vendor commands are in [docs/protocol.md of XRDAP-ESP](h
 | `read_write` | Reads a variable by name; with a third argument, writes it first and then reads | `cargo run -p xrdap --example read_write -- app.elf motor.kp 1.5` |
 | `sample` | Makes the probe sample variables at a 1 ms period, fetches 1 second of data, prints one line per 100 frames and the statistics | `cargo run -p xrdap --example sample -- app.elf motor.speed motor.current` |
 | `wifi` | Queries the probe's Wi-Fi status; with a hotspot name and password, saves them | `cargo run -p xrdap --example wifi` |
+| `usbip` | Shares the probe as a USB CMSIS-DAP on 127.0.0.1:3240 so that other debug tools can attach it | `cargo run -p xrdap --example usbip` |
 
 Selecting a probe, for example:
 
@@ -335,22 +338,66 @@ Selecting a probe, for example:
 XRDAP_PROBE=COM35 cargo run -p xrdap --example read_write -- app.elf motor.speed
 ```
 
-## xrdap-forward: serial to TCP
+## Share as USB DAP (USB/IP)
+
+Tools such as Keil, pyOCD and probe-rs only accept USB probes. The USB/IP protocol hands a USB device to a computer over TCP, and after attaching, the system shows it as a USB device. XR-DAP offers two ways of use with an identical device: VID:PID 1D50:6199, product name `XR-DAP-S3 CMSIS-DAP` or `XR-DAP-C3 CMSIS-DAP`, the same serial number as the probe, CMSIS-DAP v2 (Bulk), and the WinUSB driver is used automatically on Windows.
+
+| Way | Suited for | Who provides USB/IP |
+|---|---|---|
+| Wireless | The probe is connected over Wi-Fi only | From firmware 0.3.0, the probe itself on port 3240 |
+| Wired | An ESP32-C3 plugged into the computer with a USB cable (lower latency than Wi-Fi), or the serial link of an S3 | "共享为 USB DAP" of `xrdap-gui` or `xrdap-forward --usbip`, on 127.0.0.1:3240 of the local machine |
+
+The attaching side needs a USB/IP client:
+
+- Linux: built into the kernel. `sudo modprobe vhci-hcd`, then `sudo usbip attach -r <address> -b 1-1`. For a normal user to open the device, the udev rule `SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6199", MODE="0666"` is needed; otherwise run the debug tool with sudo.
+- Windows: install [usbip-win2](https://github.com/vadimgrn/usbip-win2), then `usbip attach -r <address> -b 1-1`.
+
+Attaching a probe wirelessly (the address can be an IP or `xrdap-93ef1c.local`):
 
 ```
-xrdap-forward --serial COM35
+sudo usbip list -r 192.168.0.112
+sudo usbip attach -r 192.168.0.112 -b 1-1
+openocd -f interface/cmsis-dap.cfg -c "adapter serial XRobot-XRDAP-9C139E721384" -f target/stm32f4x.cfg
+sudo usbip port
+sudo usbip detach -p 0
+```
+
+For the wired way, share on the local machine first, then attach 127.0.0.1:
+
+```
+xrdap-forward -p COM7 --usbip
+usbip attach -r 127.0.0.1 -b 1-1
+```
+
+To give the probe to another machine from Linux, `--listen 0.0.0.0:3240` listens on all network interfaces. After the attached tool exits the device stays attached until `usbip detach`; when the sharing side stops (xrdap-forward closed, checkbox unticked) the device is removed. When the external tool disconnects, a probe that is still sampling is stopped. Only one client is served at a time; over Wi-Fi, USB/IP and OpenOCD's TCP backend (3241) also exclude each other: while one is connected, the other waits in the queue.
+
+Measured (ubuntu24, OpenOCD reading 128 KiB of Flash on an F401):
+
+| Path | Time |
+|---|---|
+| C3 wired, xrdap-forward --usbip | 1.8 s |
+| C3 wired, xrdap-gui sharing | 1.8 s |
+| C3 wireless, firmware USB/IP | 2.7 s |
+| S3 wireless, firmware USB/IP | 2.1 s |
+| Reference: S3 / C3 wireless, OpenOCD TCP backend | 1.6 s / 1.9 s |
+
+## xrdap-forward: forwarding to other tools
+
+```
+xrdap-forward -p COM7              # OpenOCD's TCP backend, 127.0.0.1:3241
+xrdap-forward -p COM7 --usbip      # USB/IP device, 127.0.0.1:3240
 ```
 
 | Option | Default | Purpose |
 |---|---|---|
-| `--serial` | none, required | Serial port of the probe, for example `COM35` or `/dev/ttyUSB0` |
-| `--baud` | 4000000 | Serial baud rate, matching the firmware |
-| `--listen` | `127.0.0.1:3241` | TCP address for OpenOCD to connect to |
+| `-p`, `--probe` | auto-select | Probe, same forms as `xrdap --probe`: `COM7`, `/dev/ttyACM0`, IP, `*.local`, serial number or its last digits |
+| `--usbip` | off | Provide a USB/IP device instead of OpenOCD's TCP protocol |
+| `--listen` | `127.0.0.1:3241`, with `--usbip` `127.0.0.1:3240` | Listen address |
+| `--baud` | 4000000 | Serial baud rate, matching the firmware (the C3 USB port ignores the baud rate) |
 | `--timeout-ms` | 2000 | Timeout for one request to get a response (ms) |
-| `--keep-lines` | off | Leave DTR/RTS unchanged after opening the port |
-| `--verbose` | off | Print every forwarded request and response |
+| `-v`, `--verbose` | off | Print every forwarded request and response |
 
-Opening the port makes DTR/RTS of the USB-to-serial chip reset the ESP32 once. xrdap-forward queries the probe repeatedly until it has started (up to 10 seconds), prints the DAP packet size the probe reports, and then starts listening. An ESP32-C3 on its built-in USB Serial/JTAG does not have this reset; add `--keep-lines`. Only one OpenOCD is served at a time.
+The legacy form `--serial COM35` still works and is equivalent to `-p COM35`. Opening the serial port of an S3 makes DTR/RTS of the USB-to-serial chip reset the ESP32 once; xrdap-forward queries the probe repeatedly until it has started (up to 10 seconds). The built-in USB Serial/JTAG of a C3 keeps DTR/RTS unchanged automatically. Only one client is served at a time; when the client disconnects while the probe is still sampling, xrdap-forward stops the sampling for it.
 
 OpenOCD connects to 127.0.0.1 with the TCP backend:
 
@@ -360,7 +407,7 @@ cmsis-dap backend tcp
 cmsis-dap tcp host 127.0.0.1
 cmsis-dap tcp port 3241
 transport select swd
-source [find target/stm32g4x.cfg]
+source [find target/stm32f4x.cfg]
 adapter speed 4000
 ```
 
@@ -371,7 +418,7 @@ cmsis-dap quirk enable
 cmsis-dap tcp min_timeout 10
 ```
 
-The cost is that OpenOCD sends one packet at a time, which lowers throughput to about one third. OpenOCD upstream has fixed this (commit e89e73839d53); with a build containing that commit the two lines can be removed. They are not needed on Linux.
+The cost is that OpenOCD sends one packet at a time, which lowers throughput to about one third. OpenOCD upstream has fixed this (commit e89e73839d53); with a build containing that commit the two lines can be removed. They are not needed on Linux. With USB/IP the USB backend is used and this problem does not exist.
 
 ## Tests
 

@@ -8,8 +8,8 @@
 |---|---|---|
 | Rust 库 | `xrdap` | 协议、三种连接方式（USB、串口、TCP）、探针发现、DWARF 解析，可直接在自己的程序里调用 |
 | 命令行 | `xrdap` | 列出探针，读写变量，周期采样并导出 CSV，控制内核，配置 Wi-Fi |
-| 图形界面 | `xrdap-gui` | 搜索 ELF 里的变量加入监视表，实时画曲线，采样时修改变量，录制 CSV |
-| 串口转 TCP | `xrdap-forward` | 让 OpenOCD 通过 `cmsis-dap backend tcp` 使用串口连接的探针（S3 的板上串口、C3 的 USB 口） |
+| 图形界面 | `xrdap-gui` | 搜索 ELF 里的变量加入监视表，实时画曲线，采样时修改变量，录制 CSV，把探针共享为 USB DAP |
+| 转发 | `xrdap-forward` | 把串口或 Wi-Fi 连着的探针转给 OpenOCD 的 TCP 后端，或用 `--usbip` 变成标准 USB CMSIS-DAP 给 Keil、pyOCD、probe-rs 用 |
 
 ## 下载和编译
 
@@ -19,7 +19,7 @@
 |---|---|
 | `xrdap-windows-x86_64.exe`、`xrdap-linux-x86_64` | 命令行 |
 | `xrdap-gui-windows-x86_64.exe`、`xrdap-gui-linux-x86_64` | 图形界面 |
-| `xrdap-forward-windows-x86_64.exe`、`xrdap-forward-linux-x86_64` | 串口转 TCP |
+| `xrdap-forward-windows-x86_64.exe`、`xrdap-forward-linux-x86_64` | 转发给 OpenOCD 或 USB/IP |
 
 自行编译需要 Rust 工具链：
 
@@ -247,6 +247,7 @@ xrdap-gui
 - 找到的探针：启动时自动查找 USB、串口、局域网上的探针，每个连接一行，点击后填入连接参数；“重新查找”再查一次。
 - 连接：选 USB、串口、TCP 或模拟（不需要硬件的模拟探针），填写参数和 SWD 时钟后点“连接”。USB 和串口有“刷新”按钮重新列出设备。
 - 内核状态：连接后显示内核型号和运行状态（运行中、睡眠、已停住、锁死），每 0.5 秒刷新，带“停住/继续”“复位”“复位并停住”按钮，采样期间也能使用。
+- 共享为 USB DAP：连接后勾选，探针在本机 3240 端口变成一个 USB/IP 设备，用 `usbip attach` 挂载后 Keil、pyOCD、probe-rs、OpenOCD 把它当 USB CMSIS-DAP 探针用。面板显示设备名、挂载命令（带“复制”按钮）和正在使用的一方。共享期间界面不能读写变量、采样和控制内核；取消勾选后探针交回界面并重新连接目标，正在挂载的一方看到设备被拔掉。详见下文“共享为 USB DAP”。
 - ELF：选择带 `-g` 调试信息的 ELF。
 - 添加变量：在全局变量列表里搜索，点 `+` 加入监视表，或者在表达式框里写 `motor[1].pid->out` 这类表达式后点“添加”。结构体和数组展开成各个成员。勾选“只看自己的变量”会按源文件路径隐藏 HAL、CMSIS、RTOS、中间件和 C 库里的变量。
 - 控制栏：采样周期、开始/停止、读一次、录制 CSV、曲线窗口长度、归一化、暂停跟随、清空曲线。采样时显示帧率、探针丢帧、跳拍、缺帧和读取失败的个数，任何一项不为 0 时变成警告色；目标停住时提示变量不会变化。周期短于探针估计的单帧耗时时探针拒绝，界面把周期改成建议值。
@@ -311,12 +312,13 @@ fn main() -> xrdap::Result<()> {
 | `watch`、`csv` | 探针端采样、CSV 记录 |
 | `cortex` | 内核状态和停住、继续、复位 |
 | `wifi` | 探针 Wi-Fi 的查询、设置、清除 |
+| `usbip` | 把任意探针变成 USB/IP 上的 USB CMSIS-DAP v2 设备 |
 | `vendor`、`frame`、`transport` | 厂商命令编码、串口和 TCP 帧、三种传输 |
 | `fake` | 进程内的模拟探针，测试用 |
 
 厂商命令的字节格式见 [XRDAP-ESP 的 docs/protocol.md](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/docs/protocol.md)。
 
-`xrdap/examples/` 下有四个示例，在仓库根目录运行。读写、采样和 Wi-Fi 示例用环境变量 `XRDAP_PROBE` 指定探针（写法同 `--probe`），不设时自动选唯一的探针。
+`xrdap/examples/` 下有五个示例，在仓库根目录运行。除 `list` 外都用环境变量 `XRDAP_PROBE` 指定探针（写法同 `--probe`），不设时自动选唯一的探针。
 
 | 示例 | 作用 | 运行命令 |
 |---|---|---|
@@ -324,6 +326,7 @@ fn main() -> xrdap::Result<()> {
 | `read_write` | 按变量名读；给出第三个参数时先写再读 | `cargo run -p xrdap --example read_write -- app.elf motor.kp 1.5` |
 | `sample` | 让探针以 1 ms 周期采样若干变量，取回 1 秒的数据，每 100 帧打印一行并输出统计 | `cargo run -p xrdap --example sample -- app.elf motor.speed motor.current` |
 | `wifi` | 不带参数时查询探针的 Wi-Fi 状态，带热点名和密码时保存 | `cargo run -p xrdap --example wifi` |
+| `usbip` | 在 127.0.0.1:3240 把探针共享成 USB CMSIS-DAP，挂载后给别的调试工具用 | `cargo run -p xrdap --example usbip` |
 
 指定探针的写法，例如：
 
@@ -331,22 +334,66 @@ fn main() -> xrdap::Result<()> {
 XRDAP_PROBE=COM35 cargo run -p xrdap --example read_write -- app.elf motor.speed
 ```
 
-## xrdap-forward：串口转 TCP
+## 共享为 USB DAP（USB/IP）
+
+Keil、pyOCD、probe-rs 这类工具只认 USB 探针。USB/IP 协议能把一个 USB 设备经 TCP 交给电脑，电脑挂载后系统里就出现这个 USB 设备。XR-DAP 提供两种用法，设备完全相同：VID:PID 1D50:6199，产品名 `XR-DAP-S3 CMSIS-DAP` 或 `XR-DAP-C3 CMSIS-DAP`，序列号与探针相同，CMSIS-DAP v2（Bulk），Windows 自动用 WinUSB 驱动。
+
+| 用法 | 适合 | 谁提供 USB/IP |
+|---|---|---|
+| 无线 | 探针只连了 Wi-Fi | 固件 0.3.0 起，探针自己在 3240 端口提供 |
+| 插线 | ESP32-C3 用 USB 线插在电脑上（延迟比 Wi-Fi 小），或 S3 的串口链路 | `xrdap-gui` 的“共享为 USB DAP”或 `xrdap-forward --usbip`，在本机 127.0.0.1:3240 提供 |
+
+挂载一侧需要 USB/IP 客户端：
+
+- Linux：内核自带。`sudo modprobe vhci-hcd`，然后 `sudo usbip attach -r <地址> -b 1-1`。普通用户要能打开设备，需要 udev 规则 `SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6199", MODE="0666"`，否则调试工具用 sudo 运行。
+- Windows：安装 [usbip-win2](https://github.com/vadimgrn/usbip-win2)，然后 `usbip attach -r <地址> -b 1-1`。
+
+无线挂载探针（地址可以写 IP 或 `xrdap-93ef1c.local`）：
 
 ```
-xrdap-forward --serial COM35
+sudo usbip list -r 192.168.0.112
+sudo usbip attach -r 192.168.0.112 -b 1-1
+openocd -f interface/cmsis-dap.cfg -c "adapter serial XRobot-XRDAP-9C139E721384" -f target/stm32f4x.cfg
+sudo usbip port
+sudo usbip detach -p 0
+```
+
+插线时先在本机共享，再挂载 127.0.0.1：
+
+```
+xrdap-forward -p COM7 --usbip
+usbip attach -r 127.0.0.1 -b 1-1
+```
+
+在 Linux 上把探针给另一台机器用时，`--listen 0.0.0.0:3240` 监听所有网卡。挂载中的工具退出后设备仍然挂着，`usbip detach` 才算拔掉；共享一方停止（关掉 xrdap-forward、取消勾选）时设备被拔掉。外部工具断开时，探针端如果还在采样会被停掉。同一时间只有一个客户端，无线时 USB/IP 和 OpenOCD 的 TCP 后端（3241）也互斥：一个连着时另一个排队等。
+
+实测（ubuntu24，OpenOCD 读 F401 的 128 KiB Flash）：
+
+| 路径 | 用时 |
+|---|---|
+| C3 插线，xrdap-forward --usbip | 1.8 s |
+| C3 插线，xrdap-gui 共享 | 1.8 s |
+| C3 无线，固件 USB/IP | 2.7 s |
+| S3 无线，固件 USB/IP | 2.1 s |
+| 对照：S3 / C3 无线，OpenOCD TCP 后端 | 1.6 s / 1.9 s |
+
+## xrdap-forward：转发给其他工具
+
+```
+xrdap-forward -p COM7              # OpenOCD 的 TCP 后端，127.0.0.1:3241
+xrdap-forward -p COM7 --usbip      # USB/IP 设备，127.0.0.1:3240
 ```
 
 | 参数 | 默认值 | 作用 |
 |---|---|---|
-| `--serial` | 无，必填 | 探针的串口，例如 `COM35` 或 `/dev/ttyUSB0` |
-| `--baud` | 4000000 | 串口波特率，与固件一致 |
-| `--listen` | `127.0.0.1:3241` | 给 OpenOCD 连接的 TCP 地址 |
+| `-p`、`--probe` | 自动选 | 探针，写法同 `xrdap --probe`：`COM7`、`/dev/ttyACM0`、IP、`*.local`、序列号或末尾几位 |
+| `--usbip` | 关 | 提供 USB/IP 设备，而不是 OpenOCD 的 TCP 协议 |
+| `--listen` | `127.0.0.1:3241`，`--usbip` 时 `127.0.0.1:3240` | 监听地址 |
+| `--baud` | 4000000 | 串口波特率，与固件一致（C3 的 USB 口不看波特率） |
 | `--timeout-ms` | 2000 | 一个请求等待响应的超时（毫秒） |
-| `--keep-lines` | 关 | 打开串口后不改 DTR/RTS |
-| `--verbose` | 关 | 打印每个转发的请求和响应 |
+| `-v`、`--verbose` | 关 | 打印每个转发的请求和响应 |
 
-打开串口时，USB 转串口芯片的 DTR/RTS 会让 ESP32 复位一次。xrdap-forward 反复查询探针，等它启动完成（最长 10 秒），打印探针报告的 DAP 包长后开始监听。ESP32-C3 用自带的 USB Serial/JTAG 时没有这个复位问题，加 `--keep-lines`。同一时间只服务一个 OpenOCD。
+旧写法 `--serial COM35` 仍然可用，等同 `-p COM35`。打开 S3 的串口时，USB 转串口芯片的 DTR/RTS 会让 ESP32 复位一次，xrdap-forward 反复查询探针等它启动完成（最长 10 秒）；C3 自带的 USB Serial/JTAG 自动保持 DTR/RTS 不变。同一时间只服务一个客户端，客户端断开时如果探针还在采样就替它停掉。
 
 OpenOCD 使用 TCP 后端连接 127.0.0.1：
 
@@ -356,7 +403,7 @@ cmsis-dap backend tcp
 cmsis-dap tcp host 127.0.0.1
 cmsis-dap tcp port 3241
 transport select swd
-source [find target/stm32g4x.cfg]
+source [find target/stm32f4x.cfg]
 adapter speed 4000
 ```
 
@@ -367,7 +414,7 @@ cmsis-dap quirk enable
 cmsis-dap tcp min_timeout 10
 ```
 
-代价是 OpenOCD 一次只发一个包，吞吐大约降到三分之一。OpenOCD 上游已修复（提交 e89e73839d53），换用带这个提交的构建后可以去掉这两行；Linux 上不需要。
+代价是 OpenOCD 一次只发一个包，吞吐大约降到三分之一。OpenOCD 上游已修复（提交 e89e73839d53），换用带这个提交的构建后可以去掉这两行；Linux 上不需要。用 USB/IP 时走 USB 后端，没有这个问题。
 
 ## 测试
 
