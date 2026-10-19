@@ -32,6 +32,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: 安装图形界面依赖（Linux）
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxkbcommon-dev
+
       - name: 测试
         run: cargo test --release --workspace
 
@@ -43,6 +47,7 @@ jobs:
           mkdir dist
           cp target/release/xrdap${{ matrix.exe }} dist/xrdap-${{ matrix.suffix }}
           cp target/release/xrdap-forward${{ matrix.exe }} dist/xrdap-forward-${{ matrix.suffix }}
+          cp target/release/xrdap-gui${{ matrix.exe }} dist/xrdap-gui-${{ matrix.suffix }}
 
       - uses: actions/upload-artifact@v4
         with:

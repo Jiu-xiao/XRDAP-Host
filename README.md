@@ -5,6 +5,7 @@
 | 程序 | 作用 |
 |---|---|
 | `xrdap` | 命令行：按变量名读写目标内存，在探针上周期采样变量并导出 CSV |
+| `xrdap-gui` | 图形界面：搜索 ELF 里的变量加进监视表，在探针上采样并实时画曲线，采样时可以改变量，可以录制 CSV |
 | `xrdap-forward` | 串口转 TCP：让 OpenOCD 通过 `cmsis-dap backend tcp` 使用串口连接的探针（ESP32-C3、H2、MSPM0 等没有 USB 的芯片） |
 
 库 `xrdap` 里是协议、三种连接方式（USB、串口、TCP）和 DWARF 解析，可以直接在自己的程序里用。
@@ -19,7 +20,7 @@ cd XRDAP-Host
 cargo build --release
 ```
 
-程序在 `target/release/` 下。Linux 上用 USB 需要 udev 规则放开权限，VID:PID 是 `1D50:6199`。
+程序在 `target/release/` 下。Linux 上用 USB 需要 udev 规则放开权限，VID:PID 是 `1D50:6199`。Linux 上编译 `xrdap-gui` 需要 GTK3 和 xkbcommon 的开发包（Ubuntu：`sudo apt install libgtk-3-dev libxkbcommon-dev`）。
 
 ## xrdap：按变量名读写和采样
 
@@ -63,6 +64,20 @@ host_time,t,sample_tick,cnt_a,cnt_b,v_u32
 不写 `--csv` 时在终端里每 0.1 秒打印一行。按 Ctrl-C 或 `--duration` 指定的秒数到了之后，xrdap 停止采样、读完缓冲，打印探针报告的跳过节拍数和缓冲丢帧数。周期短于探针估计的单帧耗时时，SUB_SET 被拒绝，xrdap 给出估计值和可用的周期。全部命令和选项见 `xrdap --help`。
 
 采样期间探针只接受 `DAP_Info`、`DAP_HostStatus` 和厂商命令，其他命令回 `0xFF`，所以采样不能和 OpenOCD 调试同时进行。
+
+## xrdap-gui：图形界面
+
+```
+xrdap-gui
+```
+
+- 左边：选连接方式（USB、串口、TCP，或不需要硬件的模拟探针）和 SWD 时钟后连接；选目标程序的 ELF；在全局变量列表里搜索，点 `+` 加进监视表，或者在表达式框里写 `motor[1].pid->out` 这类表达式。结构体和数组展开成各个成员。
+- 中间上方：采样周期、开始/停止、读一次、录制 CSV、曲线窗口长度、暂停跟随。采样时显示帧率、探针丢帧、跳拍、缺帧和读取失败的个数，有任何一项不为 0 时变成警告色。周期短于探针估计的单帧耗时时探针拒绝，界面把周期改成建议值。
+- 监视表：每个变量一行，可以设分频、选是否画曲线、看当前值；在写入框里填值后按回车或点“写”，写完读回一次，采样期间也能写。新加的指针默认不画曲线。
+- 曲线：每条曲线按屏幕宽度做最大最小值抽稀，尖峰不会被抽掉；每条保留最近 120 秒。暂停跟随后可以拖动和缩放，数据照常接收。
+- CSV 和 `xrdap watch --csv` 的格式相同，从选好文件的时刻开始记录。
+
+连接方式、ELF 路径、监视表、周期和窗口长度在退出时保存，下次打开时恢复。界面需要系统里有中文字体（Windows 的微软雅黑或黑体，Linux 的 Noto Sans CJK 或文泉驿），没有时中文显示成方框。
 
 ## xrdap-forward：串口转 TCP
 

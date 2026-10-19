@@ -1,0 +1,18 @@
+[package]
+name = "xrdap-gui"
+description = "XR-DAP 探针的图形界面：按变量名选变量、在探针上采样并实时画曲线"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "xrdap-gui"
+path = "src/main.rs"
+
+[dependencies]
+xrdap = { path = "../xrdap" }
+serial2 = { workspace = true }
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
+egui_plot = "0.34"
+egui_extras = { version = "0.33", default-features = false }
+rfd = "0.15"
