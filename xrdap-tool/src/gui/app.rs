@@ -14,6 +14,7 @@ use xrdap::share::Event as ShareEvent;
 use xrdap::types::SymbolTable;
 use xrdap::vendor::ItemResult;
 use xrdap::watch::{HostFrame, Stats};
+use xrdap::wifi::WifiStatus;
 
 use super::model::{Csv, Kind, ShareState, VarRow, Watch};
 use super::plot::PlotView;
@@ -50,6 +51,11 @@ pub struct App {
     /// 正在共享为 USB DAP 时的状态；None 为没有共享
     pub(super) share: Option<ShareState>,
     pub(super) share_busy: bool,
+    /// 探针报告的 Wi-Fi 状态；None 为还没有查询
+    pub(super) wifi: Option<Result<WifiStatus, String>>,
+    pub(super) wifi_ssid: String,
+    pub(super) wifi_password: String,
+    pub(super) wifi_busy: bool,
 
     pub(super) elf_path: String,
     pub(super) syms: SymbolTable,
@@ -119,6 +125,10 @@ impl App {
             last_core_poll: Instant::now(),
             share: None,
             share_busy: false,
+            wifi: None,
+            wifi_ssid: String::new(),
+            wifi_password: String::new(),
+            wifi_busy: false,
             elf_path: get("xrdap.elf").unwrap_or_default(),
             syms: SymbolTable::new(),
             vars: Vec::new(),
@@ -285,7 +295,21 @@ impl App {
                 self.share = None;
                 self.log("已停止共享".into());
             }
+            Event::WifiStatus(status) => {
+                self.wifi_busy = false;
+                self.wifi = Some(status);
+            }
+            Event::WifiApplied { cleared } => {
+                self.wifi_busy = false;
+                self.wifi_password.clear();
+                self.log(if cleared {
+                    "已清除热点参数，探针重启后不再连 Wi-Fi".into()
+                } else {
+                    format!("已保存热点 {}，探针重启后连接", self.wifi_ssid)
+                });
+            }
             Event::Disconnected => {
+                self.wifi = None;
                 self.core = None;
                 self.core_info.clear();
                 self.connected = false;
@@ -298,6 +322,7 @@ impl App {
                 }
                 self.connecting = false;
                 self.share_busy = false;
+                self.wifi_busy = false;
                 self.starting = false;
                 self.log(e);
             }

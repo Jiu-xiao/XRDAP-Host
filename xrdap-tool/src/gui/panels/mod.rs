@@ -5,3 +5,4 @@ mod controls;
 mod elf_vars;
 mod plot_panel;
 mod watches;
+mod wifi;

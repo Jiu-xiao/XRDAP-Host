@@ -284,6 +284,10 @@ impl App {
             }
             ui.separator();
             self.ui_share(ui);
+            if self.share.is_none() {
+                ui.separator();
+                self.ui_wifi(ui);
+            }
         }
     }
 
@@ -292,9 +296,14 @@ impl App {
         let mut on = self.share.is_some();
         ui.horizontal(|ui| {
             let changed = ui
-                .add_enabled(!self.share_busy, egui::Checkbox::new(&mut on, "共享为 USB DAP"))
+                .add_enabled(
+                    !self.share_busy,
+                    egui::Checkbox::new(&mut on, "共享为 USB DAP"),
+                )
                 .on_hover_text(
-                    "在本机 3240 端口提供 USB/IP 设备。用 usbip 挂载后，Keil、pyOCD、probe-rs、                     OpenOCD 把它当 USB CMSIS-DAP 探针用。共享期间这里不能读写变量和采样。                     Windows 需要先安装 usbip-win2。",
+                    "在本机 3240 端口提供 USB/IP 设备。用 usbip 挂载后，Keil、pyOCD、probe-rs、
+                     OpenOCD 把它当 USB CMSIS-DAP 探针用。共享期间这里不能读写变量和采样。
+                     Windows 需要先安装 usbip-win2。",
                 )
                 .changed();
             if self.share_busy {
