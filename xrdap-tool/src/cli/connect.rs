@@ -21,7 +21,7 @@ pub struct ConnOpts {
     pub probe: Option<String>,
 
     /// 串口波特率，要和探针固件一致。不写时按串口芯片自动选：CH343 等先试 4000000，
-    /// CP2102、CH340 用 921600（传统 ESP32）
+    /// CP2102、CH340 用 921600（传统 ESP32），其他芯片两个都试
     #[arg(long, global = true, value_name = "波特率")]
     pub baud: Option<u32>,
 

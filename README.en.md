@@ -137,7 +137,7 @@ xrdap --fake --elf app.elf read motor.speed
 |---|---|
 | omitted | Uses the only USB probe if there is exactly one; otherwise searches USB, serial and the LAN and uses the only probe found |
 | `usb`, `usb:<serial>` | USB |
-| `COM7`, `/dev/ttyACM0` | Serial port. On the USB port built into Espressif chips, DTR/RTS are kept unchanged automatically; the baud rate is chosen from the serial chip (CH343 and similar try 4000000 first, CP2102 and CH340 use 921600), and `--baud` can set it |
+| `COM7`, `/dev/ttyACM0` | Serial port. On the USB port built into Espressif chips, DTR/RTS are kept unchanged automatically; the baud rate is chosen from the serial chip (CH343 and similar try 4000000 first, CP2102 and CH340 use 921600, other chips try both), and `--baud` can set it |
 | `192.168.0.108`, `xrdap-93ef1c.local`, `host:port` | Wi-Fi (OpenOCD TCP backend port 3241) |
 | `XRobot-XRDAP-E8069093EF1C`, `93EF1C` | Full serial number or its last digits; searches USB first, then serial and the LAN |
 

@@ -146,7 +146,7 @@ pub fn serial_candidates() -> Vec<SerialPortProfile> {
         .collect()
 }
 
-/// 一个串口按芯片该怎么打开；不是已知的 USB 转串口芯片时按 4 Mbaud、改 DTR/RTS。
+/// 一个串口按芯片该怎么打开；不是已知的 USB 转串口芯片时先试 4 Mbaud 再试 921600，改 DTR/RTS。
 pub fn serial_profile(port: &str) -> SerialPortProfile {
     serial_candidates()
         .into_iter()
@@ -154,7 +154,7 @@ pub fn serial_profile(port: &str) -> SerialPortProfile {
         .unwrap_or(SerialPortProfile {
             port: port.to_string(),
             keep_lines: false,
-            bauds: BAUDS_ANY,
+            bauds: BAUDS_FAST,
         })
 }
 
@@ -341,6 +341,13 @@ mod tests {
             addr,
             note: None,
         }
+    }
+
+    #[test]
+    fn unknown_serial_port_tries_both_firmware_bauds() {
+        let p = serial_profile("XRDAP-NO-SUCH-PORT");
+        assert!(!p.keep_lines);
+        assert_eq!(p.bauds, &[DEFAULT_BAUD, SAFE_BAUD]);
     }
 
     #[test]

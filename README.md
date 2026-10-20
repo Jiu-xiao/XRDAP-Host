@@ -137,7 +137,7 @@ xrdap --fake --elf app.elf read motor.speed
 |---|---|
 | 不写 | 只有一块 USB 探针时用它；否则找遍 USB、串口、局域网，只有一块时用它 |
 | `usb`、`usb:<序列号>` | USB |
-| `COM7`、`/dev/ttyACM0` | 串口。乐鑫芯片自带的 USB 口自动保持 DTR/RTS 不变；波特率按串口芯片自动选（CH343 等先试 4000000，CP2102、CH340 用 921600），`--baud` 可以指定 |
+| `COM7`、`/dev/ttyACM0` | 串口。乐鑫芯片自带的 USB 口自动保持 DTR/RTS 不变；波特率按串口芯片自动选（CH343 等先试 4000000，CP2102、CH340 用 921600，其他芯片两个都试），`--baud` 可以指定 |
 | `192.168.0.108`、`xrdap-93ef1c.local`、`host:port` | Wi-Fi（OpenOCD TCP 后端端口 3241） |
 | `XRobot-XRDAP-E8069093EF1C`、`93EF1C` | 序列号全称或末尾几位，先找 USB，再找串口、局域网 |
 

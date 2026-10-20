@@ -157,13 +157,16 @@ pub fn open_addr(addr: &Addr, opts: &OpenOptions) -> Result<Probe> {
         #[cfg(not(feature = "usb"))]
         Addr::Usb { .. } => return Err(Error::usage("这个版本没有编译 USB 支持")),
         Addr::Serial { port, keep_lines } => {
-            let (keep, bauds) = serial_profile(port);
-            open_serial(
-                port,
-                *keep_lines || keep,
-                &opts.baud.map_or(bauds, |b| vec![b]),
-                opts,
-            )?
+            let (keep, auto_bauds) = serial_profile(port);
+            let fixed;
+            let bauds = match opts.baud {
+                Some(b) => {
+                    fixed = [b];
+                    &fixed[..]
+                }
+                None => auto_bauds,
+            };
+            open_serial(port, *keep_lines || keep, bauds, opts)?
         }
         Addr::Tcp { host } => Probe::new(Box::new(TcpTransport::connect(host, opts.timeout)?)),
     })
@@ -194,14 +197,15 @@ fn open_serial(port: &str, keep: bool, bauds: &[u32], opts: &OpenOptions) -> Res
 
 /// 串口芯片决定的 (keep_lines, 依次尝试的波特率)。
 #[cfg(feature = "discover")]
-fn serial_profile(port: &str) -> (bool, Vec<u32>) {
+fn serial_profile(port: &str) -> (bool, &'static [u32]) {
     let p = crate::discover::serial_profile(port);
-    (p.keep_lines, p.bauds.to_vec())
+    (p.keep_lines, p.bauds)
 }
 
 #[cfg(not(feature = "discover"))]
-fn serial_profile(_port: &str) -> (bool, Vec<u32>) {
-    (false, vec![crate::transport::serial::DEFAULT_BAUD])
+fn serial_profile(_port: &str) -> (bool, &'static [u32]) {
+    use crate::transport::serial::{DEFAULT_BAUD, SAFE_BAUD};
+    (false, &[DEFAULT_BAUD, SAFE_BAUD])
 }
 
 /// 按说明打开探针（不连接目标）。`spec` 的写法见模块文档；None 表示自动选择。

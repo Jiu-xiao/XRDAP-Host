@@ -3,7 +3,7 @@
 use eframe::egui::{self, Color32, RichText};
 
 use super::super::app::App;
-use super::super::worker::{Cmd, WifiCmd};
+use super::super::worker::{Cmd, WifiChange};
 
 impl App {
     /// Wi-Fi 状态和热点参数表单。保存、清除后探针重启，连接随之断开。
@@ -48,20 +48,20 @@ impl App {
                             .on_hover_text("探针保存热点参数后约 0.5 秒重启，当前连接会断开")
                             .clicked()
                         {
-                            cmd = Some(WifiCmd::Set {
+                            cmd = Some(Cmd::WifiApply(WifiChange::Set {
                                 ssid: self.wifi_ssid.trim().to_string(),
                                 password: self.wifi_password.clone(),
-                            });
+                            }));
                         }
                         if ui
                             .button("清除")
                             .on_hover_text("清除热点参数，探针重启后不再连 Wi-Fi")
                             .clicked()
                         {
-                            cmd = Some(WifiCmd::Clear);
+                            cmd = Some(Cmd::WifiApply(WifiChange::Clear));
                         }
                         if ui.button("刷新").clicked() {
-                            cmd = Some(WifiCmd::Status);
+                            cmd = Some(Cmd::WifiStatus);
                         }
                         if self.wifi_busy {
                             ui.add(egui::Spinner::new());
@@ -71,7 +71,7 @@ impl App {
             });
         if let Some(c) = cmd {
             self.wifi_busy = true;
-            self.send(Cmd::Wifi(c));
+            self.send(c);
         }
     }
 }

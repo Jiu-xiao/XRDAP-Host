@@ -46,19 +46,15 @@ pub enum Cmd {
     Core(CoreCmd),
     /// 开始或停止共享为 USB DAP（USB/IP）。共享期间别的命令都不执行
     Share(bool),
-    /// 探针的 Wi-Fi：查询、保存或清除热点参数
-    Wifi(WifiCmd),
+    /// 查询探针的 Wi-Fi 状态
+    WifiStatus,
+    /// 保存或清除热点参数；成功后探针约 0.5 秒重启，连接随之断开
+    WifiApply(WifiChange),
 }
 
 #[derive(Debug, Clone)]
-pub enum WifiCmd {
-    Status,
-    /// 保存后探针约 0.5 秒重启，连接随之断开
-    Set {
-        ssid: String,
-        password: String,
-    },
-    /// 清除后探针约 0.5 秒重启，连接随之断开
+pub enum WifiChange {
+    Set { ssid: String, password: String },
     Clear,
 }
 
@@ -200,11 +196,10 @@ fn wifi_status(probe: &mut Probe) -> Event {
 }
 
 /// 保存或清除热点参数；成功时返回 true，探针随后重启。
-fn wifi_apply(probe: &mut Probe, cmd: &WifiCmd, send: &impl Fn(Event)) -> bool {
-    let (result, cleared) = match cmd {
-        WifiCmd::Status => return false,
-        WifiCmd::Set { ssid, password } => (wifi::set(probe, ssid, password), false),
-        WifiCmd::Clear => (wifi::clear(probe), true),
+fn wifi_apply(probe: &mut Probe, change: &WifiChange, send: &impl Fn(Event)) -> bool {
+    let (result, cleared) = match change {
+        WifiChange::Set { ssid, password } => (wifi::set(probe, ssid, password), false),
+        WifiChange::Clear => (wifi::clear(probe), true),
     };
     match result {
         Ok(()) => {
@@ -362,14 +357,14 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                 Some(p) => send(core_cmd(p, c)),
                 None => send(Event::Error("还没有连接".into())),
             },
-            Cmd::Wifi(WifiCmd::Status) => match probe.as_mut() {
+            Cmd::WifiStatus => match probe.as_mut() {
                 Some(p) => send(wifi_status(p)),
                 None => send(Event::Error("还没有连接".into())),
             },
-            Cmd::Wifi(cmd) => match probe.as_mut() {
+            Cmd::WifiApply(change) => match probe.as_mut() {
                 Some(p) => {
                     // 探针马上重启，这个连接不能再用
-                    if wifi_apply(p, &cmd, &send) {
+                    if wifi_apply(p, &change, &send) {
                         probe = None;
                         send(Event::Disconnected);
                     }
@@ -429,7 +424,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                         }
                         Ok(Cmd::PollCore) => send(poll_core(sampler.probe_mut())),
                         Ok(Cmd::Core(c)) => send(core_cmd(sampler.probe_mut(), c)),
-                        Ok(Cmd::Wifi(WifiCmd::Status)) => send(wifi_status(sampler.probe_mut())),
+                        Ok(Cmd::WifiStatus) => send(wifi_status(sampler.probe_mut())),
                         Ok(Cmd::Stop) => break None,
                         Ok(other) => {
                             // 连接、断开、重新开始、改 Wi-Fi：先停掉这次采样再处理
@@ -533,7 +528,7 @@ mod tests {
         // 模拟探针没有 0x86：连接后的自动查询给出错误，不影响连接
         next(&ev_rx, |e| matches!(e, Event::WifiStatus(Err(_))));
         cmd_tx
-            .send(Cmd::Wifi(WifiCmd::Set {
+            .send(Cmd::WifiApply(WifiChange::Set {
                 ssid: "lab".into(),
                 password: "12345678".into(),
             }))

@@ -237,7 +237,7 @@ impl App {
                                 .desired_width(90.0),
                         )
                         .on_hover_text(
-                            "不填时按串口芯片自动选：CH343 等 4000000，CP2102、CH340 921600",
+                            "不填时按串口芯片自动选：CH343 等 4000000，CP2102、CH340 921600，其他芯片两个都试",
                         );
                     });
                     ui.checkbox(&mut self.keep_lines, "不改 DTR/RTS（不复位探针）");
@@ -301,8 +301,8 @@ impl App {
                     egui::Checkbox::new(&mut on, "共享为 USB DAP"),
                 )
                 .on_hover_text(
-                    "在本机 3240 端口提供 USB/IP 设备。用 usbip 挂载后，Keil、pyOCD、probe-rs、
-                     OpenOCD 把它当 USB CMSIS-DAP 探针用。共享期间这里不能读写变量和采样。
+                    "在本机 3240 端口提供 USB/IP 设备。用 usbip 挂载后，Keil、pyOCD、probe-rs、\
+                     OpenOCD 把它当 USB CMSIS-DAP 探针用。共享期间这里不能读写变量和采样。\
                      Windows 需要先安装 usbip-win2。",
                 )
                 .changed();
