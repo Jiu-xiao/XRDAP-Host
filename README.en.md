@@ -2,7 +2,7 @@
 
 [中文](README.md)
 
-`xrdap` is the host tool for the [XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP) debug probes (ESP32-S3, ESP32-C3), for Windows and Linux. It is a single executable: double-clicking it or running it without arguments starts the GUI, and running it with a command works as a command-line tool.
+`xrdap` is the host tool for the [XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP) debug probes (ESP32-S3, ESP32-C3, classic ESP32), for Windows and Linux. It is a single executable: double-clicking it or running it without arguments starts the GUI, and running it with a command works as a command-line tool.
 
 What it does:
 
@@ -60,7 +60,7 @@ Variable syntax: `counter`, `state.speed`, `motor[1].pid->out`, `*ptr`, `p->q->x
 | How the probe is connected | What to do |
 |---|---|
 | S3 on USB | It is already a USB CMSIS-DAP probe; use it directly |
-| C3 (or any XR-DAP) on USB / serial | Run `xrdap share usbip`, then attach with USB/IP, see below |
+| C3, classic ESP32 (or any XR-DAP) on USB / serial | Run `xrdap share usbip`, then attach with USB/IP, see below |
 | Over Wi-Fi | The probe serves USB/IP itself; attach directly, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
 
 To share a C3 plugged into the computer as a USB probe:
@@ -135,7 +135,7 @@ xrdap --fake --elf app.elf read motor.speed
 |---|---|
 | omitted | Uses the only USB probe if there is exactly one; otherwise searches USB, serial and the LAN and uses the only probe found |
 | `usb`, `usb:<serial>` | USB |
-| `COM7`, `/dev/ttyACM0` | Serial port. On the USB port built into Espressif chips, DTR/RTS are kept unchanged automatically |
+| `COM7`, `/dev/ttyACM0` | Serial port. On the USB port built into Espressif chips, DTR/RTS are kept unchanged automatically; the baud rate is chosen from the serial chip (CH343 and similar try 4000000 first, CP2102 and CH340 use 921600), and `--baud` can set it |
 | `192.168.0.108`, `xrdap-93ef1c.local`, `host:port` | Wi-Fi (OpenOCD TCP backend port 3241) |
 | `XRobot-XRDAP-E8069093EF1C`, `93EF1C` | Full serial number or its last digits; searches USB first, then serial and the LAN |
 
@@ -156,7 +156,7 @@ xrdap --fake --elf app.elf read motor.speed
 | `wifi status`, `wifi set ssid [password]`, `wifi clear` | Probe Wi-Fi |
 | `share usbip [--listen]`, `share openocd [--listen]` | Share the probe with other debug tools |
 
-Common options: `-p` probe, `--elf` ELF, `--clock` SWD clock (default 4M), `--baud` serial baud rate (default 4000000), `--keep-lines` leave DTR/RTS of the serial port unchanged, `--timeout-ms` response timeout, `--fake` simulated probe. `xrdap <command> -h` shows the full parameters of each command.
+Common options: `-p` probe, `--elf` ELF, `--clock` SWD clock (default 4M), `--baud` serial baud rate (default: chosen from the serial chip), `--keep-lines` leave DTR/RTS of the serial port unchanged, `--timeout-ms` response timeout, `--fake` simulated probe. `xrdap <command> -h` shows the full parameters of each command.
 
 ### USB/IP clients
 

@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-[XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP) 调试探针（ESP32-S3、ESP32-C3）的电脑端工具 `xrdap`，Windows 和 Linux。一个可执行文件：双击或不带参数运行是图形界面，带命令是命令行。
+[XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP) 调试探针（ESP32-S3、ESP32-C3、传统 ESP32）的电脑端工具 `xrdap`，Windows 和 Linux。一个可执行文件：双击或不带参数运行是图形界面，带命令是命令行。
 
 它能做的事：
 
@@ -60,7 +60,7 @@ xrdap --elf app.elf watch motor.speed motor.current@10 --period 1ms --csv log.cs
 | 探针怎么连 | 做法 |
 |---|---|
 | S3 插 USB | 它本身就是 USB CMSIS-DAP 探针，直接用 |
-| C3（或任何一块 XR-DAP）插 USB / 串口 | `xrdap share usbip` 后用 USB/IP 挂载，见下 |
+| C3、传统 ESP32（或任何一块 XR-DAP）插 USB / 串口 | `xrdap share usbip` 后用 USB/IP 挂载，见下 |
 | 走 Wi-Fi | 探针自己提供 USB/IP，直接挂载，见 [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP#23-走-wi-fi用-keilpyocdprobe-rsopenocd) |
 
 把插在电脑上的 C3 共享成 USB 探针：
@@ -135,7 +135,7 @@ xrdap --fake --elf app.elf read motor.speed
 |---|---|
 | 不写 | 只有一块 USB 探针时用它；否则找遍 USB、串口、局域网，只有一块时用它 |
 | `usb`、`usb:<序列号>` | USB |
-| `COM7`、`/dev/ttyACM0` | 串口。乐鑫芯片自带的 USB 口自动保持 DTR/RTS 不变 |
+| `COM7`、`/dev/ttyACM0` | 串口。乐鑫芯片自带的 USB 口自动保持 DTR/RTS 不变；波特率按串口芯片自动选（CH343 等先试 4000000，CP2102、CH340 用 921600），`--baud` 可以指定 |
 | `192.168.0.108`、`xrdap-93ef1c.local`、`host:port` | Wi-Fi（OpenOCD TCP 后端端口 3241） |
 | `XRobot-XRDAP-E8069093EF1C`、`93EF1C` | 序列号全称或末尾几位，先找 USB，再找串口、局域网 |
 
@@ -156,7 +156,7 @@ xrdap --fake --elf app.elf read motor.speed
 | `wifi status`、`wifi set 热点 [密码]`、`wifi clear` | 探针 Wi-Fi |
 | `share usbip [--listen]`、`share openocd [--listen]` | 把探针共享给别的调试工具 |
 
-通用选项：`-p` 探针、`--elf` ELF、`--clock` SWD 时钟（默认 4M）、`--baud` 串口波特率（默认 4000000）、`--keep-lines` 串口不动 DTR/RTS、`--timeout-ms` 响应超时、`--fake` 模拟探针。`xrdap 命令 -h` 看每个命令的完整参数。
+通用选项：`-p` 探针、`--elf` ELF、`--clock` SWD 时钟（默认 4M）、`--baud` 串口波特率（默认按串口芯片自动选）、`--keep-lines` 串口不动 DTR/RTS、`--timeout-ms` 响应超时、`--fake` 模拟探针。`xrdap 命令 -h` 看每个命令的完整参数。
 
 ### USB/IP 客户端
 
