@@ -105,7 +105,9 @@ xrdap wifi status
 xrdap wifi clear
 ```
 
-`set` 和 `clear` 之后探针约 0.5 秒重启。配好后 `xrdap list` 会列出探针的局域网地址（`xrdap-xxxxxx.local`），以后可以 `-p xrdap-xxxxxx.local` 无线使用。
+图形界面里连上探针后展开连接区最下面的“Wi-Fi”：能看到当前热点、是否连上、IP 和信号，填热点名和密码（开放网络不填）点“保存并重启”，或点“清除”。
+
+`set` 和 `clear` 之后探针约 0.5 秒重启，连接随之断开。配好后 `xrdap list` 会列出探针的局域网地址（`xrdap-xxxxxx.local`），以后可以 `-p xrdap-xxxxxx.local` 无线使用。
 
 ### 停住、继续、复位目标
 

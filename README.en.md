@@ -105,6 +105,8 @@ xrdap wifi status
 xrdap wifi clear
 ```
 
+In the GUI, after connecting to the probe, expand "Wi-Fi" at the bottom of the connection panel. It shows the current access point, whether the probe is connected, its IP and signal. Fill in the SSID and password (leave the password empty for an open network) and click "保存并重启" (save and restart), or click "清除" (clear).
+
 Replace 热点名 (hotspot name) and 密码 (password) with the hotspot SSID and its password. After `set` and `clear`, the probe restarts in about 0.5 seconds. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` can be used to work wirelessly from then on.
 
 ### Halting, resuming and resetting the target
