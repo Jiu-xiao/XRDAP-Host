@@ -22,7 +22,7 @@ const SHARE_LISTEN: &str = "127.0.0.1:3240";
 #[derive(Debug, Clone)]
 pub enum Conn {
     /// 真探针：USB、串口或 TCP；`baud` 只对串口有用
-    Probe { addr: Addr, baud: u32 },
+    Probe { addr: Addr, baud: Option<u32> },
     /// 进程内的模拟探针；有 ELF 时按 ELF 填内存
     Fake(Option<PathBuf>),
 }

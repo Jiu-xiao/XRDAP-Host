@@ -8,7 +8,6 @@ use clap::Args;
 use xrdap::dap::{self, Probe};
 use xrdap::fake::FakeProbe;
 use xrdap::open::{self, Addr, OpenOptions, Spec};
-use xrdap::transport::serial::DEFAULT_BAUD;
 use xrdap::types::SymbolTable;
 
 use super::CliResult;
@@ -21,9 +20,10 @@ pub struct ConnOpts {
     #[arg(short = 'p', long, global = true, value_name = "探针")]
     pub probe: Option<String>,
 
-    /// 串口波特率，要和探针固件一致（默认 4000000）
-    #[arg(long, global = true, default_value_t = DEFAULT_BAUD, hide_default_value = true, value_name = "波特率")]
-    pub baud: u32,
+    /// 串口波特率，要和探针固件一致。不写时按串口芯片自动选：CH343 等先试 4000000，
+    /// CP2102、CH340 用 921600（传统 ESP32）
+    #[arg(long, global = true, value_name = "波特率")]
+    pub baud: Option<u32>,
 
     /// 打开串口后不改 DTR/RTS（默认置为 DTR=1、RTS=0）。乐鑫芯片自带的 USB 口自动这样处理
     #[arg(long, global = true)]

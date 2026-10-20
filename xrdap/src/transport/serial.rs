@@ -16,6 +16,8 @@ use crate::frame::{dap_from_payload, serial_request_frame, FrameParser};
 use crate::{Error, Result};
 
 pub const DEFAULT_BAUD: u32 = 4_000_000;
+/// 传统 ESP32 版固件的波特率：常见 USB 转串口芯片（CP2102、CH340）都支持的最高速率附近
+pub const SAFE_BAUD: u32 = 921_600;
 
 /// 系统里的串口名，排好序（Windows 上 COMx，Linux 上 /dev/ttyXXX）。
 pub fn available_ports() -> Result<Vec<String>> {

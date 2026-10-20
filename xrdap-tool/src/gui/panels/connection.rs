@@ -7,7 +7,6 @@ use eframe::egui::{self, Color32, RichText};
 use xrdap::cortex::{AfterReset, CoreState};
 use xrdap::discover;
 use xrdap::open::Addr;
-use xrdap::transport::serial::DEFAULT_BAUD;
 
 use crate::gui::app::App;
 use crate::gui::model::Kind;
@@ -47,7 +46,7 @@ impl App {
                 addr: Addr::Usb {
                     serial: Some(self.usb_serial.trim().to_string()).filter(|s| !s.is_empty()),
                 },
-                baud: DEFAULT_BAUD,
+                baud: None,
             },
             Kind::Serial => {
                 if self.serial_port.trim().is_empty() {
@@ -58,11 +57,10 @@ impl App {
                         port: self.serial_port.trim().to_string(),
                         keep_lines: self.keep_lines,
                     },
-                    baud: self
-                        .baud
-                        .trim()
-                        .parse()
-                        .map_err(|_| "波特率不是整数".to_string())?,
+                    baud: match self.baud.trim() {
+                        "" => None,
+                        b => Some(b.parse().map_err(|_| "波特率不是整数".to_string())?),
+                    },
                 }
             }
             Kind::Tcp => {
@@ -73,7 +71,7 @@ impl App {
                     addr: Addr::Tcp {
                         host: self.tcp_addr.trim().to_string(),
                     },
-                    baud: DEFAULT_BAUD,
+                    baud: None,
                 }
             }
             Kind::Fake => Conn::Fake(
@@ -233,7 +231,14 @@ impl App {
                     });
                     ui.horizontal(|ui| {
                         ui.label("波特率");
-                        ui.add(egui::TextEdit::singleline(&mut self.baud).desired_width(90.0));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.baud)
+                                .hint_text("自动")
+                                .desired_width(90.0),
+                        )
+                        .on_hover_text(
+                            "不填时按串口芯片自动选：CH343 等 4000000，CP2102、CH340 921600",
+                        );
                     });
                     ui.checkbox(&mut self.keep_lines, "不改 DTR/RTS（不复位探针）");
                 }

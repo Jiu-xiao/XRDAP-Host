@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use crate::dap::Probe;
 use crate::open::Addr;
-use crate::transport::serial::{SerialTransport, DEFAULT_BAUD};
+use crate::transport::serial::{SerialTransport, DEFAULT_BAUD, SAFE_BAUD};
 use crate::Result;
 
 /// 找到的一个连接：一块探针经某种方式可达。
@@ -100,46 +100,88 @@ const VID_SILABS: u16 = 0x10C4;
 const VID_FTDI: u16 = 0x0403;
 const VID_ESPRESSIF: u16 = 0x303A;
 
-/// 可能接着探针的串口：常见 USB 转串口芯片和乐鑫 USB Serial/JTAG。返回 (串口名, keep_lines)。
-pub fn serial_candidates() -> Vec<(String, bool)> {
+/// WCH 里最高只到 2 Mbaud 的型号：CH340、CH341
+const PID_WCH_SLOW: [u16; 2] = [0x7523, 0x5523];
+
+/// 一个可能接着探针的串口，以及按它的 USB 转串口芯片该怎么打开。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialPortProfile {
+    pub port: String,
+    /// 打开后不改 DTR/RTS：乐鑫芯片自带的 USB Serial/JTAG 按这两根线复位芯片
+    pub keep_lines: bool,
+    /// 依次尝试的波特率。S3 板上的 CH343 跑 4 Mbaud；CP2102、CH340 到不了 4 Mbaud，
+    /// 只试传统 ESP32 固件用的 921600
+    pub bauds: &'static [u32],
+}
+
+const BAUDS_FAST: &[u32] = &[DEFAULT_BAUD, SAFE_BAUD];
+const BAUDS_SAFE: &[u32] = &[SAFE_BAUD];
+/// USB Serial/JTAG 不看波特率
+const BAUDS_ANY: &[u32] = &[DEFAULT_BAUD];
+
+/// 可能接着探针的串口：常见 USB 转串口芯片和乐鑫 USB Serial/JTAG。
+pub fn serial_candidates() -> Vec<SerialPortProfile> {
     let Ok(ports) = serialport::available_ports() else {
         return Vec::new();
     };
     ports
         .into_iter()
-        .filter_map(|p| match p.port_type {
-            serialport::SerialPortType::UsbPort(u) => match u.vid {
-                // 芯片自带的 USB Serial/JTAG 按 DTR/RTS 复位芯片，打开后不要动这两根线
-                VID_ESPRESSIF => Some((p.port_name, true)),
-                VID_WCH | VID_SILABS | VID_FTDI => Some((p.port_name, false)),
-                _ => None,
-            },
-            _ => None,
+        .filter_map(|p| {
+            let serialport::SerialPortType::UsbPort(u) = p.port_type else {
+                return None;
+            };
+            let (keep_lines, bauds) = match u.vid {
+                VID_ESPRESSIF => (true, BAUDS_ANY),
+                VID_SILABS => (false, BAUDS_SAFE),
+                VID_WCH if PID_WCH_SLOW.contains(&u.pid) => (false, BAUDS_SAFE),
+                VID_WCH | VID_FTDI => (false, BAUDS_FAST),
+                _ => return None,
+            };
+            Some(SerialPortProfile {
+                port: p.port_name,
+                keep_lines,
+                bauds,
+            })
         })
         .collect()
 }
 
-/// 问一个串口是不是探针：在 `wait` 内回答 DAP_Info 就是。
-pub fn probe_serial(port: &str, keep_lines: bool, wait: Duration) -> Option<Found> {
-    let mut t = SerialTransport::open(port, DEFAULT_BAUD, keep_lines, wait).ok()?;
-    t.handshake(wait).ok()?;
+/// 一个串口按芯片该怎么打开；不是已知的 USB 转串口芯片时按 4 Mbaud、改 DTR/RTS。
+pub fn serial_profile(port: &str) -> SerialPortProfile {
+    serial_candidates()
+        .into_iter()
+        .find(|p| p.port.eq_ignore_ascii_case(port))
+        .unwrap_or(SerialPortProfile {
+            port: port.to_string(),
+            keep_lines: false,
+            bauds: BAUDS_ANY,
+        })
+}
+
+/// 问一个串口是不是探针：按 `bauds` 依次试，每个波特率在 `wait` 内回答 DAP_Info 就是。
+pub fn probe_serial(profile: &SerialPortProfile, wait: Duration) -> Option<Found> {
+    let t = profile.bauds.iter().find_map(|&baud| {
+        let mut t = SerialTransport::open(&profile.port, baud, profile.keep_lines, wait).ok()?;
+        t.handshake(wait).ok()?;
+        Some(t)
+    })?;
     let id = Probe::new(Box::new(t)).identity().unwrap_or_default();
     Some(Found {
         serial: id.serial,
         product: id.product,
         addr: Addr::Serial {
-            port: port.to_string(),
-            keep_lines,
+            port: profile.port.clone(),
+            keep_lines: profile.keep_lines,
         },
         note: None,
     })
 }
 
-/// 串口上的探针。各个候选口同时问，总共约 `wait`。
+/// 串口上的探针。各个候选口同时问，每个口每种波特率约 `wait`。
 pub fn serial(wait: Duration) -> Vec<Found> {
     let handles: Vec<_> = serial_candidates()
         .into_iter()
-        .map(|(port, keep)| std::thread::spawn(move || probe_serial(&port, keep, wait)))
+        .map(|p| std::thread::spawn(move || probe_serial(&p, wait)))
         .collect();
     handles
         .into_iter()

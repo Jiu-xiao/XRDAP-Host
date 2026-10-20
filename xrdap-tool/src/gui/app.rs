@@ -11,7 +11,6 @@ use eframe::egui::{self, RichText};
 use xrdap::cortex::{AfterReset, CoreStatus};
 use xrdap::discover::ProbeEntry;
 use xrdap::share::Event as ShareEvent;
-use xrdap::transport::serial::DEFAULT_BAUD;
 use xrdap::types::SymbolTable;
 use xrdap::vendor::ItemResult;
 use xrdap::watch::{HostFrame, Stats};
@@ -106,7 +105,7 @@ impl App {
             usb_serial: get("xrdap.usb").unwrap_or_default(),
             serial_ports: Vec::new(),
             serial_port: get("xrdap.serial").unwrap_or_default(),
-            baud: get("xrdap.baud").unwrap_or_else(|| DEFAULT_BAUD.to_string()),
+            baud: get("xrdap.serial_baud").unwrap_or_default(),
             keep_lines: get("xrdap.keep_lines").is_some_and(|v| v == "1"),
             tcp_addr: get("xrdap.tcp").unwrap_or_default(),
             clock: get("xrdap.clock").unwrap_or_else(|| "4M".into()),
@@ -480,7 +479,7 @@ impl eframe::App for App {
         storage.set_string("xrdap.kind", self.kind.key().into());
         storage.set_string("xrdap.usb", self.usb_serial.clone());
         storage.set_string("xrdap.serial", self.serial_port.clone());
-        storage.set_string("xrdap.baud", self.baud.clone());
+        storage.set_string("xrdap.serial_baud", self.baud.clone());
         storage.set_string(
             "xrdap.keep_lines",
             if self.keep_lines { "1" } else { "0" }.into(),
