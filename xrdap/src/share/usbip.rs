@@ -3,7 +3,8 @@
 //! 虚拟设备：VID:PID 1D50:6199、bcdDevice 0x0200（与探针自身 USB 设备的 bcdDevice 不同；
 //! Windows 按 VID、PID、bcdDevice 缓存描述符），一个厂商类接口（接口名 `CMSIS-DAP v2`），
 //! Bulk OUT 0x01、Bulk IN 0x81，高速 512 字节；BOS 里带 MS OS 2.0 描述符，Windows 自动绑定
-//! WinUSB。设备模型与 XRDAP-ESP 的 USB/IP 设备相同。
+//! WinUSB。设备模型与 XRDAP-ESP 的 USB/IP 设备相同；描述符的字节以 XRDAP-Core 协议文档第 6 节为准
+//! <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>。
 //!
 //! 协议：`OP_REQ_DEVLIST`、`OP_REQ_IMPORT` 之后是 `USBIP_CMD_SUBMIT`/`RET_SUBMIT`、
 //! `CMD_UNLINK`/`RET_UNLINK`，字段大端。见 Linux 内核文档 `usb/usbip_protocol.rst`。
@@ -14,7 +15,8 @@
 //! the probe's own USB device; Windows caches descriptors by VID, PID and bcdDevice), one
 //! vendor-class interface (interface name `CMSIS-DAP v2`), bulk OUT 0x01 and bulk IN 0x81, high
 //! speed with 512-byte packets; the BOS carries an MS OS 2.0 descriptor so that Windows binds
-//! WinUSB automatically. The device model is the same as the USB/IP device of XRDAP-ESP.
+//! WinUSB automatically. The device model is the same as the USB/IP device of XRDAP-ESP; the
+//! descriptor bytes follow section 6 of the XRDAP-Core protocol document.
 //!
 //! Protocol: `OP_REQ_DEVLIST` and `OP_REQ_IMPORT`, followed by `USBIP_CMD_SUBMIT`/`RET_SUBMIT`
 //! and `CMD_UNLINK`/`RET_UNLINK`, with big-endian fields. See the Linux kernel document
@@ -502,11 +504,55 @@ mod tests {
         server.join().unwrap();
     }
 
+    fn unhex(s: &str) -> Vec<u8> {
+        let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// 描述符的字节和 XRDAP-Core 协议文档第 6 节的十六进制块逐字节相同（固件和主机共用的
+    /// 唯一来源）。
     #[test]
-    fn ms_os_lengths_consistent() {
-        let set = ms_os_20_set();
-        assert_eq!(u16::from_le_bytes([set[8], set[9]]) as usize, set.len());
-        assert_eq!(set.len(), 162);
-        assert_eq!(config_descriptor().len(), 32);
+    fn descriptors_match_protocol_section_6() {
+        assert_eq!(
+            device_descriptor().to_vec(),
+            unhex("12 01 10 02 00 00 00 40 50 1D 99 61 00 02 01 02 03 01")
+        );
+        assert_eq!(
+            config_descriptor(),
+            unhex(
+                "09 02 20 00 01 01 00 80 32
+                 09 04 00 00 02 FF 00 00 04
+                 07 05 01 02 00 02 00
+                 07 05 81 02 00 02 00"
+            )
+        );
+        assert_eq!(
+            qualifier_descriptor().to_vec(),
+            unhex("0A 06 00 02 00 00 00 40 01 00")
+        );
+        assert_eq!(
+            bos_descriptor(),
+            unhex(
+                "05 0F 21 00 01
+                 1C 10 05 00 DF 60 DD D8 89 45 C7 4C 9C D2 65 9D 9E 64 8A 9F 00 00 03 06 A2 00 20 00"
+            )
+        );
+        assert_eq!(
+            ms_os_20_set(),
+            unhex(
+                "0A 00 00 00 00 00 03 06 A2 00
+                 14 00 03 00 57 49 4E 55 53 42 00 00 00 00 00 00 00 00 00 00
+                 84 00 04 00 07 00 2A 00
+                 44 00 65 00 76 00 69 00 63 00 65 00 49 00 6E 00 74 00 65 00 72 00 66 00 61 00 63 00
+                 65 00 47 00 55 00 49 00 44 00 73 00 00 00
+                 50 00
+                 7B 00 43 00 44 00 42 00 33 00 42 00 35 00 41 00 44 00 2D 00 32 00 39 00 33 00 42 00
+                 2D 00 34 00 36 00 36 00 33 00 2D 00 41 00 41 00 33 00 36 00 2D 00 31 00 41 00 41 00
+                 45 00 34 00 36 00 34 00 36 00 33 00 37 00 37 00 36 00 7D 00 00 00 00 00"
+            )
+        );
     }
 }
