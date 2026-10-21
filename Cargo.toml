@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["xrdap", "xrdap-tool"]
+members = ["xrdap", "xrdap-tool", "xrdap-sim"]
 
 [workspace.package]
 version = "0.5.2"

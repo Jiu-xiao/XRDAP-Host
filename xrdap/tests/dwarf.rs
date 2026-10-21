@@ -1,4 +1,4 @@
-//! DWARF 解析和表达式求值，对照 tests/fixtures 里的两个真实 ELF。
+//! DWARF 解析和表达式求值，对照 tests/fixtures 里由 types.c 编出的 ELF。
 
 use std::path::PathBuf;
 
@@ -16,10 +16,6 @@ fn types_elf() -> SymbolTable {
     xrdap::elf::load(&fixture("types.elf")).unwrap()
 }
 
-fn g431_elf() -> SymbolTable {
-    xrdap::elf::load(&fixture("g431-test.elf")).unwrap()
-}
-
 fn resolve(syms: &mut SymbolTable, expr: &str) -> Target {
     Resolver::new(syms)
         .resolve(expr)
@@ -33,46 +29,34 @@ fn resolve_err(syms: &mut SymbolTable, expr: &str) -> String {
     }
 }
 
+/// 同一份 types.c 的 DWARF 5 版本解析出的位置和类型与 DWARF 4 版本相同。
 #[test]
-fn g431_variables_match_symbol_table() {
-    // 地址与 target-test/symbols.txt（arm-none-eabi-nm）一致
-    let mut s = g431_elf();
-    for (name, addr, size) in [
-        ("tick", 0x2000_0000, 4),
-        ("cnt_a", 0x2000_0008, 4),
-        ("cnt_b", 0x2000_000C, 4),
-        ("cnt64", 0x2000_0010, 8),
-        ("v_u8", 0x2000_0018, 1),
-        ("v_u16", 0x2000_001A, 2),
-        ("v_u32", 0x2000_001C, 4),
-        ("v_u64", 0x2000_0020, 8),
-        ("chain_final", 0x2000_0028, 4),
-        ("chain_p3", 0x2000_002C, 4),
-        ("chain_p2", 0x2000_0030, 4),
-        ("chain_p1", 0x2000_0034, 4),
-        ("null_p1", 0x2000_0038, 4),
-        ("bad_p1", 0x2000_003C, 4),
+fn dwarf5_matches_dwarf4() {
+    let mut d4 = types_elf();
+    let mut d5 = xrdap::elf::load(&fixture("types-dwarf5.elf")).unwrap();
+    for e in [
+        "motor[1].pid->out",
+        "state.pair.hi",
+        "matrix[1][2]",
+        "word.f",
+        "head->next->next->value",
+        "***(uint32_t***)chain_p1",
+        "motor[0].mode",
     ] {
-        let t = resolve(&mut s, name);
-        assert_eq!(t.direct_addr(), Some(addr), "{name}");
-        assert_eq!(t.ty.size, size, "{name}");
+        let (a, b) = (resolve(&mut d4, e), resolve(&mut d5, e));
+        assert_eq!((a.location(), a.ty.size), (b.location(), b.ty.size), "{e}");
+        assert_eq!(a.ty.kind, b.ty.kind, "{e}");
     }
-    assert_eq!(resolve(&mut s, "v_u64").ty.kind, ScalarKind::Unsigned);
-    assert_eq!(resolve(&mut s, "chain_p1").ty.kind, ScalarKind::Pointer);
-    assert_eq!(
-        resolve(&mut s, "rw_block[3]").direct_addr(),
-        Some(0x2000_004C)
-    );
 }
 
 #[test]
-fn g431_pointer_chain() {
-    let mut s = g431_elf();
+fn pointer_chain_with_cast() {
+    let mut s = types_elf();
     // chain_p1 声明为 uint32_t *，实际指向 chain_p2；三级要先转换类型
     let t = resolve(&mut s, "***(uint32_t***)chain_p1");
     assert_eq!(
         (t.base, t.derefs.clone(), t.final_off),
-        (0x2000_0034, vec![0, 0, 0], 0)
+        (0x2000_00FC, vec![0, 0, 0], 0)
     );
     assert_eq!(t.ty.size, 4);
     assert_eq!(
@@ -84,12 +68,12 @@ fn g431_pointer_chain() {
         ]
     );
     let t = resolve(&mut s, "*chain_p3");
-    assert_eq!((t.base, t.derefs.clone()), (0x2000_002C, vec![0]));
-    let t = resolve(&mut s, "*null_p1");
-    assert_eq!((t.base, t.derefs.len()), (0x2000_0038, 1));
+    assert_eq!((t.base, t.derefs.clone()), (0x2000_00F4, vec![0]));
+    assert_eq!(resolve(&mut s, "chain_p1").ty.kind, ScalarKind::Pointer);
+    assert_eq!(resolve(&mut s, "block[3]").direct_addr(), Some(0x2000_0110));
     // 同样的链用原始地址写
-    let raw = resolve(&mut s, "***0x20000034:u32***");
-    assert_eq!((raw.base, raw.derefs.clone()), (0x2000_0034, vec![0, 0, 0]));
+    let raw = resolve(&mut s, "***0x200000fc:u32***");
+    assert_eq!((raw.base, raw.derefs.clone()), (0x2000_00FC, vec![0, 0, 0]));
     assert!(resolve_err(&mut s, "**chain_p1").contains("不是指针"));
 }
 

@@ -9,8 +9,6 @@ license.workspace = true
 default = ["elf"]
 # 读 ELF 符号和 DWARF 类型
 elf = ["dep:object", "dep:gimli"]
-# 进程内的模拟探针，测试和演示用
-fake = []
 
 [dependencies]
 nusb = "0.2"
@@ -19,6 +17,5 @@ gimli = { version = "0.34", optional = true, default-features = false, features 
 serialport = "4.10"
 mdns-sd = "0.21.6"
 
-[[test]]
-name = "fake_probe"
-required-features = ["fake", "elf"]
+[dev-dependencies]
+xrdap-sim = { path = "../xrdap-sim" }

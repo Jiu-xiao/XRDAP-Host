@@ -7,7 +7,6 @@ use std::time::Duration;
 use clap::Args;
 use xrdap::addr::{Addr, Spec};
 use xrdap::dap::{self, Probe};
-use xrdap::fake::FakeProbe;
 use xrdap::open::{self, OpenOptions};
 use xrdap::types::SymbolTable;
 use xrdap::Error;
@@ -44,10 +43,6 @@ pub struct ConnOpts {
         value_name = "毫秒"
     )]
     pub timeout_ms: u64,
-
-    /// 使用内置的模拟探针，不需要硬件（试用和测试）。配合 --elf 时按 ELF 填模拟内存
-    #[arg(long, global = true)]
-    pub fake: bool,
 }
 
 fn parse_hz(s: &str) -> Result<u32, String> {
@@ -62,21 +57,7 @@ pub fn load_symbols(conn: &ConnOpts) -> CliResult<SymbolTable> {
 }
 
 /// 按连接选项打开探针（不连接目标）。
-pub fn open_probe(conn: &ConnOpts, syms: &SymbolTable, err: &mut dyn Write) -> CliResult<Probe> {
-    if conn.fake {
-        if conn.probe.is_some() {
-            return Err("--fake 和 --probe 只能写一个".into());
-        }
-        let fake = FakeProbe::new();
-        if let Some(path) = &conn.elf {
-            fake.load_elf_image(&std::fs::read(path)?)?;
-            fake.apply_g431_fixture(syms);
-        }
-        return Ok(Probe::new(
-            Box::new(fake),
-            Duration::from_millis(conn.timeout_ms),
-        ));
-    }
+pub fn open_probe(conn: &ConnOpts, err: &mut dyn Write) -> CliResult<Probe> {
     let opts = OpenOptions {
         timeout: Duration::from_millis(conn.timeout_ms),
         baud: conn.baud,
