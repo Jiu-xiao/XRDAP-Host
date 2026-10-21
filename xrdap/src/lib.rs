@@ -16,7 +16,7 @@
 //! // 自动选唯一的探针；也可以写 Spec::parse("COM3")、Spec::parse("192.0.2.10")、Spec::parse("DDEEFF")
 //! // Auto-select the only probe; Spec::parse("COM3"), ("192.0.2.10") or ("DDEEFF") also work
 //! let mut probe = open(&Spec::Auto, &OpenOptions::default())?;
-//! probe.connect_swd(4_000_000)?;
+//! probe.connect(4_000_000)?;
 //!
 //! let mut syms = xrdap::elf::load(std::path::Path::new("app.elf"))?;
 //! let speed = Resolver::new(&mut syms).resolve("motor.speed")?;
@@ -34,7 +34,7 @@
 //! | [`watch`]、[`csv`] | 探针端采样、CSV 记录 / Probe-side sampling, CSV records |
 //! | [`cortex`] | 内核状态和停住、继续、复位 / Core state, halt, resume, reset |
 //! | [`share`] | 把探针共享成 USB/IP 设备或 OpenOCD TCP 后端 / Share a probe over USB/IP or as an OpenOCD TCP backend |
-//! | [`vendor`]、[`frame`]、[`transport`] | 厂商命令编码、串口/TCP 帧、三种传输 / Vendor encoding, serial/TCP framing, transports |
+//! | [`raw`] | 协议层：厂商命令编码、串口/TCP 帧、三种传输 / Protocol layer: vendor encoding, serial/TCP framing, transports |
 //!
 //! 字节格式见协议文档：<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>。
 //! 完整示例在 `examples/`。
@@ -51,14 +51,14 @@ pub mod dap;
 pub mod discover;
 #[cfg(feature = "elf")]
 pub mod elf;
-pub mod error;
+mod error;
 pub mod expr;
-pub mod frame;
 pub mod open;
+pub mod raw;
 pub mod share;
-pub mod transport;
 pub mod types;
-pub mod vendor;
 pub mod watch;
 
 pub use error::{Error, Result};
+pub use raw::vendor::wifi::WifiStatus;
+pub use raw::vendor::{item_status_text, Item, ItemResult};

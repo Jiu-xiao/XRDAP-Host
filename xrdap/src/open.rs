@@ -14,7 +14,7 @@
 //! use xrdap::open::{open, OpenOptions};
 //! # fn main() -> xrdap::Result<()> {
 //! let mut probe = open(&Spec::parse("COM3"), &OpenOptions::default())?;
-//! let target = probe.connect_swd(4_000_000)?;
+//! let target = probe.connect(4_000_000)?;
 //! println!("{}", target.describe());
 //! # Ok(())
 //! # }
@@ -25,9 +25,9 @@ use std::time::Duration;
 use crate::addr::{Addr, Spec};
 use crate::dap::Probe;
 use crate::discover::{self, ProbeEntry};
-use crate::transport::serial::SerialTransport;
-use crate::transport::tcp::TcpTransport;
-use crate::transport::usb::UsbTransport;
+use crate::raw::transport::serial::SerialTransport;
+use crate::raw::transport::tcp::TcpTransport;
+use crate::raw::transport::usb::UsbTransport;
 use crate::{Error, Result};
 
 /// 打开时的参数。
@@ -39,9 +39,10 @@ pub struct OpenOptions {
     ///
     /// Timeout for one response
     pub timeout: Duration,
-    /// 串口波特率；None 时按串口芯片依次试（见 [`Chip::bauds`](crate::discover::Chip::bauds)）
+    /// 串口波特率；None 时按串口芯片依次试（CH343 等先试 4000000 再试 921600，CP2102、CH340 只试 921600）
     ///
-    /// Serial baud rate; None tries the rates of the serial chip in turn
+    /// Serial baud rate; None tries the rates of the serial chip in turn (CH343 and similar
+    /// 4000000 then 921600, CP2102 and CH340 921600 only)
     pub baud: Option<u32>,
     /// 串口打开后等探针应答的最长时间
     ///

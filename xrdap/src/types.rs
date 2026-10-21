@@ -342,7 +342,7 @@ impl SymbolTable {
     /// `void` 的类型编号。
     ///
     /// The type id of `void`.
-    pub const VOID: TypeId = 0;
+    pub(crate) const VOID: TypeId = 0;
 
     /// 添加一个类型，返回它的编号。
     ///
@@ -362,14 +362,14 @@ impl SymbolTable {
     /// 按名字取内置类型。
     ///
     /// Get a built-in type by name.
-    pub fn builtin(&self, name: &str) -> Option<TypeId> {
+    pub(crate) fn builtin(&self, name: &str) -> Option<TypeId> {
         self.builtins.get(name).copied()
     }
 
     /// 指向 target 的指针类型（按需新建）。
     ///
     /// The pointer type to `target` (created when missing).
-    pub fn pointer_to(&mut self, target: TypeId) -> TypeId {
+    pub(crate) fn pointer_to(&mut self, target: TypeId) -> TypeId {
         let size = self.pointer_size;
         if let Some(i) = self.types.iter().position(
             |t| matches!(t, Type::Pointer { target: Some(x), size: s } if *x == target && *s == size),
@@ -385,7 +385,7 @@ impl SymbolTable {
     /// 去掉 typedef 和 const/volatile，得到实际的类型。
     ///
     /// Strip typedefs and const/volatile to get the underlying type.
-    pub fn strip(&self, mut id: TypeId) -> TypeId {
+    pub(crate) fn strip(&self, mut id: TypeId) -> TypeId {
         for _ in 0..64 {
             match &self.types[id] {
                 Type::Typedef { target, .. } | Type::Qualified { target } => match target {
@@ -402,7 +402,7 @@ impl SymbolTable {
     ///
     /// Replace a declaration-only struct with the complete definition of the same name, if
     /// another compilation unit has one.
-    pub fn complete(&self, id: TypeId) -> TypeId {
+    pub(crate) fn complete(&self, id: TypeId) -> TypeId {
         let id = self.strip(id);
         if let Type::Struct {
             declaration: true,
@@ -486,7 +486,7 @@ impl SymbolTable {
     /// 标量类型（基本类型、指针、枚举）的取值方式；不是标量时返回 None。
     ///
     /// How a scalar type (base type, pointer, enum) is interpreted; None for a non-scalar.
-    pub fn value_type(&self, id: TypeId) -> Option<ValueType> {
+    pub(crate) fn value_type(&self, id: TypeId) -> Option<ValueType> {
         let stripped = self.strip(id);
         let name = self.name_of(id);
         match &self.types[stripped] {
@@ -525,7 +525,7 @@ impl SymbolTable {
     /// 按名字找类型：先找 DWARF 里的 typedef 和基本类型，再找内置类型。
     ///
     /// Find a type by name: typedefs and base types from DWARF first, then the built-in types.
-    pub fn lookup_type(&self, name: &str) -> Option<TypeId> {
+    pub(crate) fn lookup_type(&self, name: &str) -> Option<TypeId> {
         if let Some(rest) = name
             .strip_prefix("struct ")
             .or_else(|| name.strip_prefix("union "))
@@ -543,7 +543,7 @@ impl SymbolTable {
     /// 找一个变量。重名时报错并列出各个定义。
     ///
     /// Find a variable. A duplicate name is an error that lists the definitions.
-    pub fn lookup_var(&self, name: &str) -> Result<Option<&Variable>> {
+    pub(crate) fn lookup_var(&self, name: &str) -> Result<Option<&Variable>> {
         let Some(list) = self.vars.get(name) else {
             return Ok(None);
         };
@@ -649,7 +649,7 @@ fn sign_extend(v: u64, size: u8) -> i64 {
 ///
 /// Parse an integer: decimal, 0x hexadecimal or 0b binary, with an optional sign and
 /// underscores.
-pub fn parse_int(text: &str) -> Option<i128> {
+pub(crate) fn parse_int(text: &str) -> Option<i128> {
     let t = text.trim().replace('_', "");
     let (neg, body) = match t.strip_prefix('-') {
         Some(rest) => (true, rest.to_string()),

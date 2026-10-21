@@ -253,8 +253,8 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{parse_tcp_header, tcp_frame, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE};
-    use crate::transport::script::{Late, Script};
+    use crate::raw::frame::{parse_tcp_header, tcp_frame, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE};
+    use crate::raw::transport::script::{Late, Script};
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::sync::mpsc;

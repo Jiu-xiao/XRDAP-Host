@@ -5,7 +5,7 @@ use std::path::Path;
 
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
-use xrdap::vendor::{self, Item};
+use xrdap::{item_status_text, Item};
 
 use super::text::{ljust, name_width};
 use super::CliResult;
@@ -52,7 +52,7 @@ pub fn cmd_read(probe: &mut Probe, targets: &[Target], out: &mut dyn Write) -> C
                 out,
                 "{}   读取失败：{}（地址 {}）",
                 ljust(&t.name, w),
-                vendor::item_status_text(r.status, &t.chain),
+                item_status_text(r.status, &t.chain),
                 t.location()
             )?;
         }
@@ -79,7 +79,7 @@ pub fn cmd_write(
             let readback = if b.status == 0 {
                 t.ty.format(&b.value)
             } else {
-                format!("读回失败：{}", vendor::item_status_text(b.status, &t.chain))
+                format!("读回失败：{}", item_status_text(b.status, &t.chain))
             };
             writeln!(out, "{} ← {text}，读回 {readback}", ljust(&t.name, w))?;
         } else {
@@ -88,7 +88,7 @@ pub fn cmd_write(
                 out,
                 "{}   写入失败：{}（地址 {}）",
                 ljust(&t.name, w),
-                vendor::item_status_text(r.status, &t.chain),
+                item_status_text(r.status, &t.chain),
                 t.location()
             )?;
         }

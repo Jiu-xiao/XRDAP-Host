@@ -1,15 +1,15 @@
 //! TCP 传输：探针的 3241 端口，或 `xrdap share openocd` 的监听端口。帧格式见
-//! [`frame`](crate::frame)。
+//! [`frame`](crate::raw::frame)。
 //!
 //! TCP transport: the probe's port 3241, or the listening port of `xrdap share openocd`.
-//! Frame format: [`frame`](crate::frame).
+//! Frame format: [`frame`](crate::raw::frame).
 
 use std::io::{ErrorKind, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use super::Transport;
-use crate::frame::{
+use crate::raw::frame::{
     parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
 };
 use crate::{Error, Result};

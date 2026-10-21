@@ -5,31 +5,31 @@
 use std::time::{Duration, Instant};
 
 use crate::bytes::le_u32;
-use crate::transport::Transport;
-use crate::vendor::wifi::{self, WifiStatus};
-use crate::vendor::{self, Item, ItemResult, SubItem, SubRead, VendorInfo};
+use crate::raw::transport::Transport;
+use crate::raw::vendor::wifi::{self, WifiStatus};
+use crate::raw::vendor::{self, Item, ItemResult, SubItem, SubRead, VendorInfo};
 use crate::{Error, Result};
 
 /// DAP_Info 项：厂商名。
 ///
 /// DAP_Info item: vendor name.
-pub const ID_VENDOR: u8 = 0x01;
+pub(crate) const ID_VENDOR: u8 = 0x01;
 /// DAP_Info 项：产品名。
 ///
 /// DAP_Info item: product name.
-pub const ID_PRODUCT: u8 = 0x02;
+pub(crate) const ID_PRODUCT: u8 = 0x02;
 /// DAP_Info 项：序列号。
 ///
 /// DAP_Info item: serial number.
-pub const ID_SERIAL: u8 = 0x03;
+pub(crate) const ID_SERIAL: u8 = 0x03;
 /// DAP_Info 项：CMSIS-DAP 协议版本。
 ///
 /// DAP_Info item: CMSIS-DAP protocol version.
-pub const ID_PROTOCOL: u8 = 0x04;
+pub(crate) const ID_PROTOCOL: u8 = 0x04;
 /// DAP_Info 项：探针固件版本。
 ///
 /// DAP_Info item: probe firmware version.
-pub const ID_FIRMWARE: u8 = 0x09;
+pub(crate) const ID_FIRMWARE: u8 = 0x09;
 /// DAP_Info 项：探针可缓存的 DAP 包个数。
 ///
 /// DAP_Info item: number of DAP packets the probe can buffer.
@@ -37,7 +37,7 @@ pub const ID_PACKET_COUNT: u8 = 0xFE;
 /// DAP_Info 项：DAP 包长。
 ///
 /// DAP_Info item: DAP packet size.
-pub const ID_PACKET_SIZE: u8 = 0xFF;
+pub(crate) const ID_PACKET_SIZE: u8 = 0xFF;
 
 /// DAP_Transfer 请求字节里的 DP 寄存器（APnDP=0）。
 const DP_READ_DPIDR: u8 = 0x02;
@@ -143,16 +143,16 @@ pub struct Identity {
 /// DAP_TransferAbort：CMSIS-DAP 规定它没有响应。
 ///
 /// DAP_TransferAbort: the CMSIS-DAP specification defines no response for it.
-pub const CMD_TRANSFER_ABORT: u8 = 0x07;
+pub(crate) const CMD_TRANSFER_ABORT: u8 = 0x07;
 /// 探针不认识的命令回一个字节 `0xFF`（CMSIS-DAP 的 DAP_Invalid）。
 ///
 /// A probe answers a command it does not know with the single byte `0xFF` (DAP_Invalid).
-pub const DAP_INVALID: u8 = 0xFF;
+pub(crate) const DAP_INVALID: u8 = 0xFF;
 
 /// 这个请求有没有响应。CMSIS-DAP 里只有 DAP_TransferAbort 没有响应。
 ///
 /// Whether a request gets a response. In CMSIS-DAP only DAP_TransferAbort has none.
-pub fn expects_response(request: &[u8]) -> bool {
+pub(crate) fn expects_response(request: &[u8]) -> bool {
     request.first() != Some(&CMD_TRANSFER_ABORT)
 }
 
@@ -196,7 +196,7 @@ impl Probe {
     /// 探针报告的 DAP 包长（查询过 [`Probe::query_packet_size`] 之后才准确）。
     ///
     /// The probe's DAP packet size (accurate after [`Probe::query_packet_size`]).
-    pub fn packet_size(&self) -> usize {
+    pub(crate) fn packet_size(&self) -> usize {
         self.packet_size
     }
 
@@ -241,7 +241,7 @@ impl Probe {
     /// 发一个 DAP 包并记下请求前后的本机时间（用来把探针时间对到电脑时间）。
     ///
     /// Send one DAP packet and record the local time before and after (for clock alignment).
-    pub fn xfer_timed(&mut self, request: &[u8]) -> Result<(Vec<u8>, Instant, Instant)> {
+    pub(crate) fn xfer_timed(&mut self, request: &[u8]) -> Result<(Vec<u8>, Instant, Instant)> {
         let before = Instant::now();
         let resp = self.xfer(request)?;
         let after = Instant::now();
@@ -252,7 +252,7 @@ impl Probe {
     ///
     /// Ask DAP_Info(packet size) until the probe answers, for at most `wait`; a probe that
     /// just powered up or reset needs time to boot.
-    pub fn wait_ready(&mut self, wait: Duration) -> Result<()> {
+    pub(crate) fn wait_ready(&mut self, wait: Duration) -> Result<()> {
         const TRY: Duration = Duration::from_millis(200);
         let normal = std::mem::replace(&mut self.timeout, TRY);
         let deadline = Instant::now() + wait;
@@ -295,7 +295,7 @@ impl Probe {
     /// DAP_Info 的字符串项；探针没有这一项时返回 None。
     ///
     /// A DAP_Info string item; None when the probe has no such item.
-    pub fn dap_info_string(&mut self, id: u8) -> Result<Option<String>> {
+    pub(crate) fn dap_info_string(&mut self, id: u8) -> Result<Option<String>> {
         let data = self.dap_info(id)?;
         if data.is_empty() {
             return Ok(None);
@@ -404,7 +404,7 @@ impl Probe {
     }
 
     /// 开始一次会话：先查 INFO，厂商扩展的协议版本必须是 [`vendor::PROTOCOL_VERSION`]
-    /// （协议文档第 3 节），再连接目标（[`Probe::connect_swd`]）。另一条连接占着探针、
+    /// （协议文档第 3 节），再连接目标（SWD 连接和 ADIv5 初始化）。另一条连接占着探针、
     /// 或者这条连接上的采样还在运行时返回 [`Error::Busy`]；别人开始的采样不停。
     ///
     /// Start a session: query INFO, whose extension version must be
@@ -423,7 +423,7 @@ impl Probe {
     /// SWD connect and ADIv5 setup: DAP_Connect(SWD), clock, line reset with JTAG-to-SWD,
     /// DPIDR, sticky error clear, debug and system power-up. Vendor commands need it first.
     /// Returns [`Error::Busy`] while the probe is sampling or another connection owns it.
-    pub fn connect_swd(&mut self, clock_hz: u32) -> Result<TargetInfo> {
+    pub(crate) fn connect_swd(&mut self, clock_hz: u32) -> Result<TargetInfo> {
         self.query_packet_size()?;
         let resp = self.simple(&[0x02, 0x01], "DAP_Connect")?;
         // 另一个传输是会话主人时标准命令回 `命令 FF`（协议文档 3.1 节）
@@ -562,7 +562,7 @@ impl Probe {
     /// 读一个条目的值；条目状态不为 0 时返回 [`Error::Item`]。
     ///
     /// Read one item; a non-zero item status is [`Error::Item`].
-    pub fn read_one(&mut self, item: &Item) -> Result<Vec<u8>> {
+    pub(crate) fn read_one(&mut self, item: &Item) -> Result<Vec<u8>> {
         let r = self.read(std::slice::from_ref(item))?;
         let r = r
             .into_iter()
@@ -577,7 +577,7 @@ impl Probe {
     /// 写一个条目；条目状态不为 0 时返回 [`Error::Item`]。
     ///
     /// Write one item; a non-zero item status is [`Error::Item`].
-    pub fn write_one(&mut self, item: &Item, value: &[u8]) -> Result<()> {
+    pub(crate) fn write_one(&mut self, item: &Item, value: &[u8]) -> Result<()> {
         let r = self.write(&[(item.clone(), value.to_vec())])?;
         let r = r
             .into_iter()
@@ -652,7 +652,7 @@ fn item_error(item: &Item, status: u8) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transport::script::{Late, Script};
+    use crate::raw::transport::script::{Late, Script};
 
     fn probe(link: &Script) -> Probe {
         Probe::new(Box::new(link.clone()), Duration::from_secs(2))

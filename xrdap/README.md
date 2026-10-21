@@ -126,9 +126,11 @@ probe.wifi_set("lab", "12345678")?; // 探针随后重启
 
 ### 测试
 
-库的测试不需要硬件。工作区中的 `xrdap-sim` 依据 CMSIS-DAP 规范和协议文档模拟探针与目标，提供 `Transport` 实现和与探针相同的 TCP 服务；它只作为 dev-dependency 使用，不随库发布。
+库的测试不需要硬件。工作区中的 `xrdap-sim` 依据 CMSIS-DAP 规范和协议文档模拟探针与目标，提供 `raw::transport::Transport` 实现和与探针相同的 TCP 服务；它只作为 dev-dependency 使用，不随库发布。
 
 ## 模块
+
+`Error`、`Result`、`Item`、`ItemResult`、`item_status_text` 和 `WifiStatus` 在库的根路径下。
 
 | 模块 | 内容 |
 |---|---|
@@ -136,12 +138,11 @@ probe.wifi_set("lab", "12345678")?; // 探针随后重启
 | `open` | 按探针说明打开探针，或自动选择 |
 | `discover` | 查找 USB、串口、局域网上的探针 |
 | `dap` | `Probe`：请求与响应配对、CMSIS-DAP 命令、SWD/ADIv5 初始化、厂商命令的执行 |
-| `vendor` | 厂商命令 0x80 到 0x86 的编码和解码 |
 | `expr`、`types`、`elf` | 变量表达式、类型、DWARF |
 | `watch`、`csv` | 探针端采样、CSV 记录 |
 | `cortex` | 内核状态和停住、继续、复位 |
 | `share` | 把探针共享为 USB/IP 设备或 OpenOCD TCP 后端 |
-| `frame`、`transport` | 串口和 TCP 帧、三种传输 |
+| `raw` | 协议层：厂商命令 0x80 到 0x86 的编码和解码、串口和 TCP 帧、三种传输。跟着协议文档变化，接口不保证稳定 |
 
 | 示例 | 作用 |
 |---|---|
