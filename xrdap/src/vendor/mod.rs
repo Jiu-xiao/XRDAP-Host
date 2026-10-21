@@ -26,7 +26,6 @@ pub const STATUS_NO_TARGET: u8 = 0x04;
 
 pub const SUB_STOP: u8 = 0;
 pub const SUB_START: u8 = 1;
-pub const SUB_CLEAR: u8 = 2;
 
 /// 一次请求、一个订阅最多的条目数（协议文档 3.4 节 INFO）。
 pub const MAX_ITEMS: usize = 32;
