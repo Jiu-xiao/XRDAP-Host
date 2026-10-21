@@ -378,11 +378,11 @@ fn halt_resume_and_reset() {
 #[test]
 fn wifi_status_set_clear() {
     let (sim, mut probe, _) = setup();
-    assert!(xrdap::wifi::status(&mut probe).unwrap().ssid.is_empty());
-    xrdap::wifi::set(&mut probe, "lab", "12345678").unwrap();
+    assert!(probe.wifi_status().unwrap().ssid.is_empty());
+    probe.wifi_set("lab", "12345678").unwrap();
     assert_eq!(sim.wifi_ssid(), "lab");
-    assert_eq!(xrdap::wifi::status(&mut probe).unwrap().ssid, "lab");
-    xrdap::wifi::clear(&mut probe).unwrap();
+    assert_eq!(probe.wifi_status().unwrap().ssid, "lab");
+    probe.wifi_clear().unwrap();
     assert!(sim.wifi_ssid().is_empty());
 }
 
@@ -403,4 +403,51 @@ fn reset_always_restores_demcr() {
     sim.fail_reads(DHCSR, u32::MAX);
     assert!(cortex::reset(&mut probe, AfterReset::Halt).is_err());
     assert_eq!(sim.demcr(), 1 << 24, "复位失败");
+}
+
+/// 协议文档 3.1：采样期间标准命令回 FF。connect_swd 只报占用，不替别人停采样；
+/// watch::connect 停掉之前的会话留下的采样再连。
+#[test]
+fn connect_while_sampling() {
+    let (sim, mut probe, mut syms) = setup();
+    probe.connect_swd(4_000_000).unwrap();
+    let t = targets(&mut syms, &["counter"]);
+    probe.sub_set(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
+    probe.sub_ctrl(vendor::SUB_START).unwrap();
+    let mut next = Probe::new(Box::new(sim.link()), TIMEOUT);
+    assert!(matches!(
+        next.connect_swd(4_000_000),
+        Err(xrdap::Error::Busy(_))
+    ));
+    assert!(sim.is_sampling());
+    xrdap::watch::connect(&mut next, 4_000_000).unwrap();
+    assert!(!sim.is_sampling());
+}
+
+/// 条目失败按类别报告；本地能查出的错（值的长度不对、访问宽度非法）不发请求。
+#[test]
+fn item_errors_are_typed_and_checked_locally() {
+    use xrdap::Error;
+    let (sim, mut probe, mut syms) = setup();
+    probe.connect_swd(4_000_000).unwrap();
+    let null_p1 = targets(&mut syms, &["*null_p1"]).remove(0);
+    match null_p1.read(&mut probe) {
+        Err(Error::Item { status: 0x30, text }) => assert!(text.contains("null_p1"), "{text}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(
+        xrdap::cortex::read_u32(&mut probe, 0x6000_0000),
+        Err(Error::Item { status: 0x1F, .. })
+    ));
+    let before = sim.requests().len();
+    let counter = Item::direct(0, 4, addr(&mut syms, "counter"));
+    assert!(matches!(
+        probe.write(&[(counter, vec![0; 2])]),
+        Err(Error::Usage(_))
+    ));
+    assert!(matches!(
+        probe.read(&[Item::direct(0, 3, 0x2000_0000)]),
+        Err(Error::Usage(_))
+    ));
+    assert_eq!(sim.requests().len(), before);
 }

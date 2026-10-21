@@ -9,9 +9,9 @@ use xrdap::cortex::{self, AfterReset, CoreStatus};
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
 use xrdap::open::{self, OpenOptions};
+use xrdap::vendor::wifi::WifiStatus;
 use xrdap::vendor::{self, Item, ItemResult, SubItem};
 use xrdap::watch::{HostFrame, Sampler, StartError, Stats};
-use xrdap::wifi::{self, WifiStatus};
 
 use xrdap::share::{Event as ShareEvent, Protocol, Share};
 
@@ -128,36 +128,22 @@ fn items_of(targets: &[Target]) -> Vec<Item> {
         .collect()
 }
 
-fn write_one(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
-    let item = target.item(0);
-    let res = probe.write(&[(item.clone(), bytes.to_vec())]);
-    match res {
-        Ok(r) if r.first().is_some_and(|r| r.status == 0) => {
-            let back = probe.read(&[item]).ok().and_then(|v| v.into_iter().next());
-            let text = match back {
-                Some(b) if b.status == 0 => format!("读回 {}", target.ty.format(&b.value)),
-                Some(b) => format!(
-                    "读回失败：{}",
-                    vendor::item_status_text(b.status, &target.chain)
-                ),
-                None => "读回失败".into(),
-            };
-            Event::WriteDone {
-                name: target.name.clone(),
-                ok: true,
-                text,
-            }
+/// 写一个变量并读回一次。
+fn write_target(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
+    let (ok, text) = match target.write(probe, bytes) {
+        Ok(()) => match target.read(probe) {
+            Ok(v) => (true, format!("读回 {}", target.ty.format(&v))),
+            Err(e) => (true, format!("读回失败：{e}")),
+        },
+        Err(xrdap::Error::Item { status, .. }) => {
+            (false, vendor::item_status_text(status, &target.chain))
         }
-        Ok(r) => Event::WriteDone {
-            name: target.name.clone(),
-            ok: false,
-            text: vendor::item_status_text(r.first().map_or(0xFF, |r| r.status), &target.chain),
-        },
-        Err(e) => Event::WriteDone {
-            name: target.name.clone(),
-            ok: false,
-            text: e.to_string(),
-        },
+        Err(e) => (false, e.to_string()),
+    };
+    Event::WriteDone {
+        name: target.name.clone(),
+        ok,
+        text,
     }
 }
 
@@ -174,14 +160,14 @@ fn core_cmd(probe: &mut Probe, cmd: CoreCmd) -> Event {
 }
 
 fn wifi_status(probe: &mut Probe) -> Event {
-    Event::WifiStatus(wifi::status(probe).map_err(|e| e.to_string()))
+    Event::WifiStatus(probe.wifi_status().map_err(|e| e.to_string()))
 }
 
 /// 保存或清除热点参数；成功时返回 true，探针随后重启。
 fn wifi_apply(probe: &mut Probe, change: &WifiChange, send: &impl Fn(Event)) -> bool {
     let (result, cleared) = match change {
-        WifiChange::Set { ssid, password } => (wifi::set(probe, ssid, password), false),
-        WifiChange::Clear => (wifi::clear(probe), true),
+        WifiChange::Set { ssid, password } => (probe.wifi_set(ssid, password), false),
+        WifiChange::Clear => (probe.wifi_clear(), true),
     };
     match result {
         Ok(()) => {
@@ -248,7 +234,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                 Cmd::Share(false) => {
                     let mut p = s.stop();
                     send(Event::ShareStopped);
-                    if let Err(e) = p.connect_swd(clock) {
+                    if let Err(e) = xrdap::watch::connect(&mut p, clock) {
                         send(Event::Error(format!("重新连接目标失败：{e}")));
                     }
                     send(poll_core(&mut p));
@@ -295,7 +281,8 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                 probe = None;
                 clock = c;
                 match open(&conn).and_then(|mut p| {
-                    let t = p.connect_swd(c).map_err(|e| format!("连接目标失败：{e}"))?;
+                    let t = xrdap::watch::connect(&mut p, c)
+                        .map_err(|e| format!("连接目标失败：{e}"))?;
                     Ok((p, t))
                 }) {
                     Ok((mut p, t)) => {
@@ -326,7 +313,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                 None => send(Event::Error("还没有连接".into())),
             },
             Cmd::Write(target, bytes) => match probe.as_mut() {
-                Some(p) => send(write_one(p, &target, &bytes)),
+                Some(p) => send(write_target(p, &target, &bytes)),
                 None => send(Event::Error("还没有连接".into())),
             },
             Cmd::Stop => send(Event::Stopped),
@@ -397,7 +384,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                 let mut last_stats = std::time::Instant::now();
                 let err = loop {
                     match rx.try_recv() {
-                        Ok(Cmd::Write(t, b)) => send(write_one(sampler.probe_mut(), &t, &b)),
+                        Ok(Cmd::Write(t, b)) => send(write_target(sampler.probe_mut(), &t, &b)),
                         Ok(Cmd::Read(tag, targets)) => {
                             match sampler.probe_mut().read(&items_of(&targets)) {
                                 Ok(r) => send(Event::ReadDone(tag, r)),

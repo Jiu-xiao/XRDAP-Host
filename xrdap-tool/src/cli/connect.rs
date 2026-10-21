@@ -109,8 +109,7 @@ pub fn open_target(
     err: &mut dyn Write,
 ) -> CliResult<Probe> {
     let mut p = open_probe(probe, err)?;
-    p.connect_swd(target.clock)
-        .map_err(|e| format!("连接目标失败：{e}"))?;
+    xrdap::watch::connect(&mut p, target.clock).map_err(|e| format!("连接目标失败：{e}"))?;
     Ok(p)
 }
 

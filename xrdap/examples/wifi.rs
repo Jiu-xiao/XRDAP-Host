@@ -15,10 +15,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut probe = open(&spec, &OpenOptions::default())?;
     let mut args = std::env::args().skip(1);
     match args.next() {
-        None => println!("{}", xrdap::wifi::status(&mut probe)?.describe()),
+        None => println!("{}", probe.wifi_status()?.describe()),
         Some(ssid) => {
             let password = args.next().unwrap_or_default();
-            xrdap::wifi::set(&mut probe, &ssid, &password)?;
+            probe.wifi_set(&ssid, &password)?;
             println!("已保存，探针重启后连接 {ssid}");
         }
     }

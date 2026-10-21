@@ -1,22 +1,60 @@
+//! 库里所有操作的错误。说明文字直接给用户看，不提命令行参数。
+//!
+//! Errors of every operation in the library. Messages are meant for users and never mention
+//! command-line options.
+
 use std::fmt;
 
-/// 库里所有操作的错误。说明文字直接给用户看。
+/// 库里所有操作的错误。
+///
+/// Errors of every operation in the library.
 #[derive(Debug)]
 pub enum Error {
     /// 传输层读写失败（串口、USB、TCP）。
+    ///
+    /// The transport (serial, USB, TCP) failed.
     Io(String),
     /// 等待响应超时。
+    ///
+    /// No response in time.
     Timeout(String),
     /// 探针的响应格式不对。
+    ///
+    /// The probe's response is malformed.
     Protocol(String),
-    /// 厂商命令返回了非 0 的整体状态。
-    Status { cmd: u8, status: u8 },
+    /// 厂商命令返回了非 0 的整体状态；`text` 是这个命令对该状态的说明。
+    ///
+    /// A vendor command returned a non-zero overall status; `text` explains it for that command.
+    Status {
+        cmd: u8,
+        status: u8,
+        text: &'static str,
+    },
+    /// 读写一个条目失败：探针返回的条目状态不是 0（协议文档 3.2 节）。
+    ///
+    /// Reading or writing one item failed: its item status is not 0.
+    Item { status: u8, text: String },
+    /// 目标那边的问题：SWD 没有应答、内核没有按要求停住或复位。
+    ///
+    /// A problem on the target side: no SWD answer, or the core did not halt or reset.
+    Target(String),
+    /// 探针正在被占用：在采样，只接受 DAP_Info 和厂商命令（协议文档 3.1 节）。
+    ///
+    /// The probe is busy sampling and accepts only DAP_Info and vendor commands.
+    Busy(String),
     /// 表达式、符号或参数有问题。
+    ///
+    /// A bad expression, symbol or argument.
     Usage(String),
     /// 没能选定一块探针：一块都没找到，或者找到不止一块。
+    ///
+    /// No single probe could be chosen: none found, or more than one.
     Select(String),
 }
 
+/// 库里的结果类型。
+///
+/// The library's result type.
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
@@ -35,13 +73,14 @@ impl fmt::Display for Error {
             Error::Io(msg)
             | Error::Timeout(msg)
             | Error::Protocol(msg)
+            | Error::Target(msg)
+            | Error::Busy(msg)
             | Error::Usage(msg)
-            | Error::Select(msg) => f.write_str(msg),
-            Error::Status { cmd, status } => write!(
-                f,
-                "命令 0x{cmd:02X} 返回状态 0x{status:02X}：{}",
-                crate::vendor::status_text(*status)
-            ),
+            | Error::Select(msg)
+            | Error::Item { text: msg, .. } => f.write_str(msg),
+            Error::Status { cmd, status, text } => {
+                write!(f, "命令 0x{cmd:02X} 返回状态 0x{status:02X}：{text}")
+            }
         }
     }
 }

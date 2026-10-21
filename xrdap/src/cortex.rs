@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::bytes::le_u32;
 use crate::dap::Probe;
-use crate::vendor::{self, Item};
+use crate::vendor::Item;
 use crate::{Error, Result};
 
 pub const CPUID: u32 = 0xE000_ED00;
@@ -128,29 +128,17 @@ pub enum AfterReset {
 }
 
 /// 读一个 32 位字。
+///
+/// Read one 32-bit word.
 pub fn read_u32(probe: &mut Probe, addr: u32) -> Result<u32> {
-    let r = probe.read(&[Item::direct(0, 4, addr)])?;
-    match r.first() {
-        Some(r) if r.status == 0 && r.value.len() == 4 => Ok(le_u32(&r.value, 0)),
-        Some(r) => Err(Error::Io(format!(
-            "读 0x{addr:08X} 失败：{}",
-            vendor::item_status_text(r.status, &[])
-        ))),
-        None => Err(Error::protocol("READ 没有返回结果")),
-    }
+    Ok(le_u32(&probe.read_one(&Item::direct(0, 4, addr))?, 0))
 }
 
 /// 写一个 32 位字。
+///
+/// Write one 32-bit word.
 pub fn write_u32(probe: &mut Probe, addr: u32, value: u32) -> Result<()> {
-    let r = probe.write(&[(Item::direct(0, 4, addr), value.to_le_bytes().to_vec())])?;
-    match r.first() {
-        Some(r) if r.status == 0 => Ok(()),
-        Some(r) => Err(Error::Io(format!(
-            "写 0x{addr:08X} 失败：{}",
-            vendor::item_status_text(r.status, &[])
-        ))),
-        None => Err(Error::protocol("WRITE 没有返回结果")),
-    }
+    probe.write_one(&Item::direct(0, 4, addr), &value.to_le_bytes())
 }
 
 pub fn info(probe: &mut Probe) -> Result<CoreInfo> {
@@ -186,7 +174,7 @@ pub fn halt(probe: &mut Probe) -> Result<CoreStatus> {
         s.state == CoreState::Halted
     })?;
     if s.state != CoreState::Halted {
-        return Err(Error::Io(format!(
+        return Err(Error::Target(format!(
             "内核没有停住（DHCSR 0x{:08X}，{}）",
             s.dhcsr,
             s.state.text()
@@ -254,15 +242,15 @@ fn reset_with_catch(probe: &mut Probe, after: AfterReset, demcr: u32) -> Result<
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-    let s = last.ok_or_else(|| Error::Io("复位后读不到 DHCSR".into()))?;
+    let s = last.ok_or_else(|| Error::Target("复位后读不到 DHCSR".into()))?;
     if !seen {
-        return Err(Error::Io(format!(
+        return Err(Error::Target(format!(
             "没有看到复位发生（DHCSR 0x{:08X}）",
             s.dhcsr
         )));
     }
     if after == AfterReset::Halt && s.state != CoreState::Halted {
-        return Err(Error::Io(format!(
+        return Err(Error::Target(format!(
             "复位后内核没有停住（DHCSR 0x{:08X}）",
             s.dhcsr
         )));
