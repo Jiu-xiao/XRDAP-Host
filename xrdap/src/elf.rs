@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use gimli::{AttributeValue, EndianSlice, RunTimeEndian, UnitOffset};
-use object::{Object, ObjectSection, ObjectSymbol, SectionKind, SymbolKind};
+use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 
 use crate::types::{Aggregate, Encoding, Member, SymbolTable, Type, TypeId, Variable};
 use crate::{Error, Result};
@@ -27,7 +27,7 @@ fn parse_file(data: &[u8]) -> Result<object::File<'_>> {
     object::File::parse(data).map_err(|e| Error::usage(format!("不是可以识别的 ELF 文件：{e}")))
 }
 
-pub fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
+fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
     let file = parse_file(data)?;
     let endian = if file.is_little_endian() {
         RunTimeEndian::Little
@@ -75,30 +75,6 @@ pub fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
         loader.scan_unit(i)?;
     }
     Ok(loader.syms)
-}
-
-/// ELF 里要装到目标内存的段：(地址, 内容)。模拟探针用它填内存。
-pub fn load_image(data: &[u8]) -> Result<Vec<(u64, Vec<u8>)>> {
-    let file = parse_file(data)?;
-    let mut out = Vec::new();
-    for sec in file.sections() {
-        let loadable = matches!(
-            sec.kind(),
-            SectionKind::Text
-                | SectionKind::Data
-                | SectionKind::ReadOnlyData
-                | SectionKind::ReadOnlyString
-        );
-        if !loadable || sec.size() == 0 {
-            continue;
-        }
-        if let Ok(bytes) = sec.data() {
-            if !bytes.is_empty() {
-                out.push((sec.address(), bytes.to_vec()));
-            }
-        }
-    }
-    Ok(out)
 }
 
 struct Loader<'a, 'd> {
