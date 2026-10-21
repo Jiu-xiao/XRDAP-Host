@@ -286,7 +286,7 @@ impl<'a> Resolver<'a> {
         }
         if self.syms.vars.is_empty() && self.syms.elf_symbols.is_empty() {
             return Err(Error::usage(format!(
-                "找不到变量 {name}：没有加载 ELF（用 --elf 指定），或者直接写地址，例如 0x20000000:u32"
+                "找不到变量 {name}：没有加载 ELF 符号表；也可以直接写地址，例如 0x20000000:u32"
             )));
         }
         let mut similar: Vec<&String> = self

@@ -50,8 +50,12 @@ fn xrdap_to(
     out: &mut dyn Write,
     stop: &AtomicBool,
 ) -> Result<(), String> {
-    let mut argv = vec!["xrdap", "-p", host];
-    argv.extend_from_slice(args);
+    // 探针选项挂在子命令上：wifi 再下一级
+    let at = if args.first() == Some(&"wifi") { 2 } else { 1 };
+    let mut argv = vec!["xrdap"];
+    argv.extend_from_slice(&args[..at]);
+    argv.extend_from_slice(&["-p", host]);
+    argv.extend_from_slice(&args[at..]);
     let cli = Cli::try_parse_from(argv).map_err(|e| e.to_string())?;
     let mut err = Vec::new();
     run(cli, out, &mut err, stop).map_err(|e| format!("错误：{e}"))
@@ -72,9 +76,9 @@ fn read_values_and_item_errors() {
     let out = xrdap(
         &host,
         &[
+            "read",
             "--elf",
             &elf(),
-            "read",
             "s8",
             "big",
             "***(uint32_t***)chain_p1",
@@ -104,9 +108,9 @@ fn read_types_and_raw() {
     let out = xrdap(
         &host,
         &[
+            "read",
             "--elf",
             &elf,
-            "read",
             "motor[1].pid->out",
             "state.voltage",
             "motor[0].mode",
@@ -120,10 +124,10 @@ fn read_types_and_raw() {
     assert!(out.contains("MODE_RUN (1)"), "{out}");
     assert!(out.contains("= -7 (0xF9)"), "{out}");
     assert!(out.contains("0x2000007c:u32    = 12345"), "{out}");
-    let e = xrdap(&host, &["--elf", &elf, "read", "motor[0].flags.error"]).unwrap_err();
+    let e = xrdap(&host, &["read", "--elf", &elf, "motor[0].flags.error"]).unwrap_err();
     assert!(e.contains("位域"), "{e}");
     let e = xrdap(&host, &["read", "counter"]).unwrap_err();
-    assert!(e.contains("ELF"), "{e}");
+    assert!(e.contains("--elf"), "{e}");
 }
 
 #[test]
@@ -133,9 +137,9 @@ fn write_and_read_back() {
     let out = xrdap(
         &host,
         &[
+            "write",
             "--elf",
             &elf,
-            "write",
             "motor[1].pid->out=2.5",
             "motor[0].speed=-3",
             "counter=0x10",
@@ -146,12 +150,12 @@ fn write_and_read_back() {
     assert!(out.contains("读回 -3 (0xFFFD)"), "{out}");
     assert!(out.contains("读回 16 (0x00000010)"), "{out}");
     assert_eq!(sim.peek(addr_of("counter"), 4), 16u32.to_le_bytes());
-    let e = xrdap(&host, &["--elf", &elf, "write", "s8=200"]).unwrap_err();
+    let e = xrdap(&host, &["write", "--elf", &elf, "s8=200"]).unwrap_err();
     assert!(e.contains("超出 1 字节的范围"), "{e}");
-    let e = xrdap(&host, &["--elf", &elf, "write", "null_pid->kp=1"]).unwrap_err();
+    let e = xrdap(&host, &["write", "--elf", &elf, "null_pid->kp=1"]).unwrap_err();
     assert!(e.contains("null_pid 为空"), "{e}");
     // cv 是 const，在 Flash 里，写不进去
-    let e = xrdap(&host, &["--elf", &elf, "write", "cv=1"]).unwrap_err();
+    let e = xrdap(&host, &["write", "--elf", &elf, "cv=1"]).unwrap_err();
     assert!(e.contains("写入失败"), "{e}");
 }
 
@@ -164,9 +168,9 @@ fn watch_prints_and_writes_csv() {
     let out = xrdap(
         &host,
         &[
+            "watch",
             "--elf",
             &elf(),
-            "watch",
             "counter",
             "state.count@10",
             "state.pair.lo@5:2",
@@ -226,9 +230,9 @@ fn watch_rejected_suggests_period() {
     let e = xrdap(
         &host,
         &[
+            "watch",
             "--elf",
             &elf(),
-            "watch",
             "counter",
             "big",
             "--period",
@@ -293,6 +297,50 @@ fn watch_stops_on_ctrl_c() {
 fn no_command_means_gui() {
     let cli = Cli::try_parse_from(["xrdap"]).unwrap();
     assert!(cli.cmd.is_none());
+}
+
+/// 用户决定（C4）：每个子命令只收自己的选项，用不到的选项是参数错误，不再悄悄忽略。
+#[test]
+fn options_belong_to_their_commands() {
+    let parse = |args: &[&str]| {
+        Cli::try_parse_from(args)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    };
+    assert!(parse(&["xrdap", "list", "--clock", "1M"]).is_err());
+    assert!(parse(&["xrdap", "list", "-p", "COM3"]).is_err());
+    assert!(parse(&["xrdap", "info", "--elf", "app.elf"]).is_err());
+    assert!(parse(&["xrdap", "halt", "--elf", "app.elf"]).is_err());
+    assert!(parse(&["xrdap", "share", "openocd", "--clock", "1M"]).is_err());
+    assert!(parse(&["xrdap", "wifi", "status", "--elf", "app.elf"]).is_err());
+    assert!(parse(&["xrdap", "vars"]).is_err(), "vars 必须有 --elf");
+    // 选项写在子命令前面也不行
+    assert!(parse(&["xrdap", "-p", "COM3", "info"]).is_err());
+    assert!(
+        parse(&["xrdap", "read", "-p", "COM3", "--clock", "1M", "--elf", "a.elf", "x"]).is_ok()
+    );
+    assert!(parse(&["xrdap", "wifi", "set", "-p", "COM3", "lab", "12345678"]).is_ok());
+    assert!(parse(&[
+        "xrdap",
+        "share",
+        "usbip",
+        "-p",
+        "COM3",
+        "--listen",
+        "0.0.0.0:3240"
+    ])
+    .is_ok());
+}
+
+/// 用户决定（C4）：只在要用的命令加载 --elf；info、halt 这些命令不看 ELF。
+#[test]
+fn commands_without_symbols_ignore_no_elf() {
+    let (sim, host) = sim();
+    assert!(xrdap(&host, &["halt"]).unwrap().contains("已停住"));
+    assert!(sim.is_halted());
+    let out = xrdap(&host, &["wifi", "set", "lab", "12345678"]).unwrap();
+    assert!(out.contains("lab"), "{out}");
+    assert_eq!(sim.wifi_ssid(), "lab");
 }
 
 /// 把写进来的文字一行一行送到通道，测试边运行边看输出。
