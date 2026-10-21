@@ -126,10 +126,11 @@ The TCP backend is only in OpenOCD master, see "OpenOCD version".
 xrdap wifi status
 xrdap wifi set -p COM3 lab 12345678
 xrdap wifi set -p COM3 lab
+xrdap wifi set -p COM3 lab --password-stdin < password.txt
 xrdap wifi clear -p COM3
 ```
 
-`status` shows the saved access point, whether it is connected, the IP address and the signal strength, plus what last cleared the credentials (board button, serial console, 0x86 clear or NVS repair), the reset reason of this boot and whether NVS was rebuilt at this boot. `set` saves the SSID and password (omit the password for an open network) and `clear` removes them (the request carries a confirm byte); after either the probe restarts in about 0.5 s and the connection is lost. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
+`status` shows the saved access point, whether it is connected, the IP address and the signal strength, plus what last cleared the credentials (board button, serial console, 0x86 clear or NVS repair), the reset reason of this boot and whether NVS was rebuilt at this boot. `set` saves the SSID and password (omit the password for an open network) and `clear` removes them (the request carries a confirm byte). `--password-stdin` reads one line from standard input as the password, keeping it out of the shell history and the process list; over TCP (Wi-Fi) the password crosses the LAN in plaintext. After `set` or `clear` the probe restarts in about 0.5 s and the connection is lost. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
 
 In the GUI, after connecting, expand Wi-Fi at the bottom of the connection area: it shows the current state, and 保存并重启 (save and restart) or 清除 (clear) apply the SSID and password entered.
 
@@ -162,7 +163,7 @@ Each command accepts only the options it uses, written after the command; `xrdap
 | `write var=value...` | Write variables and read back | probe options, `--clock`, `--elf` |
 | `watch var[@div[:phase]]...` | Probe-side periodic sampling | probe options, `--clock`, `--elf`, `--period`, `--csv`, `--duration`, `--no-overwrite`, `--all` |
 | `halt`, `run`, `reset` | Core control | probe options, `--clock`; `reset` also `--halt` |
-| `wifi status`, `wifi set ssid [password]`, `wifi clear` | Probe Wi-Fi | probe options |
+| `wifi status`, `wifi set ssid [password]`, `wifi clear` | Probe Wi-Fi | probe options; `set` also `--password-stdin` |
 | `share usbip`, `share openocd` | Share the probe with other debug tools | probe options, `--listen` |
 
 Probe options: `-p` probe, `--baud` serial baud rate (default from the serial chip), `--timeout-ms` timeout for one response (default 2000).

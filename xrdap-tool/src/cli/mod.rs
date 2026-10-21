@@ -226,9 +226,13 @@ pub enum WifiCmd {
         /// 热点名
         #[arg(help_heading = "参数", value_name = "热点")]
         ssid: String,
-        /// 密码，8 到 63 个字节；开放网络不写
+        /// 密码，8 到 63 个字节；开放网络不写。写在命令行上的密码会留在 shell 历史和进程列表里，
+        /// 可以改用 --password-stdin
         #[arg(help_heading = "参数", value_name = "密码")]
         password: Option<String>,
+        /// 从标准输入读一行作为密码（不经过命令行参数）。经 TCP 连接探针时密码以明文经过网络
+        #[arg(long, conflicts_with = "password")]
+        password_stdin: bool,
     },
 
     /// 清除热点参数，探针随后重启，不再连 Wi-Fi
@@ -332,7 +336,7 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
             let (WifiCmd::Status { probe } | WifiCmd::Set { probe, .. } | WifiCmd::Clear { probe }) =
                 &op;
             let mut p = open_probe(probe, err)?;
-            probe::cmd_wifi(&mut p, &op, out)
+            probe::cmd_wifi(&mut p, &op, &mut std::io::stdin().lock(), out)
         }
         Cmd::Share {
             probe,

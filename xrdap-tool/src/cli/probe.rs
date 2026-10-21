@@ -1,6 +1,6 @@
 //! 探针本身的命令：list、info、wifi，以及内核的停住、继续、复位。
 
-use std::io::Write;
+use std::io::{BufRead, Write};
 
 use xrdap::addr::Addr;
 use xrdap::cortex::{self, AfterReset};
@@ -138,15 +138,31 @@ pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> C
     Ok(())
 }
 
-pub fn cmd_wifi(probe: &mut Probe, op: &WifiCmd, out: &mut dyn Write) -> CliResult {
+/// Wi-Fi 的查询、保存、清除。`input` 是 `--password-stdin` 读密码的地方。
+pub fn cmd_wifi(
+    probe: &mut Probe,
+    op: &WifiCmd,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> CliResult {
     match op {
         WifiCmd::Status { .. } => {
             let st = probe.wifi_status()?;
             writeln!(out, "{}", st.describe())?;
             writeln!(out, "{}", st.history())?;
         }
-        WifiCmd::Set { ssid, password, .. } => {
-            probe.wifi_set(ssid, password.as_deref().unwrap_or(""))?;
+        WifiCmd::Set {
+            ssid,
+            password,
+            password_stdin,
+            ..
+        } => {
+            let password = match (password, password_stdin) {
+                (_, true) => read_password(input)?,
+                (Some(p), false) => p.clone(),
+                (None, false) => String::new(),
+            };
+            probe.wifi_set(ssid, &password)?;
             writeln!(out, "已保存，探针重启后连接热点 {ssid}")?;
         }
         WifiCmd::Clear { .. } => {
@@ -167,4 +183,27 @@ pub fn cmd_core(probe: &mut Probe, op: CoreOp, out: &mut dyn Write) -> CliResult
     };
     writeln!(out, "内核：{}（DHCSR 0x{:08X}）", s.state.text(), s.dhcsr)?;
     Ok(())
+}
+
+/// 从输入读一行作为密码：去掉行尾的换行，其余原样保留（密码里可以有空格）。
+fn read_password(input: &mut dyn BufRead) -> CliResult<String> {
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    let end = line.trim_end_matches(['\r', '\n']).len();
+    line.truncate(end);
+    Ok(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_from_stdin_keeps_spaces() {
+        let read = |s: &str| read_password(&mut s.as_bytes()).unwrap();
+        assert_eq!(read("12345678\n"), "12345678");
+        assert_eq!(read(" pass word \r\n"), " pass word ");
+        assert_eq!(read("no-newline"), "no-newline");
+        assert_eq!(read(""), "");
+    }
 }

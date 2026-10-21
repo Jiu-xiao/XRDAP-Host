@@ -312,7 +312,6 @@ impl App {
             }
             Event::WifiApplied { cleared } => {
                 self.wifi_busy = false;
-                self.wifi_password.clear();
                 self.log(if cleared {
                     "已清除热点参数，探针重启后不再连 Wi-Fi".into()
                 } else {
@@ -584,6 +583,25 @@ mod tests {
         a.load_elf();
         assert!(a.elf_loading.is_none());
         assert_eq!(a.watches.iter().map(|w| w.id).collect::<Vec<_>>(), ids);
+    }
+
+    /// 保存 Wi-Fi 时密码离开界面状态，失败也不留在界面里。
+    #[test]
+    fn wifi_password_leaves_gui_state() {
+        let mut a = app();
+        a.wifi_ssid = "lab".into();
+        a.wifi_password = "12345678".into();
+        let cmd = a.wifi_set_cmd();
+        assert!(a.wifi_password.is_empty());
+        assert!(matches!(
+            cmd,
+            Cmd::WifiApply(super::worker::WifiChange::Set { ref password, .. }) if password == "12345678"
+        ));
+        a.handle(Event::Failed {
+            op: Op::Wifi,
+            msg: "配置 Wi-Fi 失败".into(),
+        });
+        assert!(a.wifi_password.is_empty());
     }
 
     /// 启动时按名字的监视项等 ELF 读完再恢复。

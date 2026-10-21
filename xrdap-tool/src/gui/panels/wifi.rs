@@ -6,6 +6,15 @@ use super::super::app::App;
 use super::super::worker::{Cmd, WifiChange};
 
 impl App {
+    /// 保存热点参数的命令。密码从界面状态里取走，交给后台线程用完即丢，界面不再留着它
+    /// （保存成功还是失败都一样）。
+    pub(crate) fn wifi_set_cmd(&mut self) -> Cmd {
+        Cmd::WifiApply(WifiChange::Set {
+            ssid: self.wifi_ssid.trim().to_string(),
+            password: std::mem::take(&mut self.wifi_password),
+        })
+    }
+
     /// Wi-Fi 状态和热点参数表单。保存、清除后探针重启，连接随之断开。
     pub(super) fn ui_wifi(&mut self, ui: &mut egui::Ui) {
         let mut cmd = None;
@@ -46,13 +55,12 @@ impl App {
                         let ssid_ok = !self.wifi_ssid.trim().is_empty();
                         if ui
                             .add_enabled(ssid_ok, egui::Button::new("保存并重启"))
-                            .on_hover_text("探针保存热点参数后约 0.5 秒重启，当前连接会断开")
+                            .on_hover_text(
+                                "探针保存热点参数后约 0.5 秒重启，当前连接会断开。\n                                 经 TCP（Wi-Fi）连接时，密码以明文经过局域网",
+                            )
                             .clicked()
                         {
-                            cmd = Some(Cmd::WifiApply(WifiChange::Set {
-                                ssid: self.wifi_ssid.trim().to_string(),
-                                password: self.wifi_password.clone(),
-                            }));
+                            cmd = Some(self.wifi_set_cmd());
                         }
                         if ui
                             .button("清除")
