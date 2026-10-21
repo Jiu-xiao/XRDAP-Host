@@ -1,4 +1,5 @@
-//! 命令行。命令的输出写到传入的 Write，测试里用模拟探针跑整个命令。
+//! 命令行。每个子命令只接受自己用得到的选项；命令的输出写到传入的 Write，测试里对着模拟探针
+//! 跑整个命令。
 
 mod connect;
 mod memory;
@@ -12,13 +13,13 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use clap::{ArgAction, Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use xrdap::expr::Resolver;
 
-pub use connect::ConnOpts;
+pub use connect::{ElfOpts, ProbeOpts, TargetOpts};
 pub use watch::{cmd_watch, WatchOpts};
 
-use connect::{connect_target, load_symbols, open_probe, print_notes};
+use connect::{open_probe, open_target, print_notes};
 
 pub type CliResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -37,16 +38,14 @@ const TEMPLATE: &str = "{about-with-newline}\n用法：{usage}\n\n{all-args}{aft
     disable_version_flag = true,
     disable_help_subcommand = true,
     after_help = "\
-用 --probe 指定探针（序列号或末尾几位、usb、COM7、/dev/ttyACM0、192.168.0.108、
-xrdap-93ef1c.local），不写时自动选唯一的那块；xrdap list 列出所有探针。
+探针用 -p 指定（序列号或末尾几位、usb、COM3、/dev/ttyUSB0、192.0.2.10、
+xrdap-aabbcc.local），不写时自动选唯一的那块；xrdap list 列出所有探针。
 变量的写法：counter、state.speed、motor[1].pid->out、*ptr、p->q->x、
   (uint32_t***)p 这样的类型转换，或原始地址 0x20000010:u32（类型可以是 u8/u16/u32/u64、
-  i8/i16/i32/i64、f32/f64，以及 ELF 里的类型名，可以带 *）。"
+  i8/i16/i32/i64、f32/f64，以及 ELF 里的类型名，可以带 *）。
+xrdap 命令 -h 看每个命令的选项。"
 )]
 pub struct Cli {
-    #[command(flatten)]
-    pub conn: ConnOpts,
-
     /// 不写时打开图形界面
     #[command(subcommand)]
     pub cmd: Option<Cmd>,
@@ -60,9 +59,19 @@ pub struct Cli {
     version: Option<bool>,
 }
 
+/// 连上目标的命令都有的选项：探针和 SWD 时钟。
+#[derive(Args, Debug, Clone)]
+pub struct Conn {
+    #[command(flatten)]
+    pub probe: ProbeOpts,
+    #[command(flatten)]
+    pub target: TargetOpts,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// 列出 USB、串口、局域网上的探针，以及选它们时 -p 的写法。默认不打开串口
+    /// 列出 USB、局域网上的探针和按描述符认出的乐鑫 USB 串口，以及选它们时 -p 的写法。
+    /// 默认不打开任何串口
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     List {
         /// 逐个打开可能接着探针的串口，发 DAP_Info 询问（打开串口可能让接在上面的开发板复位）
@@ -73,6 +82,8 @@ pub enum Cmd {
     /// 显示探针信息：DAP_Info、厂商扩展 INFO，并连接目标读 DPIDR
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Info {
+        #[command(flatten)]
+        conn: Conn,
         /// 不连接目标，只查询探针
         #[arg(long)]
         no_target: bool,
@@ -81,6 +92,9 @@ pub enum Cmd {
     /// 列出 ELF 里的全局变量
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Vars {
+        /// 目标程序的 ELF（带 -g 调试信息）
+        #[arg(long, value_name = "文件")]
+        elf: PathBuf,
         /// 只列出名字里带这段文字的变量
         #[arg(help_heading = "参数", value_name = "文字")]
         pattern: Option<String>,
@@ -89,6 +103,10 @@ pub enum Cmd {
     /// 读变量。结构体和数组会展开成各个成员
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Read {
+        #[command(flatten)]
+        conn: Conn,
+        #[command(flatten)]
+        elf: ElfOpts,
         /// 要读的变量，可以写多个
         #[arg(required = true, help_heading = "参数", value_name = "变量")]
         exprs: Vec<String>,
@@ -97,6 +115,10 @@ pub enum Cmd {
     /// 写变量，写完读回一次
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Write {
+        #[command(flatten)]
+        conn: Conn,
+        #[command(flatten)]
+        elf: ElfOpts,
         /// 变量=值，可以写多个。整数可以写十进制或 0x 十六进制，浮点写小数，枚举可以写名字
         #[arg(required = true, help_heading = "参数", value_name = "变量=值")]
         assigns: Vec<String>,
@@ -105,6 +127,10 @@ pub enum Cmd {
     /// 在探针上按固定周期采样变量，打印或写成 CSV。按 Ctrl-C 停止
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Watch {
+        #[command(flatten)]
+        conn: Conn,
+        #[command(flatten)]
+        elf: ElfOpts,
         /// 要采样的变量，变量@分频 表示每几拍采一次，变量@分频:相位 可以指定相位
         #[arg(required = true, help_heading = "参数", value_name = "变量[@分频]")]
         exprs: Vec<String>,
@@ -137,15 +163,23 @@ pub enum Cmd {
 
     /// 停住目标内核
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
-    Halt,
+    Halt {
+        #[command(flatten)]
+        conn: Conn,
+    },
 
     /// 让停住的目标内核继续运行
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
-    Run,
+    Run {
+        #[command(flatten)]
+        conn: Conn,
+    },
 
     /// 复位目标（AIRCR.SYSRESETREQ），默认复位后运行
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Reset {
+        #[command(flatten)]
+        conn: Conn,
         /// 复位后停在复位向量，不运行
         #[arg(long)]
         halt: bool,
@@ -161,6 +195,8 @@ pub enum Cmd {
     /// 把探针共享给别的调试工具（Keil、pyOCD、probe-rs、OpenOCD），按 Ctrl-C 停止
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Share {
+        #[command(flatten)]
+        probe: ProbeOpts,
         /// usbip：变成标准 USB CMSIS-DAP 探针，用 usbip attach 挂载；
         /// openocd：OpenOCD 的 cmsis-dap TCP 后端
         #[arg(value_enum, help_heading = "参数", value_name = "方式")]
@@ -176,12 +212,17 @@ pub enum Cmd {
 #[derive(Subcommand, Debug)]
 pub enum WifiCmd {
     /// 显示热点名、是否连接、IP、信号强度（不显示密码）
-    #[command(help_template = TEMPLATE, disable_help_flag = true)]
-    Status,
+    #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
+    Status {
+        #[command(flatten)]
+        probe: ProbeOpts,
+    },
 
     /// 保存热点参数，探针随后重启并连接这个热点
-    #[command(help_template = TEMPLATE, disable_help_flag = true)]
+    #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Set {
+        #[command(flatten)]
+        probe: ProbeOpts,
         /// 热点名
         #[arg(help_heading = "参数", value_name = "热点")]
         ssid: String,
@@ -191,8 +232,11 @@ pub enum WifiCmd {
     },
 
     /// 清除热点参数，探针随后重启，不再连 Wi-Fi
-    #[command(help_template = TEMPLATE, disable_help_flag = true)]
-    Clear,
+    #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
+    Clear {
+        #[command(flatten)]
+        probe: ProbeOpts,
+    },
 }
 
 /// `xrdap share` 的方式
@@ -212,47 +256,47 @@ enum CoreOp {
 
 /// 执行一个命令。`cmd` 为 None（图形界面）时什么都不做；`stop` 置位时 watch 和 share 正常结束。
 pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool) -> CliResult {
-    let conn = &cli.conn;
     let Some(cmd) = cli.cmd else {
         return Ok(());
     };
     match cmd {
         Cmd::List { ask_serial } => probe::cmd_list(ask_serial, out),
-        Cmd::Vars { pattern } => memory::cmd_vars(conn, pattern.as_deref(), out),
-        Cmd::Info { no_target } => {
-            let mut probe = open_probe(conn, err)?;
-            probe::cmd_info(&mut probe, conn, !no_target, out)
+        Cmd::Vars { elf, pattern } => memory::cmd_vars(&elf, pattern.as_deref(), out),
+        Cmd::Info { conn, no_target } => {
+            let mut probe = open_probe(&conn.probe, err)?;
+            let clock = (!no_target).then_some(conn.target.clock);
+            probe::cmd_info(&mut probe, clock, out)
         }
-        Cmd::Read { exprs } => {
-            let mut syms = load_symbols(conn)?;
+        Cmd::Read { conn, elf, exprs } => {
+            let mut syms = elf.load()?;
             let mut r = Resolver::new(&mut syms);
             let mut targets = Vec::new();
             for e in &exprs {
-                targets.extend(r.resolve_all(e)?);
+                targets.extend(elf.resolve_all(&mut r, e)?);
             }
             print_notes(&mut r.notes, out)?;
-            let mut probe = open_probe(conn, err)?;
-            connect_target(&mut probe, conn)?;
+            let mut probe = open_target(&conn.probe, &conn.target, err)?;
             memory::cmd_read(&mut probe, &targets, out)
         }
-        Cmd::Write { assigns } => {
-            let mut syms = load_symbols(conn)?;
+        Cmd::Write { conn, elf, assigns } => {
+            let mut syms = elf.load()?;
             let mut r = Resolver::new(&mut syms);
             let mut list = Vec::new();
             for a in &assigns {
                 let Some((e, v)) = a.split_once('=') else {
                     return Err(format!("{a}：要写成 变量=值").into());
                 };
-                let t = r.resolve(e)?;
+                let t = elf.resolve(&mut r, e)?;
                 let bytes = t.ty.parse(v)?;
                 list.push((t, v.trim().to_string(), bytes));
             }
             print_notes(&mut r.notes, out)?;
-            let mut probe = open_probe(conn, err)?;
-            connect_target(&mut probe, conn)?;
+            let mut probe = open_target(&conn.probe, &conn.target, err)?;
             memory::cmd_write(&mut probe, &list, out)
         }
         Cmd::Watch {
+            conn,
+            elf,
             exprs,
             period,
             csv,
@@ -261,18 +305,17 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
             all,
         } => {
             let period_us = xrdap::watch::parse_period(&period)?;
-            let mut syms = load_symbols(conn)?;
+            let mut syms = elf.load()?;
             let mut r = Resolver::new(&mut syms);
             let mut specs = Vec::new();
             for e in &exprs {
                 let (expr, div, phase) = xrdap::watch::parse_spec(e)?;
-                for t in r.resolve_all(&expr)? {
+                for t in elf.resolve_all(&mut r, &expr)? {
                     specs.push((t, div, phase));
                 }
             }
             print_notes(&mut r.notes, out)?;
-            let mut probe = open_probe(conn, err)?;
-            connect_target(&mut probe, conn)?;
+            let mut probe = open_target(&conn.probe, &conn.target, err)?;
             let opts = WatchOpts {
                 period_us,
                 csv,
@@ -282,21 +325,27 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
             };
             cmd_watch(&mut probe, specs, &opts, out, err, stop)
         }
-        Cmd::Halt => core(conn, CoreOp::Halt, out, err),
-        Cmd::Run => core(conn, CoreOp::Run, out, err),
-        Cmd::Reset { halt } => core(conn, CoreOp::Reset { halt }, out, err),
+        Cmd::Halt { conn } => core(&conn, CoreOp::Halt, out, err),
+        Cmd::Run { conn } => core(&conn, CoreOp::Run, out, err),
+        Cmd::Reset { conn, halt } => core(&conn, CoreOp::Reset { halt }, out, err),
         Cmd::Wifi { op } => {
-            let mut probe = open_probe(conn, err)?;
-            probe::cmd_wifi(&mut probe, &op, out)
+            let (WifiCmd::Status { probe } | WifiCmd::Set { probe, .. } | WifiCmd::Clear { probe }) =
+                &op;
+            let mut p = open_probe(probe, err)?;
+            probe::cmd_wifi(&mut p, &op, out)
         }
-        Cmd::Share { protocol, listen } => {
-            let probe = open_probe(conn, err)?;
-            share::cmd_share(probe, protocol, listen.as_deref(), out, stop)
+        Cmd::Share {
+            probe,
+            protocol,
+            listen,
+        } => {
+            let p = open_probe(&probe, err)?;
+            share::cmd_share(p, protocol, listen.as_deref(), out, stop)
         }
     }
 }
 
-fn core(conn: &ConnOpts, op: CoreOp, out: &mut dyn Write, err: &mut dyn Write) -> CliResult {
-    let mut probe = open_probe(conn, err)?;
-    probe::cmd_core(&mut probe, conn, op, out)
+fn core(conn: &Conn, op: CoreOp, out: &mut dyn Write, err: &mut dyn Write) -> CliResult {
+    let mut probe = open_target(&conn.probe, &conn.target, err)?;
+    probe::cmd_core(&mut probe, op, out)
 }

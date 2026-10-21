@@ -8,7 +8,6 @@ use xrdap::dap::{self, Probe};
 use xrdap::discover::{self, ProbeEntry};
 use xrdap::wifi;
 
-use super::connect::{connect_target, ConnOpts};
 use super::{CliResult, CoreOp, WifiCmd};
 
 /// 列出探针。`ask_serial` 为 false 时不打开任何串口，只列出可能接着探针的串口。
@@ -77,12 +76,8 @@ fn table(probes: &[ProbeEntry]) -> String {
     s
 }
 
-pub fn cmd_info(
-    probe: &mut Probe,
-    conn: &ConnOpts,
-    target: bool,
-    out: &mut dyn Write,
-) -> CliResult {
+/// 探针信息；`clock` 不为 None 时再按这个 SWD 时钟连接目标。
+pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> CliResult {
     writeln!(out, "连接：{}", probe.describe())?;
     let packet = probe.query_packet_size()?;
     let id = probe.identity()?;
@@ -134,10 +129,10 @@ pub fn cmd_info(
         }
         Err(e) => writeln!(out, "厂商扩展：不可用（{e}）")?,
     }
-    if target {
-        match probe.connect_swd(conn.clock) {
+    if let Some(clock) = clock {
+        match probe.connect_swd(clock) {
             Ok(t) => {
-                writeln!(out, "目标：{}，SWD 时钟 {} Hz", t.describe(), conn.clock)?;
+                writeln!(out, "目标：{}，SWD 时钟 {clock} Hz", t.describe())?;
                 let core = cortex::info(probe).map(|i| i.describe());
                 let state = cortex::status(probe);
                 match (core, state) {
@@ -158,12 +153,12 @@ pub fn cmd_info(
 
 pub fn cmd_wifi(probe: &mut Probe, op: &WifiCmd, out: &mut dyn Write) -> CliResult {
     match op {
-        WifiCmd::Status => writeln!(out, "{}", wifi::status(probe)?.describe())?,
-        WifiCmd::Set { ssid, password } => {
+        WifiCmd::Status { .. } => writeln!(out, "{}", wifi::status(probe)?.describe())?,
+        WifiCmd::Set { ssid, password, .. } => {
             wifi::set(probe, ssid, password.as_deref().unwrap_or(""))?;
             writeln!(out, "已保存，探针重启后连接热点 {ssid}")?;
         }
-        WifiCmd::Clear => {
+        WifiCmd::Clear { .. } => {
             wifi::clear(probe)?;
             writeln!(out, "已清除，探针重启后不再连 Wi-Fi")?;
         }
@@ -171,9 +166,8 @@ pub fn cmd_wifi(probe: &mut Probe, op: &WifiCmd, out: &mut dyn Write) -> CliResu
     Ok(())
 }
 
-/// 停住、继续或复位内核，打印之后的状态。
-pub fn cmd_core(probe: &mut Probe, conn: &ConnOpts, op: CoreOp, out: &mut dyn Write) -> CliResult {
-    connect_target(probe, conn)?;
+/// 停住、继续或复位已连上的目标内核，打印之后的状态。
+pub fn cmd_core(probe: &mut Probe, op: CoreOp, out: &mut dyn Write) -> CliResult {
     let s = match op {
         CoreOp::Halt => cortex::halt(probe)?,
         CoreOp::Run => cortex::resume(probe)?,

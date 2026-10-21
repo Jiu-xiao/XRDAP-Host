@@ -876,7 +876,10 @@ impl State {
                 break;
             }
             self.next_tick += 1;
-            if self.skip_every.is_some_and(|n| k > 0 && k.is_multiple_of(n)) {
+            if self
+                .skip_every
+                .is_some_and(|n| k > 0 && k.is_multiple_of(n))
+            {
                 self.skipped += 1;
                 continue;
             }

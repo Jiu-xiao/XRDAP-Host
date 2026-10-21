@@ -49,7 +49,7 @@ mod tests {
             .resolve("counter")
             .unwrap_err()
             .to_string()
-            .contains("--elf"));
+            .contains("没有加载 ELF"));
         assert!(r.resolve("0x20000000:u32 +").is_err());
     }
 }

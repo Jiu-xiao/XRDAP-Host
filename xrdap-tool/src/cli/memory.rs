@@ -1,20 +1,17 @@
 //! 按变量名访问目标内存：vars、read、write。
 
 use std::io::Write;
+use std::path::Path;
 
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
 use xrdap::vendor::{self, Item};
 
-use super::connect::{load_symbols, ConnOpts};
 use super::text::{ljust, name_width};
 use super::CliResult;
 
-pub fn cmd_vars(conn: &ConnOpts, pattern: Option<&str>, out: &mut dyn Write) -> CliResult {
-    if conn.elf.is_none() {
-        return Err("要用 --elf 指定 ELF 文件".into());
-    }
-    let syms = load_symbols(conn)?;
+pub fn cmd_vars(elf: &Path, pattern: Option<&str>, out: &mut dyn Write) -> CliResult {
+    let syms = xrdap::elf::load(elf)?;
     let mut vars: Vec<_> = syms
         .vars
         .values()
