@@ -96,8 +96,11 @@ impl Transport for SerialTransport {
         let mut chunk = [0u8; 1024];
         loop {
             while let Some(payload) = self.ready.pop_front() {
-                if let Some(packet) = dap_from_payload(&payload) {
-                    return Ok(packet.to_vec());
+                // 没有响应内容的命令（DAP_TransferAbort）在串口上回 n = 0 的帧（协议文档
+                // 第 1 节）；它不是 DAP 响应，在这里丢掉
+                match dap_from_payload(&payload) {
+                    Some(packet) if !packet.is_empty() => return Ok(packet.to_vec()),
+                    _ => {}
                 }
             }
             let left = deadline.saturating_duration_since(Instant::now());
@@ -264,6 +267,24 @@ mod tests {
         assert_eq!(Arc::strong_count(&lines), 2);
         drop(t);
         assert_eq!(Arc::strong_count(&lines), 1);
+    }
+
+    /// 协议文档第 1 节：DAP_TransferAbort 在串口上回 n = 0 的帧；传输丢掉它，下一个响应照常收到。
+    #[test]
+    fn empty_frame_after_transfer_abort_is_dropped() {
+        let (mut t, lines) = transport();
+        t.send(&[0x07]).unwrap();
+        t.send(&[0x00, 0xFF]).unwrap();
+        {
+            let mut l = lines.lock().unwrap();
+            for packet in [&[][..], &[0x00, 0x02, 0x00, 0x04]] {
+                l.rx.push_back(build_frame(crc32(RESP_TOPIC), &serial_payload(packet), 0));
+            }
+        }
+        assert_eq!(
+            t.recv(Duration::from_secs(1)).unwrap(),
+            [0x00, 0x02, 0x00, 0x04]
+        );
     }
 
     /// 协议文档第 1 节：请求是 dap_req 帧；响应帧拆成几次读到也能拼起来。
