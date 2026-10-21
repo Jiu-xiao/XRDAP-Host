@@ -249,12 +249,7 @@ impl Session<'_> {
         r
     }
 
-    fn submit(
-        &mut self,
-        s: &mut Link,
-        hdr: &[u8; 48],
-        exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-    ) -> io::Result<()> {
+    fn submit(&mut self, s: &mut Link, hdr: &[u8; 48], exec: &mut super::Exec) -> io::Result<()> {
         let (seq, dir, ep) = (be_u32(hdr, 4), be_u32(hdr, 12), be_u32(hdr, 16));
         let len = be_u32(hdr, 24) as usize;
         let mut setup = [0u8; 8];
@@ -277,7 +272,7 @@ impl Session<'_> {
                 self.pair();
             }
             (DAP_EP, _) => {
-                let resp = exec(&out_data);
+                let resp = exec(&out_data)?;
                 // OUT 的回复只带写入的字节数，不带数据
                 self.reply(RET_SUBMIT, seq, 0, out_data.len(), &[]);
                 // 没有应答的命令（DAP_TransferAbort）不占 IN
@@ -306,11 +301,7 @@ impl Session<'_> {
 
 /// 处理一个客户端连接，直到对方断开（返回 Ok）或出错。设备列表查询（`usbip list -r`）
 /// 回完列表就返回。
-pub(super) fn serve(
-    s: &mut Link,
-    info: &DeviceInfo,
-    exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-) -> io::Result<()> {
+pub(super) fn serve(s: &mut Link, info: &DeviceInfo, exec: &mut super::Exec) -> io::Result<()> {
     let mut op = [0u8; 8];
     s.read_full(&mut op)?;
     let code = u16::from_be_bytes([op[2], op[3]]);
@@ -418,7 +409,7 @@ mod tests {
                 serve(&mut link, &info, &mut |req| {
                     let mut r = req.to_vec();
                     r.push(0xAA);
-                    r
+                    Ok(r)
                 })
                 .unwrap();
             }

@@ -24,7 +24,7 @@ fn g431() -> (FakeProbe, Probe, SymbolTable) {
     let fake = FakeProbe::new();
     fake.load_elf_image(&std::fs::read(&path).unwrap()).unwrap();
     assert!(fake.apply_g431_fixture(&syms));
-    let probe = Probe::new(Box::new(fake.clone()));
+    let probe = Probe::new(Box::new(fake.clone()), Duration::from_secs(2));
     (fake, probe, syms)
 }
 
@@ -337,7 +337,8 @@ fn tcp_transport_round_trip() {
             let len = parse_tcp_header(&h, TCP_TYPE_REQUEST).unwrap();
             let mut req = vec![0u8; len];
             s.read_exact(&mut req).unwrap();
-            let resp = server.xfer(&req).unwrap();
+            server.send(&req).unwrap();
+            let resp = server.recv(Duration::ZERO).unwrap();
             s.write_all(&tcp_frame(&resp, TCP_TYPE_RESPONSE)).unwrap();
         }
     });
@@ -346,7 +347,7 @@ fn tcp_transport_round_trip() {
         Duration::from_secs(2),
     )
     .unwrap();
-    let mut probe = Probe::new(Box::new(t));
+    let mut probe = Probe::new(Box::new(t), Duration::from_secs(2));
     assert!(probe.describe().starts_with("TCP 127.0.0.1:"));
     probe.connect_swd(4_000_000).unwrap();
     let r = probe.read(&[Item::direct(1, 2, 0x2000_001A)]).unwrap();
@@ -374,7 +375,7 @@ fn connect_stops_leftover_sampling() {
     assert_eq!(probe.sub_ctrl(vendor::SUB_START).unwrap(), 0);
     assert!(fake.is_sampling());
     // 新的会话：DAP_Connect 先回 FF，客户端停掉采样后重连
-    let mut probe2 = Probe::new(Box::new(fake.clone()));
+    let mut probe2 = Probe::new(Box::new(fake.clone()), Duration::from_secs(2));
     probe2.connect_swd(4_000_000).unwrap();
     assert!(!fake.is_sampling());
 }

@@ -150,10 +150,12 @@ fn looks_like_host(s: &str) -> bool {
 pub fn open_addr(addr: &Addr, opts: &OpenOptions) -> Result<Probe> {
     Ok(match addr {
         #[cfg(feature = "usb")]
-        Addr::Usb { serial } => Probe::new(Box::new(crate::transport::usb::UsbTransport::open(
-            serial.as_deref(),
+        Addr::Usb { serial } => Probe::new(
+            Box::new(crate::transport::usb::UsbTransport::open(
+                serial.as_deref(),
+            )?),
             opts.timeout,
-        )?)),
+        ),
         #[cfg(not(feature = "usb"))]
         Addr::Usb { .. } => return Err(Error::usage("这个版本没有编译 USB 支持")),
         Addr::Serial { port, keep_lines } => {
@@ -168,7 +170,10 @@ pub fn open_addr(addr: &Addr, opts: &OpenOptions) -> Result<Probe> {
             };
             open_serial(port, *keep_lines || keep, bauds, opts)?
         }
-        Addr::Tcp { host } => Probe::new(Box::new(TcpTransport::connect(host, opts.timeout)?)),
+        Addr::Tcp { host } => Probe::new(
+            Box::new(TcpTransport::connect(host, opts.timeout)?),
+            opts.timeout,
+        ),
     })
 }
 
@@ -184,11 +189,12 @@ fn open_serial(port: &str, keep: bool, bauds: &[u32], opts: &OpenOptions) -> Res
         } else {
             FALLBACK_WAIT
         };
-        match SerialTransport::open(port, baud, keep, opts.timeout).and_then(|mut t| {
-            t.handshake(wait)?;
-            Ok(t)
+        match SerialTransport::open(port, baud, keep).and_then(|t| {
+            let mut probe = Probe::new(Box::new(t), opts.timeout);
+            probe.wait_ready(wait)?;
+            Ok(probe)
         }) {
-            Ok(t) => return Ok(Probe::new(Box::new(t))),
+            Ok(probe) => return Ok(probe),
             Err(e) => last = e,
         }
     }

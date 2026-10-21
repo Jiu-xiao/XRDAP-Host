@@ -133,7 +133,7 @@ fn open(conn: &Conn) -> Result<Probe, String> {
                 let syms: SymbolTable = xrdap::elf::load_bytes(&data).map_err(e)?;
                 fake.apply_g431_fixture(&syms);
             }
-            Probe::new(Box::new(fake))
+            Probe::new(Box::new(fake), TIMEOUT)
         }
     })
 }

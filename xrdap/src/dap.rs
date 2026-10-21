@@ -95,37 +95,133 @@ pub struct Identity {
     pub protocol: Option<String>,
 }
 
-/// 一个探针连接。
+/// DAP_TransferAbort：CMSIS-DAP 规定它没有响应。
+///
+/// DAP_TransferAbort: the CMSIS-DAP specification defines no response for it.
+pub const CMD_TRANSFER_ABORT: u8 = 0x07;
+/// 探针不认识的命令回一个字节 `0xFF`（CMSIS-DAP 的 DAP_Invalid）。
+///
+/// A probe answers a command it does not know with the single byte `0xFF` (DAP_Invalid).
+pub const DAP_INVALID: u8 = 0xFF;
+
+/// 这个请求有没有响应。CMSIS-DAP 里只有 DAP_TransferAbort 没有响应。
+///
+/// Whether a request gets a response. In CMSIS-DAP only DAP_TransferAbort has none.
+pub fn expects_response(request: &[u8]) -> bool {
+    request.first() != Some(&CMD_TRANSFER_ABORT)
+}
+
+/// 超时之后，下一个请求发出前丢弃迟到响应的等待窗口：这段时间里没有再收到包就算清干净了。
+const STALE_QUIET: Duration = Duration::from_millis(100);
+
+/// 一个探针连接。请求和响应一一对应：响应的第一个字节回显命令号（CMSIS-DAP 规定），
+/// 对不上的包是之前超时的请求迟到的响应，丢掉。
+///
+/// One probe connection. Requests and responses pair one to one: a response echoes the
+/// command ID in its first byte (CMSIS-DAP), so a packet that does not match is a late
+/// response to an earlier request that timed out, and is dropped.
 pub struct Probe {
     t: Box<dyn Transport>,
     packet_size: usize,
+    timeout: Duration,
+    /// 上一个请求超时了，链路上可能还有它迟到的响应
+    stale: bool,
 }
 
 impl Probe {
-    pub fn new(t: Box<dyn Transport>) -> Self {
-        Self { t, packet_size: 64 }
+    /// 在一条传输上建立探针连接，`timeout` 是等一个响应的最长时间。
+    ///
+    /// Wrap a transport; `timeout` bounds the wait for one response.
+    pub fn new(t: Box<dyn Transport>, timeout: Duration) -> Self {
+        Self {
+            t,
+            packet_size: 64,
+            timeout,
+            stale: false,
+        }
     }
 
+    /// 连接描述，例如 `USB XRobot-XRDAP-xxxx`。
+    ///
+    /// Connection description, e.g. `USB XRobot-XRDAP-xxxx`.
     pub fn describe(&self) -> String {
         self.t.describe()
     }
 
     /// 探针报告的 DAP 包长（查询过 [`Probe::query_packet_size`] 之后才准确）。
+    ///
+    /// The probe's DAP packet size (accurate after [`Probe::query_packet_size`]).
     pub fn packet_size(&self) -> usize {
         self.packet_size
     }
 
-    /// 发一个原始 DAP 包。
+    /// 发一个原始 DAP 包，返回它的响应。没有响应的命令（DAP_TransferAbort）发出后立即
+    /// 返回空包，不等待。
+    ///
+    /// Send one raw DAP packet and return its response. A command without a response
+    /// (DAP_TransferAbort) returns an empty packet right after sending, without waiting.
     pub fn xfer(&mut self, request: &[u8]) -> Result<Vec<u8>> {
-        self.t.xfer(request)
+        let Some(&cmd) = request.first() else {
+            return Err(Error::usage("DAP 请求不能是空的"));
+        };
+        if self.stale {
+            self.drain();
+        }
+        self.t.send(request)?;
+        if !expects_response(request) {
+            return Ok(Vec::new());
+        }
+        let deadline = Instant::now() + self.timeout;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let resp = match self.t.recv(left) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.stale = matches!(e, Error::Timeout(_));
+                    return Err(e);
+                }
+            };
+            if resp.first() == Some(&cmd) || resp == [DAP_INVALID] {
+                return Ok(resp);
+            }
+        }
+    }
+
+    /// 丢掉超时请求迟到的响应：一直收，直到 [`STALE_QUIET`] 内没有新包。
+    fn drain(&mut self) {
+        while self.t.recv(STALE_QUIET).is_ok() {}
+        self.stale = false;
     }
 
     /// 发一个 DAP 包并记下请求前后的本机时间（用来把探针时间对到电脑时间）。
+    ///
+    /// Send one DAP packet and record the local time before and after (for clock alignment).
     pub fn xfer_timed(&mut self, request: &[u8]) -> Result<(Vec<u8>, Instant, Instant)> {
         let before = Instant::now();
-        let resp = self.t.xfer(request)?;
+        let resp = self.xfer(request)?;
         let after = Instant::now();
         Ok((resp, before, after))
+    }
+
+    /// 反复问 DAP_Info(包长)，直到探针应答，最长 `wait`。刚上电或刚复位的探针要等它启动完。
+    ///
+    /// Ask DAP_Info(packet size) until the probe answers, for at most `wait`; a probe that
+    /// just powered up or reset needs time to boot.
+    pub fn wait_ready(&mut self, wait: Duration) -> Result<()> {
+        const TRY: Duration = Duration::from_millis(200);
+        let normal = std::mem::replace(&mut self.timeout, TRY);
+        let deadline = Instant::now() + wait;
+        let result = loop {
+            match self.dap_info(ID_PACKET_SIZE) {
+                Ok(_) => break Ok(()),
+                Err(e) if Instant::now() >= deadline => {
+                    break Err(Error::Timeout(format!("探针没有应答：{e}")))
+                }
+                Err(_) => {}
+            }
+        };
+        self.timeout = normal;
+        result
     }
 
     // -------------------------------------------------------------- DAP_Info
@@ -406,6 +502,44 @@ impl Probe {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::script::{Late, Script};
+
+    fn probe(link: &Script) -> Probe {
+        Probe::new(Box::new(link.clone()), Duration::from_secs(2))
+    }
+
+    /// CMSIS-DAP：DAP_TransferAbort 没有响应。发出去就返回，不等超时。
+    #[test]
+    fn transfer_abort_is_sent_without_waiting() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        let t0 = Instant::now();
+        assert_eq!(p.xfer(&[CMD_TRANSFER_ABORT]).unwrap(), Vec::<u8>::new());
+        assert!(t0.elapsed() < Duration::from_millis(500));
+        assert_eq!(link.sent(), vec![vec![CMD_TRANSFER_ABORT]]);
+        // 之后的请求照常配对
+        assert_eq!(p.xfer(&[0x00, 0xFF]).unwrap(), vec![0x00, 1, 1]);
+    }
+
+    /// 超时的请求的响应在之后才到：下一个同样的请求拿到的是它自己的响应。
+    #[test]
+    fn late_response_after_timeout_is_drained() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        link.delay_next(Late::NextRecv);
+        assert!(matches!(p.xfer(&[0x00, 0xFF]), Err(Error::Timeout(_))));
+        assert_eq!(p.xfer(&[0x00, 0xFF]).unwrap(), vec![0x00, 1, 1]);
+    }
+
+    /// 迟到的响应夹在下一个请求和它的响应之间：命令号对不上，丢掉。
+    #[test]
+    fn late_response_of_other_command_is_skipped() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        link.delay_next(Late::NextSend);
+        assert!(matches!(p.xfer(&[0x00, 0xFF]), Err(Error::Timeout(_))));
+        assert_eq!(p.xfer(&[0x80]).unwrap(), vec![0x80, 1, 1]);
+    }
 
     #[test]
     fn clock_strings() {
