@@ -32,7 +32,7 @@ fn main() -> xrdap::Result<()> {
     // Spec::Auto 在只有一块探针时选中它；也可以写 Spec::parse("COM3")、
     // Spec::parse("192.0.2.10")、Spec::parse("DDEEFF")
     let mut probe = open(&Spec::Auto, &OpenOptions::default())?;
-    xrdap::watch::connect(&mut probe, 4_000_000)?;
+    probe.connect(4_000_000)?;
 
     let mut syms = xrdap::elf::load(std::path::Path::new("app.elf"))?;
     let mut resolver = Resolver::new(&mut syms);
@@ -43,7 +43,7 @@ fn main() -> xrdap::Result<()> {
 }
 ```
 
-`open` 是打开探针的唯一入口，写法见 `addr` 模块。自动选择和按序列号查找只看 USB、局域网和按 USB 描述符认出的乐鑫 USB 口，不打开其他串口；串口在打开时 DTR、RTS 都保持无效。`watch::connect` 连接目标，探针还在采样（之前的会话没有停止）时先停止采样。`Resolver::resolve` 接受 `state.speed`、`motor[1].pid->out`、`*ptr`、`(uint32_t***)p`、`0x20000010:u32` 这类写法；`resolve_all` 把结构体和数组展开为成员。读写失败时返回 `Error::Item`，其中带条目状态和变量名。完整示例：`read_write`。
+`open` 是打开探针的唯一入口，写法见 `addr` 模块。自动选择和按序列号查找只看 USB、局域网和按 USB 描述符认出的乐鑫 USB 口，不打开其他串口；串口在打开时 DTR、RTS 都保持无效。`Probe::connect` 先查 INFO，厂商扩展的协议版本必须是 2，再连接目标；另一条连接占着探针时返回 `Error::Busy`（“探针正被另一条连接使用”）。主机只停止自己开始的采样。`Resolver::resolve` 接受 `state.speed`、`motor[1].pid->out`、`*ptr`、`(uint32_t***)p`、`0x20000010:u32` 这类写法；`resolve_all` 把结构体和数组展开为成员。读写失败时返回 `Error::Item`，其中带条目状态和变量名。完整示例：`read_write`。
 
 ### 由探针周期采样
 
@@ -56,20 +56,22 @@ let vars = targets
     .enumerate()
     .map(|(i, t)| Var { item: t.item(i as u16), div: 1, phase: None })
     .collect();
-// 周期 1000 µs；探针估计跟不上时返回 StartError::Rejected，其中带估计的单帧耗时
-let mut sampler = Sampler::start(probe, vars, 1000, false)
-    .map_err(|e| xrdap::Error::protocol(format!("{e:?}")))?;
+// 周期 1000 µs；一条 SUB_START 带全部配置并开始采样
+let mut sampler = Sampler::start(probe, vars, 1000, false)?;
 for _ in 0..100 {
     let (frames, _remaining) = sampler.poll()?;
     for f in frames {
         println!("{} µs: {:?}", f.probe_us, f.values);
+    }
+    if let Some(lag) = sampler.stats().lag() {
+        eprintln!("{}", lag.advice());
     }
     std::thread::sleep(sampler.poll_interval());
 }
 sampler.stop()?;
 ```
 
-每帧带探针的时间戳和每个变量的值（不到期为 `None`，读取失败为 `Some(None)`）。`div` 使慢变量每几拍采一次；`phase` 为 `None` 的分频变量由 `Sampler::start` 错开相位，使每拍读取的字节数平均。变量数超过探针 INFO 报告的上限时，`Sampler::start` 在发出 SUB_SET 之前返回错误。完整示例：`sample`。
+每帧带探针的时间戳和每个变量的值（不到期为 `None`，读取失败为 `Some(None)`）。`div` 使慢变量每几拍采一次；`phase` 为 `None` 的分频变量由 `Sampler::start` 错开相位，使每拍读取的字节数平均。变量数超过探针 INFO 报告的上限时，`Sampler::start` 在发出 SUB_START 之前返回错误。探针不估计耗时；`Stats::lag` 按跳拍、丢帧和缓冲余量判断采样跟不跟得上，`Lag::advice` 给出建议。探针上的采样停止（例如会话结束）后，`sampling_on_probe()` 为 false，缓冲里剩下的帧照样可以读完。完整示例：`sample`。
 
 ### 把探针共享给 Keil、pyOCD、probe-rs、OpenOCD
 
@@ -115,11 +117,12 @@ cortex::halt(probe)?;
 cortex::reset(probe, AfterReset::Run)?;
 println!("{}", cortex::status(probe)?.state.text());
 
-println!("{}", probe.wifi_status()?.describe());
+let wifi = probe.wifi_status()?;
+println!("{}\n{}", wifi.describe(), wifi.history());
 probe.wifi_set("lab", "12345678")?; // 探针随后重启
 ```
 
-`cortex::reset` 在复位期间临时修改 DEMCR.VC_CORERESET，结束时（成功或失败）恢复原值。完整示例：`wifi`。
+`cortex::reset` 在复位期间临时修改 DEMCR.VC_CORERESET，结束时（成功或失败）恢复原值。`wifi_status` 还报告最近一次清除热点参数的来源、本次启动的复位原因和 NVS 是否重建过；`wifi_clear` 发送带确认字节的清除请求 `86 02 A5`。完整示例：`wifi`。
 
 ### 测试
 

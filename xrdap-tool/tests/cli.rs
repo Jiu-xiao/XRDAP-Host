@@ -65,7 +65,7 @@ fn xrdap_to(
 fn info_shows_probe_and_target() {
     let (_sim, host) = sim();
     let out = xrdap(&host, &["info"]).unwrap();
-    assert!(out.contains("厂商扩展：版本 1"), "{out}");
+    assert!(out.contains("厂商扩展：版本 2"), "{out}");
     assert!(out.contains("DPIDR 0x2BA01477"), "{out}");
     assert!(out.contains(xrdap_sim::SERIAL), "{out}");
 }
@@ -223,34 +223,56 @@ fn watch_prints_and_writes_csv() {
     assert!((h1 - h0 - 0.001).abs() < 5e-4);
 }
 
+/// 协议文档 3.5：探针不估计耗时；跳拍时提示加长周期、加分频或减少变量。
 #[test]
-fn watch_rejected_suggests_period() {
+fn watch_warns_when_not_keeping_up() {
     let (sim, host) = sim();
-    sim.set_access_us(100);
-    let e = xrdap(
+    sim.skip_every(Some(5));
+    let out = xrdap(
         &host,
         &[
             "watch",
             "--elf",
             &elf(),
             "counter",
-            "big",
             "--period",
-            "20us",
+            "1ms",
+            "--duration",
+            "0.1",
         ],
     )
-    .unwrap_err();
-    assert!(
-        e.contains("探针拒绝了这个配置") && e.contains("--period"),
-        "{e}"
-    );
+    .unwrap();
+    assert!(out.contains(xrdap::watch::Lag::Swd.advice()), "{out}");
+}
+
+/// 协议文档 3.1：另一条连接占着探针时显示“探针正被另一条连接使用”。
+#[test]
+fn second_connection_is_reported_busy() {
+    let (sim, host) = sim();
+    // 另一个传输（例如 USB）先占着探针
+    let mut owner = xrdap::dap::Probe::new(Box::new(sim.link()), Duration::from_secs(2));
+    owner.connect(4_000_000).unwrap();
+    let e = xrdap(&host, &["read", "0x2000007c:u32"]).unwrap_err();
+    assert!(e.contains("探针正被另一条连接使用"), "{e}");
+}
+
+/// 协议文档 3.7：wifi status 显示最近一次清除的来源和本次启动原因；清除带确认字节。
+#[test]
+fn wifi_status_shows_history() {
+    let (sim, host) = sim();
+    xrdap(&host, &["wifi", "set", "lab", "12345678"]).unwrap();
+    xrdap(&host, &["wifi", "clear"]).unwrap();
+    assert!(sim.wifi_ssid().is_empty());
+    let out = xrdap(&host, &["wifi", "status"]).unwrap();
+    assert!(out.contains("最近一次清除热点参数：0x86 清除命令"), "{out}");
+    assert!(out.contains("本次启动原因：上电"), "{out}");
 }
 
 #[test]
 fn watch_stops_on_ctrl_c() {
     let (sim, host) = sim();
     let mut probe = open(&Spec::parse(&host), &OpenOptions::default()).unwrap();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     let mut syms = xrdap::elf::load(std::path::Path::new(&elf())).unwrap();
     let t = xrdap::expr::Resolver::new(&mut syms)
         .resolve("counter")

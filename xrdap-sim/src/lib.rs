@@ -3,8 +3,12 @@
 //! 行为的依据只有两份文档，不照抄主机或固件的代码：
 //! - CMSIS-DAP 规范：DAP_Info、DAP_Connect、DAP_Transfer 等标准命令，响应回显命令号，
 //!   DAP_TransferAbort 没有响应，不认识的命令回 `FF`；
-//! - XRDAP-Core 的协议文档 <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>：
-//!   TCP 帧（第 2 节）、厂商命令 0x80 到 0x86（第 3 节）、探针身份（第 4.1 节）。
+//! - XRDAP-Core 的协议文档（版本 2）<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>：
+//!   TCP 帧（第 2 节）、会话主人和采样归属（第 3.1 节）、厂商命令 0x80 到 0x86（第 3 节）、
+//!   探针身份（第 4.1 节）。
+//!
+//! 每条链路（[`Sim::link`] 的每一个、TCP 的每个客户端）是一个传输。同一时间只有一个传输是会话
+//! 主人；别的传输的命令按协议文档 3.1 节回“忙”。
 //!
 //! 目标是一个 Cortex-M：Flash 0x08000000 起 128 KiB（只读），RAM 0x20000000 起 64 KiB，
 //! 别的地址访问出错（SWD FAULT）；DHCSR、DEMCR、AIRCR、CPUID 按 ARMv7-M 架构手册 C1.6 的
@@ -102,10 +106,12 @@ struct State {
     /// 地址 -> 还要失败几次读
     failing_reads: Vec<(u32, u32)>,
     t0: Instant,
+    /// 会话主人（传输编号）；None 时没有会话
+    owner: Option<u32>,
+    /// 这个会话里有过 DAP_Connect
     connected: bool,
     ctrl_stat: u32,
-    access_us: u32,
-    calibrated: bool,
+    next_transport: u32,
     sub: Option<Subscription>,
     active: bool,
     start_us: u64,
@@ -116,6 +122,8 @@ struct State {
     skipped: u32,
     skip_every: Option<u64>,
     wifi_ssid: Vec<u8>,
+    /// 最近一次清除热点参数的来源（协议文档 3.7 节的编码）
+    wifi_cleared_by: u8,
     requests: Vec<Vec<u8>>,
 }
 
@@ -152,10 +160,10 @@ impl Sim {
             core: Core::default(),
             failing_reads: Vec::new(),
             t0: Instant::now(),
+            owner: None,
             connected: false,
             ctrl_stat: 0,
-            access_us: 2,
-            calibrated: false,
+            next_transport: 0,
             sub: None,
             active: false,
             start_us: 0,
@@ -166,6 +174,7 @@ impl Sim {
             skipped: 0,
             skip_every: None,
             wifi_ssid: Vec::new(),
+            wifi_cleared_by: 0,
             requests: Vec::new(),
         })))
     }
@@ -233,11 +242,6 @@ impl Sim {
         self.st().ring_bytes = n;
     }
 
-    /// 单次 SWD 访问的耗时（INFO 偏移 22），决定 SUB_SET 的单帧估计；默认 2 µs。
-    pub fn set_access_us(&self, us: u32) {
-        self.st().access_us = us;
-    }
-
     /// 每 `n` 拍跳过一拍，模拟 SWD 跟不上（协议文档 3.5 节）。
     pub fn skip_every(&self, n: Option<u64>) {
         self.st().skip_every = n;
@@ -268,19 +272,20 @@ impl Sim {
         self.st().requests.clone()
     }
 
-    /// 执行一个请求；没有响应的命令（DAP_TransferAbort）返回 None。
-    pub fn execute(&self, request: &[u8]) -> Option<Vec<u8>> {
-        let mut st = self.st();
-        st.requests.push(request.to_vec());
-        st.handle(request)
-    }
-
-    /// 一条直接连着这个模拟探针的链路。
+    /// 一条直接连着这个模拟探针的链路，是一个新的传输。
     pub fn link(&self) -> Link {
         Link {
             sim: self.clone(),
+            transport: self.st().new_transport(),
             out: VecDeque::new(),
         }
+    }
+
+    /// 传输 `transport` 执行一个请求；没有响应的命令（DAP_TransferAbort）返回 None。
+    fn execute(&self, transport: u32, request: &[u8]) -> Option<Vec<u8>> {
+        let mut st = self.st();
+        st.requests.push(request.to_vec());
+        st.handle(transport, request)
     }
 
     /// 在 `127.0.0.1` 的一个空闲端口上提供探针的 TCP DAP 服务（协议文档第 2 节），返回地址。
@@ -291,10 +296,10 @@ impl Sim {
         let sim = self.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                // 新客户端连上、客户端断开都会停掉采样（协议文档 3.1 节）
-                sim.st().stop_sampling();
-                let _ = serve_client(&sim, stream);
-                sim.st().stop_sampling();
+                let transport = sim.st().new_transport();
+                let _ = serve_client(&sim, transport, stream);
+                // 客户端断开，这个传输的会话结束（协议文档 3.1 节）
+                sim.st().end_session(transport);
             }
         });
         addr
@@ -302,7 +307,7 @@ impl Sim {
 }
 
 /// 处理一个 TCP 客户端：一个请求帧对应一个响应帧，没有响应的命令不回帧，帧头无效时断开。
-fn serve_client(sim: &Sim, mut s: std::net::TcpStream) -> std::io::Result<()> {
+fn serve_client(sim: &Sim, transport: u32, mut s: std::net::TcpStream) -> std::io::Result<()> {
     let _ = s.set_nodelay(true);
     let mut h = [0u8; TCP_HEADER_LEN];
     loop {
@@ -313,7 +318,7 @@ fn serve_client(sim: &Sim, mut s: std::net::TcpStream) -> std::io::Result<()> {
         }
         let mut req = vec![0u8; len];
         s.read_exact(&mut req)?;
-        if let Some(resp) = sim.execute(&req) {
+        if let Some(resp) = sim.execute(transport, &req) {
             s.write_all(&tcp_frame(&resp, TCP_TYPE_RESPONSE))?;
         }
     }
@@ -322,12 +327,20 @@ fn serve_client(sim: &Sim, mut s: std::net::TcpStream) -> std::io::Result<()> {
 /// 直接连着模拟探针的链路，实现 [`Transport`]。
 pub struct Link {
     sim: Sim,
+    transport: u32,
     out: VecDeque<Vec<u8>>,
+}
+
+impl Drop for Link {
+    /// 链路断开，这个传输的会话结束。
+    fn drop(&mut self) {
+        self.sim.st().end_session(self.transport);
+    }
 }
 
 impl Transport for Link {
     fn send(&mut self, request: &[u8]) -> xrdap::Result<()> {
-        self.out.extend(self.sim.execute(request));
+        self.out.extend(self.sim.execute(self.transport, request));
         Ok(())
     }
 
@@ -383,8 +396,23 @@ const ARG: u8 = 0x01;
 const STATE: u8 = 0x02;
 const RESOURCE: u8 = 0x03;
 const NO_TARGET: u8 = 0x04;
+const BUSY: u8 = 0x05;
 
 impl State {
+    fn new_transport(&mut self) -> u32 {
+        self.next_transport += 1;
+        self.next_transport
+    }
+
+    /// 传输 `transport` 的会话结束：它开始的采样停下，DAP_Connect 失效（协议文档 3.1 节）。
+    fn end_session(&mut self, transport: u32) {
+        if self.owner == Some(transport) {
+            self.stop_sampling();
+            self.owner = None;
+            self.connected = false;
+        }
+    }
+
     fn now_us(&self) -> u64 {
         TIME_ORIGIN_US + self.t0.elapsed().as_micros() as u64
     }
@@ -554,13 +582,29 @@ impl State {
         }
     }
 
-    fn handle(&mut self, req: &[u8]) -> Option<Vec<u8>> {
+    fn handle(&mut self, transport: u32, req: &[u8]) -> Option<Vec<u8>> {
         let cmd = *req.first()?;
         // CMSIS-DAP：DAP_TransferAbort 没有响应
         if cmd == 0x07 {
             return None;
         }
         self.advance();
+        // 会话主人（协议文档 3.1 节）：没有主人时第一个发 DAP_Info 以外命令的传输成为主人；
+        // 别的传输的标准命令回 `命令 FF`，厂商命令回 `命令 05`
+        if cmd != 0x00 {
+            match self.owner {
+                None => self.owner = Some(transport),
+                Some(o) if o != transport => {
+                    let busy = if (0x80..=0x9F).contains(&cmd) {
+                        BUSY
+                    } else {
+                        0xFF
+                    };
+                    return Some(vec![cmd, busy]);
+                }
+                Some(_) => {}
+            }
+        }
         // 采样期间只接受 DAP_Info、DAP_HostStatus 和厂商命令（协议文档 3.1 节）
         if self.active && !matches!(cmd, 0x00 | 0x01 | 0x80..=0x86) {
             return Some(vec![0xFF]);
@@ -570,7 +614,7 @@ impl State {
             0x01 => vec![0x01, 0x00],
             0x02 => self.dap_connect(req),
             0x03 => {
-                self.connected = false;
+                self.end_session(transport);
                 vec![0x03, 0x00]
             }
             0x04 | 0x08 | 0x11 | 0x12 | 0x13 => vec![cmd, 0x00],
@@ -578,7 +622,7 @@ impl State {
             0x80 => self.info(req),
             0x81 => self.cmd_read(req),
             0x82 => self.cmd_write(req),
-            0x83 => self.sub_set(req),
+            0x83 => self.sub_start(req),
             0x84 => self.sub_ctrl(req),
             0x85 => self.sub_read(req),
             0x86 => self.wifi(req),
@@ -669,14 +713,12 @@ impl State {
         if req.len() != 1 {
             return vec![0x80, ARG];
         }
-        let mut out = vec![0x80, OK, 1];
+        let mut out = vec![0x80, OK, 2];
         out.extend_from_slice(&0x1Fu32.to_le_bytes());
         out.extend_from_slice(&(MAX_ITEMS as u16).to_le_bytes());
         out.push(8);
         out.extend_from_slice(&(self.ring_bytes as u32).to_le_bytes());
         out.extend_from_slice(&self.now_us().to_le_bytes());
-        let access = if self.calibrated { self.access_us } else { 0 };
-        out.extend_from_slice(&access.to_le_bytes());
         out
     }
 
@@ -758,7 +800,8 @@ impl State {
         out
     }
 
-    fn sub_set(&mut self, req: &[u8]) -> Vec<u8> {
+    /// 0x83 SUB_START：一条命令带全部配置，检查通过就开始采样，第 0 拍立即采（协议文档 3.4 节）。
+    fn sub_start(&mut self, req: &[u8]) -> Vec<u8> {
         if self.active {
             return vec![0x83, STATE];
         }
@@ -793,25 +836,14 @@ impl State {
         let mut aps: Vec<u8> = items.iter().map(|s| s.item.ap).collect();
         aps.sort_unstable();
         aps.dedup();
-        if count > MAX_ITEMS || aps.len() > 8 {
+        // 所有条目都到期的一帧加 2 字节长度放不进缓冲时资源不足
+        let full_frame =
+            10 + count.div_ceil(8) + items.iter().map(|s| s.item.size as usize).sum::<usize>();
+        if count > MAX_ITEMS || aps.len() > 8 || full_frame + 2 > self.ring_bytes {
             return vec![0x83, RESOURCE];
         }
         if !self.connected {
             return vec![0x83, NO_TARGET];
-        }
-        // 单帧估计（协议文档 3.4 节）：T 是全部条目试读一遍的时间，每级指针和最后的读写
-        // 各一次访问；est = 10 + T × 8 / 5
-        self.calibrated = true;
-        let accesses: u32 = items.iter().map(|s| 1 + s.item.derefs.len() as u32).sum();
-        let est = 10 + accesses * self.access_us * 8 / 5;
-        let max_frame =
-            10 + count.div_ceil(8) + items.iter().map(|s| s.item.size as usize).sum::<usize>();
-        let mut out = vec![0x83, OK];
-        out.extend_from_slice(&(max_frame as u16).to_le_bytes());
-        out.extend_from_slice(&est.to_le_bytes());
-        if est > period_us {
-            out[1] = RESOURCE;
-            return out;
         }
         self.sub = Some(Subscription {
             items,
@@ -819,7 +851,11 @@ impl State {
             drop_new: flags & 1 != 0,
         });
         self.clear_ring();
-        out
+        self.active = true;
+        self.start_us = self.now_us();
+        self.next_tick = 0;
+        self.advance();
+        vec![0x83, OK]
     }
 
     fn clear_ring(&mut self) {
@@ -840,15 +876,6 @@ impl State {
         let status = match req[1] {
             0 => {
                 self.stop_sampling();
-                OK
-            }
-            1 if self.active || self.sub.is_none() => STATE,
-            1 if !self.connected => NO_TARGET,
-            1 => {
-                self.active = true;
-                self.start_us = self.now_us();
-                self.next_tick = 0;
-                self.clear_ring();
                 OK
             }
             2 => {
@@ -932,9 +959,6 @@ impl State {
         if req.len() != 3 {
             return vec![0x85, ARG];
         }
-        if self.sub.is_none() {
-            return vec![0x85, STATE];
-        }
         let limit = (u16_at(req, 1) as usize).min(PACKET_SIZE - 24);
         let mut frames = Vec::new();
         let mut n = 0u16;
@@ -946,7 +970,7 @@ impl State {
             n += 1;
         }
         let remaining: usize = self.ring.iter().map(Vec::len).sum();
-        let mut out = vec![0x85, OK];
+        let mut out = vec![0x85, if self.active { OK } else { STATE }];
         out.extend_from_slice(&self.now_us().to_le_bytes());
         out.extend_from_slice(&(remaining as u32).to_le_bytes());
         out.extend_from_slice(&self.dropped.to_le_bytes());
@@ -956,7 +980,7 @@ impl State {
         out
     }
 
-    /// 0x86 Wi-Fi 配置（协议文档 3.7 节）。模拟探针没有网络：保存的热点从不连上。
+    /// 0x86 Wi-Fi 配置（协议文档 3.7 节）。模拟探针没有网络，保存的热点不会连上。
     fn wifi(&mut self, req: &[u8]) -> Vec<u8> {
         match req.get(1) {
             Some(0) if req.len() == 2 => {
@@ -964,6 +988,8 @@ impl State {
                 out.extend_from_slice(&[0, 0, 0, 0, 0]);
                 out.push(self.wifi_ssid.len() as u8);
                 out.extend_from_slice(&self.wifi_ssid);
+                // 最近一次清除的来源；本次复位原因：上电
+                out.extend_from_slice(&[self.wifi_cleared_by, 1]);
                 out
             }
             Some(1) => {
@@ -978,8 +1004,10 @@ impl State {
                 self.wifi_ssid = req[3..3 + ssid_len].to_vec();
                 vec![0x86, OK]
             }
-            Some(2) if req.len() == 2 => {
+            // 清除要带确认字节 0xA5
+            Some(2) if req == [0x86, 2, 0xA5] => {
                 self.wifi_ssid.clear();
+                self.wifi_cleared_by = 3;
                 vec![0x86, OK]
             }
             _ => vec![0x86, ARG],

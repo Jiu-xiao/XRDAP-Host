@@ -28,9 +28,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
     let mut probe = open(&spec, &OpenOptions::default())?;
-    xrdap::watch::connect(&mut probe, 4_000_000)?;
+    probe.connect(4_000_000)?;
 
-    // 每拍都采（div 1），周期 1 ms；探针拒绝时会给出估计的单帧耗时
+    // 每拍都采（div 1），周期 1 ms；跟不跟得上看统计里的跳拍和丢帧
     let vars = targets
         .iter()
         .enumerate()

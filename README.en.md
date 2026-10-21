@@ -46,6 +46,8 @@ xrdap list --ask-serial
 | `192.0.2.10`, `192.0.2.10:3241`, `xrdap-aabbcc.local`, `tcp:<host>` | TCP (the probe's Wi-Fi, or `xrdap share openocd`) |
 | `XRobot-XRDAP-AABBCCDDEEFF`, `DDEEFF` | Full serial number or its last digits |
 
+One connection (USB, serial or TCP) uses the probe at a time; commands from another connection get a busy reply, which `xrdap` shows as 探针正被另一条连接使用 (the probe is used by another connection), while DAP_Info is still answered. `xrdap` stops only sampling it started. The probe firmware's vendor extension must be protocol version 2 (see the protocol document); a version 1 probe needs a firmware update first.
+
 Serial ports are opened with DTR and RTS both deasserted, as Espressif's idf_monitor does; the auto-download circuit of ESP32 boards drives EN and GPIO0 from these lines. A probe behind a USB-serial chip is selected by its port name.
 
 ## Usage by task
@@ -58,7 +60,7 @@ Serial ports are opened with DTR and RTS both deasserted, as Espressif's idf_mon
 4. Enter `1ms` as the period and click 开始采样 (start sampling); the plot starts scrolling.
 5. Type a value into a watch row and press Enter to change the variable; click 录制 CSV… (record CSV) to start recording.
 
-The probe times the sampling, so the period is not limited by USB or Wi-Fi round trips. When the period is shorter than the probe's estimated frame time, the probe rejects the configuration and the GUI changes the period to the suggested value. Plots can be split across 1 to 4 charts with linked time axes; hovering shows values, and click and Shift+click place cursors A and B. The probe, ELF, watch table and other settings are saved on exit. The ELF cannot be reloaded while sampling.
+The probe times the sampling, so the period is not limited by USB or Wi-Fi round trips. The probe does not estimate timing; keeping up is judged from run-time counters: skipped ticks mean SWD cannot keep up, dropped frames or a nearly full buffer mean reading cannot keep up, and the GUI then shows advice below the statistics (longer period, larger divider or fewer variables). Plots can be split across 1 to 4 charts with linked time axes; hovering shows values, and click and Shift+click place cursors A and B. The probe, ELF, watch table and other settings are saved on exit. The ELF cannot be reloaded while sampling.
 
 ### Reading and writing variables, CSV export on the command line
 
@@ -127,7 +129,7 @@ xrdap wifi set -p COM3 lab
 xrdap wifi clear -p COM3
 ```
 
-`status` shows the saved access point, whether it is connected, the IP address and the signal strength. `set` saves the SSID and password (omit the password for an open network) and `clear` removes them; after either the probe restarts in about 0.5 s and the connection is lost. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
+`status` shows the saved access point, whether it is connected, the IP address and the signal strength, plus what last cleared the credentials (board button, serial console, 0x86 clear or NVS repair), the reset reason of this boot and whether NVS was rebuilt at this boot. `set` saves the SSID and password (omit the password for an open network) and `clear` removes them (the request carries a confirm byte); after either the probe restarts in about 0.5 s and the connection is lost. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
 
 In the GUI, after connecting, expand Wi-Fi at the bottom of the connection area: it shows the current state, and 保存并重启 (save and restart) or 清除 (clear) apply the SSID and password entered.
 

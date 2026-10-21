@@ -34,6 +34,14 @@ pub const FLAG_STARTED: u8 = 0x01;
 ///
 /// Status flag bit 1: connected to the hotspot with an IP address.
 pub const FLAG_CONNECTED: u8 = 0x02;
+/// 状态标志 bit2：本次启动时 NVS 损坏，已擦除重建。
+///
+/// Status flag bit2: NVS was damaged at this boot and was erased and rebuilt.
+pub const FLAG_NVS_REBUILT: u8 = 0x04;
+/// 清除请求的确认字节（协议文档 3.7 节）：没有或不对时探针不清除。
+///
+/// Confirm byte of the clear request (protocol section 3.7); the probe clears nothing without it.
+pub const CLEAR_CONFIRM: u8 = 0xA5;
 
 /// 0x86 的状态说明。
 ///
@@ -72,6 +80,18 @@ pub struct WifiStatus {
     ///
     /// Signal strength in dBm; 0 when not connected
     pub rssi: i8,
+    /// 本次启动时 NVS 损坏，已擦除重建。
+    ///
+    /// NVS was damaged at this boot and was erased and rebuilt.
+    pub nvs_rebuilt: bool,
+    /// 最近一次清除热点参数的来源，编码见 [`WifiStatus::last_clear_text`]。
+    ///
+    /// What last cleared the credentials; see [`WifiStatus::last_clear_text`].
+    pub last_clear: u8,
+    /// 本次启动的复位原因，编码见 [`WifiStatus::reset_reason_text`]。
+    ///
+    /// Reset reason of this boot; see [`WifiStatus::reset_reason_text`].
+    pub reset_reason: u8,
 }
 
 impl WifiStatus {
@@ -94,6 +114,52 @@ impl WifiStatus {
         format!(
             "热点 {}，已连接，IP {}，信号 {} dBm",
             self.ssid, self.ip, self.rssi
+        )
+    }
+
+    /// 最近一次清除热点参数的来源（协议文档 3.7 节）。
+    ///
+    /// What last cleared the credentials (protocol section 3.7).
+    pub fn last_clear_text(&self) -> &'static str {
+        match self.last_clear {
+            0 => "没有清除过或不知道",
+            1 => "板上按键",
+            2 => "串口命令行 wifi clear",
+            3 => "0x86 清除命令",
+            4 => "NVS 修复",
+            _ => "未定义",
+        }
+    }
+
+    /// 本次启动的复位原因（协议文档 3.7 节）。
+    ///
+    /// Reset reason of this boot (protocol section 3.7).
+    pub fn reset_reason_text(&self) -> &'static str {
+        match self.reset_reason {
+            1 => "上电",
+            2 => "软件重启",
+            3 => "看门狗",
+            4 => "程序崩溃",
+            5 => "欠压",
+            6 => "其他",
+            _ => "不知道",
+        }
+    }
+
+    /// 一行历史说明：最近一次清除的来源、本次启动的原因，以及 NVS 是否重建过。
+    ///
+    /// One line of history: what last cleared the credentials, why this boot happened, and
+    /// whether NVS was rebuilt.
+    pub fn history(&self) -> String {
+        let nvs = if self.nvs_rebuilt {
+            "；本次启动时 NVS 损坏，已擦除重建"
+        } else {
+            ""
+        };
+        format!(
+            "最近一次清除热点参数：{}；本次启动原因：{}{nvs}",
+            self.last_clear_text(),
+            self.reset_reason_text()
         )
     }
 }
@@ -127,7 +193,7 @@ pub fn set_request(ssid: &str, password: &str) -> Result<Vec<u8>> {
 ///
 /// The clear request packet.
 pub fn clear_request() -> Vec<u8> {
-    vec![CMD_WIFI, OP_CLEAR]
+    vec![CMD_WIFI, OP_CLEAR, CLEAR_CONFIRM]
 }
 
 /// 解码查询响应。
@@ -135,7 +201,8 @@ pub fn clear_request() -> Vec<u8> {
 /// Decode a query response.
 pub fn parse_status(resp: &[u8]) -> Result<WifiStatus> {
     parse_reply(resp)?;
-    if resp.len() < 9 || resp.len() < 9 + resp[8] as usize {
+    let n = resp.get(8).copied().unwrap_or(0) as usize;
+    if resp.len() < 11 + n {
         return Err(Error::protocol(format!(
             "Wi-Fi 状态响应太短：{}",
             hex(resp)
@@ -143,11 +210,14 @@ pub fn parse_status(resp: &[u8]) -> Result<WifiStatus> {
     }
     let flags = resp[2];
     Ok(WifiStatus {
-        ssid: String::from_utf8_lossy(&resp[9..9 + resp[8] as usize]).into_owned(),
+        ssid: String::from_utf8_lossy(&resp[9..9 + n]).into_owned(),
         started: flags & FLAG_STARTED != 0,
         connected: flags & FLAG_CONNECTED != 0,
         ip: Ipv4Addr::new(resp[3], resp[4], resp[5], resp[6]),
         rssi: resp[7] as i8,
+        nvs_rebuilt: flags & FLAG_NVS_REBUILT != 0,
+        last_clear: resp[9 + n],
+        reset_reason: resp[10 + n],
     })
 }
 
@@ -179,17 +249,25 @@ mod tests {
             set_request("lab", "12345678").unwrap(),
             [0x86, 1, 3, b'l', b'a', b'b', 8, b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8']
         );
-        assert_eq!(clear_request(), [0x86, 0x02]);
+        assert_eq!(clear_request(), [0x86, 0x02, 0xA5]);
         let st = parse_status(&[
-            0x86, 0, 3, 0xC0, 0xA8, 0x01, 0x14, 0xCC, 3, b'l', b'a', b'b',
+            0x86, 0, 3, 0xC0, 0xA8, 0x01, 0x14, 0xCC, 3, b'l', b'a', b'b', 0, 1,
         ])
         .unwrap();
         assert_eq!(st.ssid, "lab");
-        assert!(st.started && st.connected);
+        assert!(st.started && st.connected && !st.nvs_rebuilt);
         assert_eq!(st.ip, Ipv4Addr::new(192, 168, 1, 20));
         assert_eq!(st.rssi, -52);
-        let none = parse_status(&[0x86, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
-        assert!(none.ssid.is_empty() && !none.started);
+        assert_eq!(st.reset_reason_text(), "上电");
+        // 0x86 清除并软件重启之后
+        let after = parse_status(&[0x86, 0, 0, 0, 0, 0, 0, 0, 0, 3, 2]).unwrap();
+        assert!(after.ssid.is_empty() && !after.started);
+        assert_eq!(after.last_clear_text(), "0x86 清除命令");
+        assert_eq!(after.reset_reason_text(), "软件重启");
+        let rebuilt = parse_status(&[0x86, 0, 4, 0, 0, 0, 0, 0, 0, 4, 1]).unwrap();
+        assert!(rebuilt.nvs_rebuilt && rebuilt.history().contains("重建"));
+        // 版本 1 的查询响应没有后两个字节
+        assert!(parse_status(&[0x86, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
     }
 
     #[test]

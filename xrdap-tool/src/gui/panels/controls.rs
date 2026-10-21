@@ -162,10 +162,11 @@ impl App {
             let s = self.stats;
             let warn = s.dropped > 0 || s.skipped > 0 || s.missing > 0 || s.failed_values > 0;
             let text = format!(
-                "{:.0} 帧/s，共 {} 帧，单帧估计 {} µs；探针丢帧 {}，跳拍 {}，缺帧 {}，失败值 {}",
+                "{:.0} 帧/s，共 {} 帧，缓冲 {}/{} 字节；探针丢帧 {}，跳拍 {}，缺帧 {}，失败值 {}",
                 self.rate,
                 s.frames,
-                self.est_frame_us,
+                s.backlog,
+                s.ring_bytes,
                 s.dropped,
                 s.skipped,
                 s.missing,
@@ -177,6 +178,10 @@ impl App {
                 RichText::new(text)
             };
             ui.label(text);
+            // 跟不上时的建议（协议文档 3.5 节）
+            if let Some(lag) = s.lag() {
+                ui.label(RichText::new(lag.advice()).color(ui.visuals().warn_fg_color));
+            }
             if let Some(Ok(c)) = &self.core {
                 if matches!(c.state, CoreState::Halted | CoreState::Lockup) {
                     ui.label(

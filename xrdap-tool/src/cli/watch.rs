@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
 
-use xrdap::watch::{HostFrame, Sampler, StartError, Var};
+use xrdap::watch::{HostFrame, Lag, Sampler, Var};
 
 use super::text::{display_width, rjust};
 use super::CliResult;
@@ -104,29 +104,13 @@ pub fn cmd_watch(
         .collect();
     let targets: Vec<Target> = specs.into_iter().map(|(t, _, _)| t).collect();
 
-    let mut sampler = match Sampler::start(probe, vars, opts.period_us, opts.stop_on_full) {
-        Ok(s) => s,
-        Err(StartError::Rejected(r)) => {
-            let est = r.est_frame_us.unwrap_or(0);
-            return Err(format!(
-                "探针拒绝了这个配置：估计每帧耗时 {est} µs，周期 {} µs 来不及。\
-                 可以把周期改为 {} µs 以上（--period {}us），或者减少变量、给慢变量加分频（例如 变量@10）",
-                opts.period_us,
-                xrdap::watch::suggest_period(est),
-                xrdap::watch::suggest_period(est)
-            )
-            .into());
-        }
-        Err(StartError::Other(e)) => return Err(e.into()),
-    };
+    let mut sampler = Sampler::start(probe, vars, opts.period_us, opts.stop_on_full)?;
 
     writeln!(
         out,
-        "采样 {} 个变量，周期 {} µs，估计每帧耗时 {} µs，一帧最多 {} 字节",
+        "采样 {} 个变量，周期 {} µs",
         targets.len(),
-        opts.period_us,
-        sampler.setup.est_frame_us.unwrap_or(0),
-        sampler.setup.max_frame_bytes.unwrap_or(0)
+        opts.period_us
     )?;
     for (t, s) in targets.iter().zip(sampler.items()) {
         if s.div > 1 {
@@ -163,6 +147,8 @@ pub fn cmd_watch(
     let started = Instant::now();
     let interval = sampler.poll_interval();
     let mut last_status = Instant::now();
+    // 跟不上时只提示一次（协议文档 3.5 节：按跳拍、丢帧和缓冲余量判断）
+    let mut warned: Option<Lag> = None;
     let result: CliResult = (|| {
         while !stop.load(Ordering::SeqCst) {
             if opts.duration.is_some_and(|d| started.elapsed() >= d) {
@@ -170,6 +156,15 @@ pub fn cmd_watch(
             }
             let (frames, remaining) = sampler.poll()?;
             output.frames(&frames)?;
+            let lag = sampler.stats().lag();
+            if lag.is_some() && lag != warned {
+                warned = lag;
+                writeln!(err, "\n提示：{}", lag.map_or("", Lag::advice))?;
+            }
+            if !sampler.sampling_on_probe() && remaining == 0 {
+                writeln!(err, "探针上的采样已经停止（会话结束）")?;
+                break;
+            }
             if output.csv.is_some() && last_status.elapsed() >= Duration::from_secs(1) {
                 last_status = Instant::now();
                 let st = sampler.stats();
@@ -212,14 +207,8 @@ pub fn cmd_watch(
             path.display()
         )?;
     }
-    if st.skipped > 0 {
-        writeln!(
-            output.out,
-            "提示：探针来不及按这个周期采样，可以增大周期、加分频或减少变量"
-        )?;
-    }
-    if st.dropped > 0 {
-        writeln!(output.out, "提示：读得太慢，缓冲满了，可以加分频或减少变量")?;
+    if let Some(lag) = st.lag() {
+        writeln!(output.out, "提示：{}", lag.advice())?;
     }
     Ok(())
 }

@@ -1,10 +1,11 @@
-//! 探针端采样：SUB_SET、开始、循环 SUB_READ、解码、停止。
+//! 探针端采样：SUB_START、循环 SUB_READ、解码、停止，以及按探针的计数器判断跟不跟得上。
 //!
 //! 探针时间按协议文档 3.5 节对到电脑时间：每次 SUB_READ 记下请求前后的本机时间，
 //! 取中点与响应里的探针时间配对；取最近若干次里往返最短的一次作为偏移量。
 //! 协议文档：<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>
 //!
-//! Probe-side sampling: SUB_SET, start, a SUB_READ loop, decoding, stop.
+//! Probe-side sampling: SUB_START, a SUB_READ loop, decoding, stop, and judging from the
+//! probe's counters whether sampling keeps up.
 //!
 //! Probe time is aligned to host time as in section 3.5 of the protocol document: each
 //! SUB_READ records the local time before and after the request and pairs the midpoint with
@@ -15,29 +16,16 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::dap::{Probe, TargetInfo};
-use crate::vendor::{self, Item, SubItem, SubSetResult};
+use crate::dap::Probe;
+use crate::vendor::{self, Item, SubItem};
 use crate::{Error, Result};
 
-/// 让探针停止采样（SUB_CTRL stop，协议文档 3.4）。没在采样时也成功。
+/// 让探针停止采样（SUB_CTRL stop，协议文档 3.4）。没在采样时也成功。只用来停自己开始的采样。
 ///
-/// Stop sampling on the probe (SUB_CTRL stop); succeeds when not sampling too.
+/// Stop sampling on the probe (SUB_CTRL stop); succeeds when not sampling too. Used only for
+/// sampling this host started.
 pub fn stop(probe: &mut Probe) -> Result<()> {
     probe.sub_ctrl(vendor::SUB_STOP)
-}
-
-/// 连接目标。探针还在采样时（DAP_Connect 回 FF，返回 [`Error::Busy`]）先停掉采样再连。
-///
-/// Connect the target. When the probe is still sampling (DAP_Connect answers FF, reported as
-/// [`Error::Busy`]), stop sampling first and connect again.
-pub fn connect(probe: &mut Probe, clock_hz: u32) -> Result<TargetInfo> {
-    match probe.connect_swd(clock_hz) {
-        Err(Error::Busy(_)) => {
-            stop(probe)?;
-            probe.connect_swd(clock_hz)
-        }
-        other => other,
-    }
 }
 
 /// 解析周期：`1000`（µs）、`500us`、`500µs`、`2ms`、`2.5ms`、`1s`。
@@ -243,6 +231,60 @@ pub struct Stats {
     ///
     /// Number of item values whose read failed.
     pub failed_values: u64,
+    /// 最近一次 SUB_READ 时缓冲里还没读走的帧字节数。
+    ///
+    /// Frame bytes still unread in the buffer at the last SUB_READ.
+    pub backlog: u32,
+    /// 采样缓冲的字节数（INFO）。
+    ///
+    /// Size of the sampling buffer in bytes (INFO).
+    pub ring_bytes: u32,
+}
+
+/// 采样跟不上的原因（协议文档 3.5 节）。
+///
+/// Why sampling does not keep up (protocol section 3.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lag {
+    /// 探针跳过了节拍：SWD 读不完一拍的条目。
+    ///
+    /// The probe skipped ticks: SWD cannot read one tick's items in time.
+    Swd,
+    /// 丢了帧或缓冲快满：电脑读得不够快，或链路带宽不够。
+    ///
+    /// Frames were dropped or the buffer is nearly full: the host reads too slowly or the link
+    /// lacks bandwidth.
+    Read,
+}
+
+impl Lag {
+    /// 给用户的说明和建议。
+    ///
+    /// The explanation and advice for users.
+    pub fn advice(self) -> &'static str {
+        match self {
+            Lag::Swd => "探针跳过了节拍，SWD 跟不上：加长周期、给慢变量加分频，或者减少变量",
+            Lag::Read => "探针丢了帧或缓冲快满，读取跟不上：给变量加分频，或者减少变量",
+        }
+    }
+}
+
+impl Stats {
+    /// 按探针的计数器判断采样跟不跟得上：跳拍说明 SWD 跟不上；丢帧、或缓冲里没读走的字节超过
+    /// 缓冲的四分之三，说明读得不够快。跟得上时为 None。
+    ///
+    /// Judge from the probe's counters whether sampling keeps up: skipped ticks mean SWD cannot
+    /// keep up; dropped frames, or unread bytes above three quarters of the buffer, mean the
+    /// host reads too slowly. None when it keeps up.
+    pub fn lag(&self) -> Option<Lag> {
+        if self.skipped > 0 {
+            Some(Lag::Swd)
+        } else if self.dropped > 0 || self.backlog as u64 * 4 > self.ring_bytes as u64 * 3 {
+            Some(Lag::Read)
+        } else {
+            None
+        }
+    }
 }
 
 /// 要采样的一个条目：每 `div` 拍采一次；`phase` 为 None 时由 [`Sampler::start`] 错开相位。
@@ -264,36 +306,6 @@ pub struct Var {
     pub phase: Option<u16>,
 }
 
-/// SUB_SET 没有成功。
-///
-/// SUB_SET did not succeed.
-#[derive(Debug)]
-pub enum StartError {
-    /// 0x03：估计的单帧耗时大于周期，或条目太多。
-    ///
-    /// 0x03: the estimated frame duration exceeds the period, or there are too many items.
-    Rejected(SubSetResult),
-    /// 其他错误。
-    ///
-    /// Any other error.
-    Other(Error),
-}
-
-impl From<Error> for StartError {
-    fn from(e: Error) -> Self {
-        StartError::Other(e)
-    }
-}
-
-/// 根据 est_frame_us 建议一个周期：留 25% 余量，取整到 50 µs。
-///
-/// Suggest a period from `est_frame_us`: add a 25% margin and round up to a multiple of
-/// 50 µs.
-pub fn suggest_period(est_frame_us: u32) -> u32 {
-    let p = est_frame_us as u64 * 5 / 4;
-    (p.div_ceil(50) * 50).max(50) as u32
-}
-
 /// 一次进行中的探针端采样。丢弃时如果还在采样会停止采样。
 ///
 /// A running probe-side sampling. Dropping it stops sampling if it is still running.
@@ -304,37 +316,38 @@ pub struct Sampler<'a> {
     ///
     /// Sampling period in µs.
     pub period_us: u32,
-    /// SUB_SET 的结果。
-    ///
-    /// The result of SUB_SET.
-    pub setup: SubSetResult,
     sync: ClockSync,
     last_tick: Option<u64>,
     stats: Stats,
+    /// 这个 Sampler 开始的采样还没有停
     running: bool,
+    /// 最近一次 SUB_READ 时探针还在采样
+    on_probe: bool,
     max_read: u16,
-    ring_bytes: u32,
 }
 
 impl<'a> Sampler<'a> {
-    /// 配置并开始采样：条目数不超过探针 INFO 报告的上限，没给相位的分频条目错开相位
-    /// （[`vendor::assign_phases`]）。探针还在采样（上次没停）时先停掉再配置。
+    /// 用一条 SUB_START 开始采样：条目数不超过探针 INFO 报告的上限，没给相位的分频条目错开
+    /// 相位（[`vendor::assign_phases`]）。探针不估计耗时，跟不跟得上看运行时的计数器
+    /// （[`Stats::lag`]）。探针已经在采样时返回错误，不停别人的采样。
     ///
-    /// Configure and start sampling: at most the probe's INFO item limit, unphased divided
-    /// items are staggered. Sampling left running by an earlier session is stopped first.
+    /// Start sampling with one SUB_START: at most the probe's INFO item limit, unphased divided
+    /// items staggered. The probe does not estimate timing; whether it keeps up shows in the
+    /// run-time counters ([`Stats::lag`]). When the probe is already sampling this is an error,
+    /// and that sampling is left alone.
     pub fn start(
         probe: &'a mut Probe,
         vars: Vec<Var>,
         period_us: u32,
         stop_on_full: bool,
-    ) -> std::result::Result<Self, StartError> {
+    ) -> Result<Self> {
         let info = probe.vendor_info()?;
         if vars.len() > info.max_items as usize {
-            return Err(StartError::Other(Error::usage(format!(
+            return Err(Error::usage(format!(
                 "探针一次最多采样 {} 个变量，现在有 {} 个",
                 info.max_items,
                 vars.len()
-            ))));
+            )));
         }
         let fixed: Vec<bool> = vars.iter().map(|v| v.phase.is_some()).collect();
         let mut items: Vec<SubItem> = vars
@@ -346,41 +359,32 @@ impl<'a> Sampler<'a> {
             })
             .collect();
         vendor::assign_phases(&mut items, &fixed);
-        let flags = u8::from(stop_on_full);
-        let mut setup = probe.sub_set(period_us, flags, &items)?;
-        if setup.status == vendor::STATUS_STATE {
-            stop(probe)?;
-            setup = probe.sub_set(period_us, flags, &items)?;
-        }
-        match setup.status {
-            vendor::STATUS_OK => {}
-            vendor::STATUS_RESOURCE if setup.est_frame_us.is_some() => {
-                return Err(StartError::Rejected(setup))
-            }
-            status => {
-                return Err(StartError::Other(Error::Status {
-                    cmd: vendor::CMD_SUB_SET,
-                    status,
-                    text: vendor::status_text(status),
-                }))
-            }
-        }
+        probe.sub_start(period_us, u8::from(stop_on_full), &items)?;
         let max_read = (probe.packet_size().min(1024) - vendor::SUB_READ_HEADER) as u16;
-        let mut s = Sampler {
+        Ok(Sampler {
             probe,
             items,
             period_us,
-            setup,
             sync: ClockSync::new(HostClock::new()),
             last_tick: None,
-            stats: Stats::default(),
-            running: false,
+            stats: Stats {
+                ring_bytes: info.ring_bytes,
+                ..Stats::default()
+            },
+            running: true,
+            on_probe: true,
             max_read,
-            ring_bytes: info.ring_bytes,
-        };
-        s.probe.sub_ctrl(vendor::SUB_START)?;
-        s.running = true;
-        Ok(s)
+        })
+    }
+
+    /// 最近一次 SUB_READ 时探针还在采样。为 false 时采样已在探针上停止（例如会话结束），
+    /// 缓冲里剩下的帧照样可以读完。
+    ///
+    /// Whether the probe was still sampling at the last SUB_READ. When false, sampling stopped
+    /// on the probe (for example because the session ended); the remaining frames can still be
+    /// read.
+    pub fn sampling_on_probe(&self) -> bool {
+        self.on_probe
     }
 
     /// 采样条目表，帧里的下标对应这张表。
@@ -418,8 +422,10 @@ impl<'a> Sampler<'a> {
     pub fn poll(&mut self) -> Result<(Vec<HostFrame>, u32)> {
         let (r, before, after) = self.probe.sub_read(self.max_read)?;
         self.sync.update(before, after, r.probe_time_us);
+        self.on_probe = r.sampling;
         self.stats.dropped = r.dropped;
         self.stats.skipped = r.skipped;
+        self.stats.backlog = r.remaining;
         let frames = vendor::decode_frames(&r.frames, &self.items, r.frame_count)?;
         let mut out = Vec::with_capacity(frames.len());
         for f in frames {
@@ -474,7 +480,7 @@ impl<'a> Sampler<'a> {
     /// limited to the range 1 ms to 50 ms.
     pub fn poll_interval(&self) -> Duration {
         let per_tick = vendor::average_bytes_per_tick(&self.items).max(1.0);
-        let fill_us = self.ring_bytes as f64 / per_tick * self.period_us as f64;
+        let fill_us = self.stats.ring_bytes as f64 / per_tick * self.period_us as f64;
         Duration::from_micros((fill_us / 4.0).clamp(1000.0, 50_000.0) as u64)
     }
 
@@ -529,7 +535,6 @@ mod tests {
         );
         assert!(parse_spec("x@0").is_err());
         assert!(parse_spec("x@10:10").is_err());
-        assert_eq!(suggest_period(1234), 1550);
     }
 
     #[test]

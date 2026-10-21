@@ -24,7 +24,8 @@ impl App {
                         } else {
                             ui.visuals().warn_fg_color
                         };
-                        ui.label(RichText::new(format!("● {}", st.describe())).color(color))
+                        ui.label(RichText::new(format!("● {}", st.describe())).color(color));
+                        ui.label(RichText::new(st.history()).weak().small())
                     }
                 };
                 egui::Grid::new("wifi_form").num_columns(2).show(ui, |ui| {

@@ -112,24 +112,12 @@ pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> C
                 "  每次最多 {} 个条目，最多 {} 级指针，采样缓冲 {} 字节",
                 info.max_items, info.max_depth, info.ring_bytes
             )?;
-            let calib = if info.access_us == 0 {
-                "单次 SWD 访问耗时还没有标定（每次 SUB_SET 时按当前时钟标定）".to_string()
-            } else {
-                format!(
-                    "单次 SWD 访问耗时 {} µs（上次 SUB_SET 时标定）",
-                    info.access_us
-                )
-            };
-            writeln!(
-                out,
-                "  探针时间 {:.6} s，{calib}",
-                info.probe_time_us as f64 / 1e6
-            )?;
+            writeln!(out, "  探针时间 {:.6} s", info.probe_time_us as f64 / 1e6)?;
         }
         Err(e) => writeln!(out, "厂商扩展：不可用（{e}）")?,
     }
     if let Some(clock) = clock {
-        match xrdap::watch::connect(probe, clock) {
+        match probe.connect(clock) {
             Ok(t) => {
                 writeln!(out, "目标：{}，SWD 时钟 {clock} Hz", t.describe())?;
                 let core = cortex::info(probe).map(|i| i.describe());
@@ -152,7 +140,11 @@ pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> C
 
 pub fn cmd_wifi(probe: &mut Probe, op: &WifiCmd, out: &mut dyn Write) -> CliResult {
     match op {
-        WifiCmd::Status { .. } => writeln!(out, "{}", probe.wifi_status()?.describe())?,
+        WifiCmd::Status { .. } => {
+            let st = probe.wifi_status()?;
+            writeln!(out, "{}", st.describe())?;
+            writeln!(out, "{}", st.history())?;
+        }
         WifiCmd::Set { ssid, password, .. } => {
             probe.wifi_set(ssid, password.as_deref().unwrap_or(""))?;
             writeln!(out, "已保存，探针重启后连接热点 {ssid}")?;
