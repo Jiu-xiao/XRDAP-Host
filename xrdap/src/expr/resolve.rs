@@ -2,8 +2,8 @@
 //!
 //! Evaluate the syntax tree against the type table to get a [`Target`].
 
+use crate::raw::vendor::MAX_DEPTH;
 use crate::types::{Member, SymbolTable, Type, TypeId};
-use crate::vendor::MAX_DEPTH;
 use crate::{Error, Result};
 
 use super::syntax::{parse, Expr, TypeSpec};

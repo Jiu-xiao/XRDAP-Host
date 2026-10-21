@@ -27,14 +27,14 @@ use std::time::{Duration, Instant};
 
 use crate::addr::Addr;
 use crate::dap::Probe;
-use crate::transport::serial::{SerialTransport, DEFAULT_BAUD, SAFE_BAUD};
-use crate::transport::usb;
+use crate::raw::transport::serial::{SerialTransport, DEFAULT_BAUD, SAFE_BAUD};
+use crate::raw::transport::usb;
 use crate::Result;
 
 /// 探针序列号的前缀，后面是芯片唯一 ID 的大写十六进制（协议文档 4.1 节）。
 ///
 /// Prefix of probe serial numbers, followed by the chip's unique ID in upper-case hex.
-pub const SERIAL_PREFIX: &str = "XRobot-XRDAP-";
+pub(crate) const SERIAL_PREFIX: &str = "XRobot-XRDAP-";
 
 /// 找到的一个连接：一块探针经某种方式可达。
 ///
@@ -197,7 +197,7 @@ impl Chip {
     ///
     /// Baud rates to try, in order: 4 Mbaud firmware on capable chips, 921600 (classic ESP32
     /// firmware) on slow ones, both on unknown chips.
-    pub fn bauds(self) -> &'static [u32] {
+    pub(crate) fn bauds(self) -> &'static [u32] {
         match self {
             Chip::EspressifUsb => &[DEFAULT_BAUD],
             Chip::WchSlow | Chip::SiliconLabs => &[SAFE_BAUD],
@@ -245,7 +245,7 @@ impl SerialPortInfo {
     ///
     /// The probe serial number behind an Espressif USB Serial/JTAG port, derived from the MAC in
     /// its descriptor; None for other chips (the port must be opened to know).
-    pub fn probe_serial(&self) -> Option<String> {
+    pub(crate) fn probe_serial(&self) -> Option<String> {
         if self.chip != Chip::EspressifUsb {
             return None;
         }
@@ -288,7 +288,7 @@ pub fn serial_ports() -> Vec<SerialPortInfo> {
 /// 一个串口的信息；不在 [`serial_ports`] 里时芯片记为 [`Chip::Other`]。
 ///
 /// Information on one port; [`Chip::Other`] when it is not in [`serial_ports`].
-pub fn serial_port(port: &str) -> SerialPortInfo {
+pub(crate) fn serial_port(port: &str) -> SerialPortInfo {
     serial_ports()
         .into_iter()
         .find(|p| p.port.eq_ignore_ascii_case(port))
@@ -344,12 +344,12 @@ fn serial_by_descriptor(ports: &[SerialPortInfo]) -> Vec<Found> {
 /// mDNS 服务类型。
 ///
 /// The mDNS service type.
-pub const MDNS_SERVICE: &str = "_xrdap._tcp.local.";
+pub(crate) const MDNS_SERVICE: &str = "_xrdap._tcp.local.";
 
 /// 局域网里经 mDNS 广播的探针，浏览 `time` 这么久。
 ///
 /// Probes advertised over mDNS on the LAN, browsing for `time`.
-pub fn mdns(time: Duration) -> Result<Vec<Found>> {
+pub(crate) fn mdns(time: Duration) -> Result<Vec<Found>> {
     let err = |e: mdns_sd::Error| crate::Error::Io(format!("mDNS：{e}"));
     let daemon = mdns_sd::ServiceDaemon::new().map_err(err)?;
     let rx = daemon.browse(MDNS_SERVICE).map_err(err)?;

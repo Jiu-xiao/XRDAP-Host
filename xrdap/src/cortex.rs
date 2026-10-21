@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::bytes::le_u32;
 use crate::dap::Probe;
-use crate::vendor::Item;
+use crate::raw::vendor::Item;
 use crate::{Error, Result};
 
 /// CPUID 寄存器的地址。
@@ -108,7 +108,7 @@ impl CoreStatus {
     /// 从 DHCSR 的值解出状态。
     ///
     /// Decode the status from a DHCSR value.
-    pub fn from_dhcsr(dhcsr: u32) -> Self {
+    pub(crate) fn from_dhcsr(dhcsr: u32) -> Self {
         let state = if dhcsr & S_LOCKUP != 0 {
             CoreState::Lockup
         } else if dhcsr & S_HALT != 0 {

@@ -17,7 +17,7 @@ use crate::watch::HostFrame;
 /// 需要时加引号：含逗号、引号或换行的字段。
 ///
 /// Quote a field when needed: fields containing a comma, a quote or a newline.
-pub fn field(s: &str) -> String {
+pub(crate) fn field(s: &str) -> String {
     if s.contains([',', '"', '\n']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {

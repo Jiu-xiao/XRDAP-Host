@@ -10,9 +10,9 @@ use eframe::egui::{self, RichText};
 use xrdap::cortex::{AfterReset, CoreStatus};
 use xrdap::share::Event as ShareEvent;
 use xrdap::types::SymbolTable;
-use xrdap::vendor::wifi::WifiStatus;
-use xrdap::vendor::ItemResult;
 use xrdap::watch::{HostFrame, Stats};
+use xrdap::ItemResult;
+use xrdap::WifiStatus;
 
 use super::model::{Csv, Found, ShareState, VarRow, Watch};
 use super::panels::{ElfLoaded, SavedWatch};
@@ -375,7 +375,7 @@ impl App {
                     w.failed = false;
                 } else {
                     w.failed = true;
-                    w.note = xrdap::vendor::item_status_text(r.status, &w.target.chain);
+                    w.note = xrdap::item_status_text(r.status, &w.target.chain);
                 }
             }
         }

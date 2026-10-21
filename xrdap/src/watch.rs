@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::dap::Probe;
-use crate::vendor::{self, Item, SubItem};
+use crate::raw::vendor::{self, Item, SubItem};
 use crate::{Error, Result};
 
 /// 让探针停止采样（SUB_CTRL stop，协议文档 3.4）。没在采样时也成功。只用来停自己开始的采样。
@@ -92,7 +92,7 @@ pub fn parse_spec(text: &str) -> Result<(String, u16, Option<u16>)> {
 /// The host clock: a monotonic clock plus the system time at its start, giving Unix
 /// microseconds.
 #[derive(Debug, Clone)]
-pub struct HostClock {
+pub(crate) struct HostClock {
     instant0: Instant,
     unix0_us: i64,
 }
@@ -121,7 +121,7 @@ impl HostClock {
     /// 单调时刻 `t` 对应的 Unix 微秒。
     ///
     /// The Unix microseconds that correspond to the monotonic instant `t`.
-    pub fn unix_us(&self, t: Instant) -> i64 {
+    pub(crate) fn unix_us(&self, t: Instant) -> i64 {
         let d = t.saturating_duration_since(self.instant0).as_micros() as i64;
         self.unix0_us + d
     }
@@ -131,7 +131,7 @@ impl HostClock {
 ///
 /// The offset from probe time to host time.
 #[derive(Debug, Clone)]
-pub struct ClockSync {
+pub(crate) struct ClockSync {
     clock: HostClock,
     recent: VecDeque<(i64, i64)>, // (往返 µs, 偏移 µs)
     window: usize,
@@ -166,7 +166,7 @@ impl ClockSync {
     /// 当前的偏移量（电脑 Unix µs = 探针 µs + 偏移）和它的误差（半个往返）。
     ///
     /// The current offset (host Unix µs = probe µs + offset) and its error (half a round trip).
-    pub fn offset(&self) -> Option<(i64, i64)> {
+    pub(crate) fn offset(&self) -> Option<(i64, i64)> {
         self.recent
             .iter()
             .min_by_key(|(rtt, _)| *rtt)
@@ -176,7 +176,7 @@ impl ClockSync {
     /// 探针时间换算成电脑的 Unix 微秒；还没有测量时为 None。
     ///
     /// Convert a probe time to host Unix microseconds; None before the first measurement.
-    pub fn to_host(&self, probe_us: u64) -> Option<i64> {
+    pub(crate) fn to_host(&self, probe_us: u64) -> Option<i64> {
         self.offset().map(|(off, _)| probe_us as i64 + off)
     }
 }
@@ -409,9 +409,10 @@ impl<'a> Sampler<'a> {
         self.stats
     }
 
-    /// 探针时间到电脑时间的偏移量和误差，见 [`ClockSync::offset`]。
+    /// 探针时间到电脑时间的偏移量和误差：在最近若干次 SUB_READ 里取往返最短的一次。
     ///
-    /// The offset from probe time to host time and its error; see [`ClockSync::offset`].
+    /// The offset from probe time to host time and its error, from the shortest round trip among
+    /// the most recent SUB_READs.
     pub fn clock_offset(&self) -> Option<(i64, i64)> {
         self.sync.offset()
     }

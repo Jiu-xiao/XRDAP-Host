@@ -4,8 +4,8 @@
 //! target memory.
 
 use crate::dap::Probe;
+use crate::raw::vendor::{self, Item};
 use crate::types::ValueType;
-use crate::vendor::{self, Item};
 use crate::{Error, Result};
 
 /// 解析好的一个变量：可以直接变成厂商条目。
@@ -84,10 +84,10 @@ impl Target {
         s + &off(self.final_off as i64)
     }
 
-    /// 读这个变量的当前值（`ty.size` 字节，小端）。探针要先连上目标（[`Probe::connect_swd`]）。
+    /// 读这个变量的当前值（`ty.size` 字节，小端）。探针要先连上目标（[`Probe::connect`]）。
     ///
     /// Read the current value (`ty.size` little-endian bytes). The probe must be connected to the
-    /// target first ([`Probe::connect_swd`]).
+    /// target first ([`Probe::connect`]).
     pub fn read(&self, probe: &mut Probe) -> Result<Vec<u8>> {
         probe.read_one(&self.item(0)).map_err(|e| self.named(e))
     }

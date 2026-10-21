@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use serialport::{ClearBuffer, FlowControl, SerialPort};
 
 use super::Transport;
-use crate::frame::{dap_from_payload, serial_request_frame, FrameParser};
+use crate::raw::frame::{dap_from_payload, serial_request_frame, FrameParser};
 use crate::{Error, Result};
 
 /// 串口探针固件的波特率。
@@ -126,7 +126,7 @@ impl Transport for SerialTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::frame::{build_frame, crc32, serial_payload, RESP_TOPIC};
+    use crate::raw::frame::{build_frame, crc32, serial_payload, RESP_TOPIC};
     use serialport::{DataBits, Parity, StopBits};
     use std::sync::{Arc, Mutex};
 

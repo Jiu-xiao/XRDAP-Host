@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use xrdap::dap::Probe;
 use xrdap::expr::{Resolver, Target};
+use xrdap::raw::vendor::{self, Item, SubItem};
 use xrdap::types::SymbolTable;
-use xrdap::vendor::{self, Item, SubItem};
 use xrdap::watch::{Lag, Sampler, Var};
 use xrdap_sim::Sim;
 
@@ -320,7 +320,7 @@ fn keeping_up_is_judged_from_counters() {
 fn tcp_transport_round_trip() {
     let (sim, _, mut syms) = setup();
     let host = sim.serve_tcp().to_string();
-    let t = xrdap::transport::tcp::TcpTransport::connect(&host, TIMEOUT).unwrap();
+    let t = xrdap::raw::transport::tcp::TcpTransport::connect(&host, TIMEOUT).unwrap();
     let mut probe = Probe::new(Box::new(t), TIMEOUT);
     assert!(probe.describe().starts_with("TCP 127.0.0.1:"));
     probe.connect(4_000_000).unwrap();

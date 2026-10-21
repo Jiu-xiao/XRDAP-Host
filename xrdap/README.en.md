@@ -126,9 +126,11 @@ probe.wifi_set("lab", "12345678")?; // the probe restarts afterwards
 
 ### Testing
 
-The library tests need no hardware. The workspace crate `xrdap-sim` simulates the probe and target from the CMSIS-DAP specification and the protocol document, and provides a `Transport` and the probe's TCP service; it is a dev-dependency only and is not published with the library.
+The library tests need no hardware. The workspace crate `xrdap-sim` simulates the probe and target from the CMSIS-DAP specification and the protocol document, and provides a `raw::transport::Transport` and the probe's TCP service; it is a dev-dependency only and is not published with the library.
 
 ## Modules
+
+`Error`, `Result`, `Item`, `ItemResult`, `item_status_text` and `WifiStatus` are at the crate root.
 
 | Module | Content |
 |---|---|
@@ -136,12 +138,11 @@ The library tests need no hardware. The workspace crate `xrdap-sim` simulates th
 | `open` | Open a probe from a spec, or pick the only one |
 | `discover` | Find probes on USB, serial ports and the LAN |
 | `dap` | `Probe`: request/response pairing, CMSIS-DAP commands, SWD/ADIv5 setup, vendor command execution |
-| `vendor` | Encoding and decoding of vendor commands 0x80 to 0x86 |
 | `expr`, `types`, `elf` | Variable expressions, types, DWARF |
 | `watch`, `csv` | Probe-side sampling, CSV records |
 | `cortex` | Core state, halt, resume, reset |
 | `share` | Share the probe as a USB/IP device or OpenOCD TCP backend |
-| `frame`, `transport` | Serial and TCP framing, three transports |
+| `raw` | Protocol layer: encoding and decoding of vendor commands 0x80 to 0x86, serial and TCP framing, three transports. It follows the protocol document and its interface is not kept stable |
 
 | Example | Purpose |
 |---|---|

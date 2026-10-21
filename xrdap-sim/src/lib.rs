@@ -24,8 +24,10 @@ use std::net::{SocketAddr, TcpListener};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-use xrdap::frame::{tcp_frame, TCP_HEADER_LEN, TCP_MAGIC, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE};
-use xrdap::transport::Transport;
+use xrdap::raw::frame::{
+    tcp_frame, TCP_HEADER_LEN, TCP_MAGIC, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
+};
+use xrdap::raw::transport::Transport;
 
 /// 模拟探针的序列号（协议文档 4.1 节的格式，占位值）。
 pub const SERIAL: &str = "XRobot-XRDAP-AABBCCDDEEFF";

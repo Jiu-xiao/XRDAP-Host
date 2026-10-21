@@ -10,9 +10,9 @@ use xrdap::dap::Probe;
 use xrdap::expr::Target;
 use xrdap::open::{self, OpenOptions};
 use xrdap::share::{Event as ShareEvent, Protocol, Share};
-use xrdap::vendor::wifi::WifiStatus;
-use xrdap::vendor::{self, Item, ItemResult};
 use xrdap::watch::{HostFrame, Sampler, Stats, Var};
+use xrdap::WifiStatus;
+use xrdap::{item_status_text, Item, ItemResult};
 
 /// 共享为 USB DAP 时的监听地址：只给本机用
 pub const SHARE_LISTEN: &str = "127.0.0.1:3240";
@@ -153,9 +153,7 @@ fn write_target(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
             Ok(v) => (true, format!("读回 {}", target.ty.format(&v))),
             Err(e) => (true, format!("读回失败：{e}")),
         },
-        Err(xrdap::Error::Item { status, .. }) => {
-            (false, vendor::item_status_text(status, &target.chain))
-        }
+        Err(xrdap::Error::Item { status, .. }) => (false, item_status_text(status, &target.chain)),
         Err(e) => (false, e.to_string()),
     };
     Event::WriteDone {
