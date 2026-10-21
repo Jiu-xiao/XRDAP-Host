@@ -2,38 +2,37 @@
 
 [中文](README.md)
 
-The host-side Rust library for XRDAP probes. It opens a probe (USB, serial, Wi-Fi), reads and writes target memory by variable name, makes the probe sample variables at a fixed period, controls the target core, configures the probe's Wi-Fi and shares the probe with other debug tools. The command-line and GUI tool `xrdap` is built on it.
+Host-side Rust library for XRDAP probes: open a probe (USB, serial, TCP), read and write target memory by variable name, sample variables on the probe at a fixed period, control the target core, configure the probe's Wi-Fi, and share the probe with other debug tools. The command-line and GUI tool `xrdap` is built on this library. The byte formats between probe and host are in the XRDAP-Core [protocol document](https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.en.md).
 
 ## Adding the dependency
 
 ```toml
 [dependencies]
-xrdap = { git = "https://github.com/Jiu-xiao/XRDAP-Host", tag = "v0.5.2" }
+xrdap = { git = "https://github.com/Jiu-xiao/XRDAP-Host", branch = "main" }
 ```
 
 | feature | Default | Content |
 |---|---|---|
-| `usb` | on | CMSIS-DAP v2 USB transport |
-| `elf` | on | Reads ELF symbols and DWARF types, access by variable name |
-| `discover` | on | Probe discovery: USB, serial (asks each port for DAP_Info), LAN (mDNS) |
-| `fake` | off | In-process simulated probe, for tests and demos |
+| `elf` | on | Read ELF symbols and DWARF types for access by variable name |
 
-On Linux, building `usb` and `discover` needs `libudev-dev`.
+Building on Linux needs `libudev-dev` (USB and serial port enumeration).
 
-## Usage by scenario
+## Usage by task
 
-Each example below has a full version in `examples/`. Run it from the repository root, for example `cargo run -p xrdap --example read_write -- app.elf motor.kp 1.5`. The probe is chosen by the environment variable `XRDAP_PROBE` (same form as `xrdap -p`). If it is not set, the only probe is selected automatically.
+Every example below has a complete version in `examples/`; run it from the repository root, e.g. `cargo run -p xrdap --example read_write -- app.elf motor.kp 1.5`. The examples take the probe from the environment variable `XRDAP_PROBE` (same syntax as `xrdap -p`) and pick the only probe when it is not set.
 
 ### Opening a probe, reading and writing variables
 
 ```rust
+use xrdap::addr::Spec;
 use xrdap::expr::Resolver;
 use xrdap::open::{open, OpenOptions};
 
 fn main() -> xrdap::Result<()> {
-    // None: pick the only probe automatically; Some("COM7"), Some("xrdap-93ef1c.local"), Some("93EF1C") also work
-    let mut probe = open(None, &OpenOptions::default())?;
-    probe.connect_swd(4_000_000)?;
+    // Spec::Auto picks the only probe; Spec::parse("COM3"), Spec::parse("192.0.2.10")
+    // or Spec::parse("DDEEFF") also work
+    let mut probe = open(&Spec::Auto, &OpenOptions::default())?;
+    xrdap::watch::connect(&mut probe, 4_000_000)?;
 
     let mut syms = xrdap::elf::load(std::path::Path::new("app.elf"))?;
     let mut resolver = Resolver::new(&mut syms);
@@ -44,112 +43,111 @@ fn main() -> xrdap::Result<()> {
 }
 ```
 
-`Resolver::resolve` accepts forms such as `state.speed`, `motor[1].pid->out`, `*ptr`, `(uint32_t***)p` and `0x20000010:u32`. `resolve_all` expands structures and arrays into members. Full example: `read_write`.
+`open` is the only way to open a probe; the syntax is in the `addr` module. Automatic selection and serial-number lookup look at USB, the LAN and Espressif USB ports recognised from their USB descriptor, without opening other serial ports; serial ports are opened with DTR and RTS deasserted. `watch::connect` connects the target and first stops sampling left running by an earlier session. `Resolver::resolve` accepts forms such as `state.speed`, `motor[1].pid->out`, `*ptr`, `(uint32_t***)p` and `0x20000010:u32`; `resolve_all` expands structs and arrays into members. A failed access returns `Error::Item` with the item status and the variable name. Full example: `read_write`.
 
-### Sampling periodically on the probe
+### Sampling on the probe
 
 ```rust
-use xrdap::vendor::SubItem;
-use xrdap::watch::Sampler;
+use xrdap::watch::{Sampler, Var};
 
-// probe: a Probe already connected to the target; targets: variables from resolve
-let items = targets
+// probe: a Probe with the target connected; targets: variables from resolve
+let vars = targets
     .iter()
     .enumerate()
-    .map(|(i, t)| SubItem { item: t.item(i as u16), div: 1, phase: 0 })
+    .map(|(i, t)| Var { item: t.item(i as u16), div: 1, phase: None })
     .collect();
-// Period 1000 µs; if the probe cannot keep up it returns StartError::Rejected, which carries the estimated time per frame
-let mut sampler = Sampler::start(probe, items, 1000, false)
+// Period 1000 µs; when the probe estimates it cannot keep up, StartError::Rejected carries
+// the estimated frame time
+let mut sampler = Sampler::start(probe, vars, 1000, false)
     .map_err(|e| xrdap::Error::protocol(format!("{e:?}")))?;
 for _ in 0..100 {
     let (frames, _remaining) = sampler.poll()?;
     for f in frames {
         println!("{} µs: {:?}", f.probe_us, f.values);
     }
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::thread::sleep(sampler.poll_interval());
 }
 sampler.stop()?;
 ```
 
-Each frame carries the probe timestamp and the value of each variable (`None` when not due, `Some(None)` when the read failed). `div` and `phase` make slow variables sample only every few ticks. `vendor::assign_phases` staggers the phases of the variables to even out the bytes read per tick. Full example: `sample`.
+Each frame carries the probe timestamp and one value per variable (`None` when not due, `Some(None)` when the read failed). `div` samples slow variables every few ticks; divided variables with `phase` None are staggered by `Sampler::start` to even out the bytes read per tick. With more variables than the item limit reported in the probe's INFO, `Sampler::start` returns an error before sending SUB_SET. Full example: `sample`.
 
 ### Sharing the probe with Keil, pyOCD, probe-rs, OpenOCD
 
 ```rust
+use xrdap::addr::Spec;
 use xrdap::open::{open, OpenOptions};
 use xrdap::share::{Protocol, Share};
 
 fn main() -> xrdap::Result<()> {
-    let probe = open(Some("COM7"), &OpenOptions::default())?;
+    let probe = open(&Spec::parse("COM3"), &OpenOptions::default())?;
     let share = Share::start(probe, Protocol::Usbip, "127.0.0.1:3240", |e| println!("{e:?}"))
         .map_err(|(_, e)| e)?;
-    println!("挂载：{}", share.attach_hint()); // usbip attach -r 127.0.0.1 -b 1-1
+    println!("attach: {}", share.attach_hint()); // usbip attach -r 127.0.0.1 -b 1-1
     std::io::stdin().read_line(&mut String::new()).ok();
-    let _probe = share.stop(); // the attached side sees the device unplugged; the probe is handed back
+    let _probe = share.stop(); // the attached side sees the device unplugged; the probe comes back
     Ok(())
 }
 ```
 
-`Protocol::Usbip` emulates the probe as a USB CMSIS-DAP v2 device. After attaching with a USB/IP client, all tools can use it. `Protocol::OpenOcd` is OpenOCD's CMSIS-DAP TCP backend. Sharing runs on a background thread, and the probe belongs to it until `stop()`. Full example: `share`.
+`Protocol::Usbip` presents the probe as a USB CMSIS-DAP v2 device that every tool can use once a USB/IP client attaches it; `Protocol::OpenOcd` is OpenOCD's CMSIS-DAP TCP backend. Sharing runs in a background thread that owns the probe until `stop()`. DAP_TransferAbort has no response per the CMSIS-DAP specification and gets none while sharing either; when the probe fails, the current client is disconnected and the reason is reported through the callback. Full example: `share`.
 
 ### Finding probes
 
 ```rust
-let probes = xrdap::discover::group(xrdap::discover::find(&Default::default()));
-print!("{}", xrdap::discover::table(&probes));
+use xrdap::discover::{find, group, Options};
+
+for p in group(find(&Options::default())) {
+    for link in &p.links {
+        println!("{:?}  {}  -p {}", p.serial, link.addr, link.addr.spec());
+    }
+}
 ```
 
-It searches USB, serial and the LAN in about 1.5 seconds and merges the connections of one probe (by serial number). Full example: `list`.
+`find` looks for USB probes, probes advertised over mDNS on the LAN and Espressif USB ports recognised from their USB descriptor, for about 1.5 s; the connections of one probe (by serial number) are merged into one entry. With `Options::ask_serial` it also opens the other candidate serial ports and asks DAP_Info. `discover::serial_ports` only reads the system's port list and USB descriptors. Full example: `list`.
 
-### Controlling the core, configuring Wi-Fi
+### Core control and Wi-Fi
 
 ```rust
 use xrdap::cortex::{self, AfterReset};
 
-// probe: a Probe already connected to the target
+// probe: a Probe with the target connected
 cortex::halt(probe)?;
 cortex::reset(probe, AfterReset::Run)?;
 println!("{}", cortex::status(probe)?.state.text());
 
-println!("{}", xrdap::wifi::status(probe)?.describe());
-xrdap::wifi::set(probe, "lab", "password")?; // the probe restarts afterwards
+println!("{}", probe.wifi_status()?.describe());
+probe.wifi_set("lab", "12345678")?; // the probe restarts afterwards
 ```
 
-Full example: `wifi`.
+`cortex::reset` changes DEMCR.VC_CORERESET for the reset only and restores DEMCR at the end, on success or failure. Full example: `wifi`.
 
-### Testing without hardware
+### Testing
 
-With the `fake` feature, `xrdap::fake::FakeProbe` simulates the probe and target in process (memory, DHCSR, sampling). It can fill memory from an ELF:
-
-```rust
-let fake = xrdap::fake::FakeProbe::new();
-let probe = xrdap::dap::Probe::new(Box::new(fake.clone()));
-```
+The library tests need no hardware. The workspace crate `xrdap-sim` simulates the probe and target from the CMSIS-DAP specification and the protocol document, and provides a `Transport` and the probe's TCP service; it is a dev-dependency only and is not published with the library.
 
 ## Modules
 
 | Module | Content |
 |---|---|
-| `open` | Open a probe from one string, or choose automatically |
-| `discover` | Find probes on USB, serial and the LAN |
-| `dap` | `Probe`: CMSIS-DAP commands, SWD/ADIv5 initialization, vendor commands, `identity()` |
+| `addr` | Probe spec: one string telling which probe and how to reach it |
+| `open` | Open a probe from a spec, or pick the only one |
+| `discover` | Find probes on USB, serial ports and the LAN |
+| `dap` | `Probe`: request/response pairing, CMSIS-DAP commands, SWD/ADIv5 setup, vendor command execution |
+| `vendor` | Encoding and decoding of vendor commands 0x80 to 0x86 |
 | `expr`, `types`, `elf` | Variable expressions, types, DWARF |
-| `watch`, `csv` | Probe-side sampling, CSV recording |
+| `watch`, `csv` | Probe-side sampling, CSV records |
 | `cortex` | Core state, halt, resume, reset |
-| `wifi` | Query, set and clear the probe's Wi-Fi |
-| `share` | Share the probe as a USB/IP device or an OpenOCD TCP backend |
-| `vendor`, `frame`, `transport` | Vendor command encoding, serial and TCP frames, the three transports |
-| `fake` | Simulated probe (feature `fake`) |
+| `share` | Share the probe as a USB/IP device or OpenOCD TCP backend |
+| `frame`, `transport` | Serial and TCP framing, three transports |
 
-The byte formats of the vendor commands are in [docs/protocol.en.md of XRDAP-Core](https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.en.md).
-
-| Example | Action |
+| Example | Purpose |
 |---|---|
-| `list` | List probes on USB, serial and the LAN |
+| `list` | List the probes found, without opening serial ports |
 | `read_write` | Read by variable name; with a third argument, write first and then read |
-| `sample` | Sample a few variables at a 1 ms period for 1 second, print and summarize |
+| `sample` | Sample a few variables at 1 ms for 1 s, print them and the statistics |
 | `wifi` | Query or save the probe's Wi-Fi |
-| `share` | Share the probe as a USB/IP device; press Enter to stop |
+| `share` | Share the probe as a USB/IP device until Enter |
 
 ## License
 

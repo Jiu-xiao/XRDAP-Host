@@ -4,7 +4,7 @@
 //! cargo run -p xrdap --example sample -- app.elf motor.speed motor.current
 //! ```
 //!
-//! 探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap --probe`），不设时自动选唯一的那块。
+//! 探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap -p`），不设时自动选唯一的那块。
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
     let mut probe = open(&spec, &OpenOptions::default())?;
-    probe.connect_swd(4_000_000)?;
+    xrdap::watch::connect(&mut probe, 4_000_000)?;
 
     // 每拍都采（div 1），周期 1 ms；探针拒绝时会给出估计的单帧耗时
     let vars = targets

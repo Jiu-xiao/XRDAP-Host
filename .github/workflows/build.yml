@@ -48,8 +48,8 @@ jobs:
       - name: 测试
         run: cargo test --release --workspace --all-features
 
-      - name: 库只开默认 feature 也能编译
-        run: cargo build --release -p xrdap
+      - name: 库不带 elf feature 也能编译
+        run: cargo build --release -p xrdap --no-default-features
 
       - name: 编译 xrdap（图形界面和命令行在同一个可执行文件里）
         run: cargo build --release -p xrdap-tool
