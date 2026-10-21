@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::dap::{Probe, TargetInfo};
-use crate::vendor::{self, SubItem, SubSetResult};
+use crate::vendor::{self, Item, SubItem, SubSetResult};
 use crate::{Error, Result};
 
 /// 让探针停止采样（SUB_CTRL stop，协议文档 3.4）。没在采样时也成功。
@@ -183,6 +183,16 @@ pub struct Stats {
     pub failed_values: u64,
 }
 
+/// 要采样的一个条目：每 `div` 拍采一次；`phase` 为 None 时由 [`Sampler::start`] 错开相位。
+///
+/// One item to sample every `div` ticks; with `phase` None, [`Sampler::start`] staggers it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Var {
+    pub item: Item,
+    pub div: u16,
+    pub phase: Option<u16>,
+}
+
 /// SUB_SET 没有成功。
 #[derive(Debug)]
 pub enum StartError {
@@ -213,16 +223,39 @@ pub struct Sampler<'a> {
     stats: Stats,
     running: bool,
     max_read: u16,
+    ring_bytes: u32,
 }
 
 impl<'a> Sampler<'a> {
-    /// 配置并开始采样。探针还在采样（上次没停）时先停掉再配置。
+    /// 配置并开始采样：条目数不超过探针 INFO 报告的上限，没给相位的分频条目错开相位
+    /// （[`vendor::assign_phases`]）。探针还在采样（上次没停）时先停掉再配置。
+    ///
+    /// Configure and start sampling: at most the probe's INFO item limit, unphased divided
+    /// items are staggered. Sampling left running by an earlier session is stopped first.
     pub fn start(
         probe: &'a mut Probe,
-        items: Vec<SubItem>,
+        vars: Vec<Var>,
         period_us: u32,
         stop_on_full: bool,
     ) -> std::result::Result<Self, StartError> {
+        let info = probe.vendor_info()?;
+        if vars.len() > info.max_items as usize {
+            return Err(StartError::Other(Error::usage(format!(
+                "探针一次最多采样 {} 个变量，现在有 {} 个",
+                info.max_items,
+                vars.len()
+            ))));
+        }
+        let fixed: Vec<bool> = vars.iter().map(|v| v.phase.is_some()).collect();
+        let mut items: Vec<SubItem> = vars
+            .into_iter()
+            .map(|v| SubItem {
+                item: v.item,
+                div: v.div,
+                phase: v.phase.unwrap_or(0),
+            })
+            .collect();
+        vendor::assign_phases(&mut items, &fixed);
         let flags = u8::from(stop_on_full);
         let mut setup = probe.sub_set(period_us, flags, &items)?;
         if setup.status == vendor::STATUS_STATE {
@@ -253,6 +286,7 @@ impl<'a> Sampler<'a> {
             stats: Stats::default(),
             running: false,
             max_read,
+            ring_bytes: info.ring_bytes,
         };
         s.probe.sub_ctrl(vendor::SUB_START)?;
         s.running = true;
@@ -331,9 +365,9 @@ impl<'a> Sampler<'a> {
     }
 
     /// 两次 SUB_READ 之间建议等多久：缓冲能存的时间的 1/4，不超过 50 ms。
-    pub fn poll_interval(&self, ring_bytes: u32) -> Duration {
+    pub fn poll_interval(&self) -> Duration {
         let per_tick = vendor::average_bytes_per_tick(&self.items).max(1.0);
-        let fill_us = ring_bytes as f64 / per_tick * self.period_us as f64;
+        let fill_us = self.ring_bytes as f64 / per_tick * self.period_us as f64;
         Duration::from_micros((fill_us / 4.0).clamp(1000.0, 50_000.0) as u64)
     }
 

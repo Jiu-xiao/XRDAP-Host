@@ -8,7 +8,7 @@ use xrdap::dap::Probe;
 use xrdap::expr::{Resolver, Target};
 use xrdap::types::SymbolTable;
 use xrdap::vendor::{self, Item, SubItem};
-use xrdap::watch::{Sampler, StartError};
+use xrdap::watch::{Sampler, StartError, Var};
 use xrdap_sim::Sim;
 
 const TIMEOUT: Duration = Duration::from_secs(2);
@@ -171,6 +171,19 @@ fn sub(t: &Target, id: u16, div: u16, phase: u16) -> SubItem {
     }
 }
 
+/// 固定相位的采样条目。
+fn var(s: &SubItem) -> Var {
+    Var {
+        item: s.item.clone(),
+        div: s.div,
+        phase: Some(s.phase),
+    }
+}
+
+fn vars(list: &[SubItem]) -> Vec<Var> {
+    list.iter().map(var).collect()
+}
+
 /// 协议文档 3.5：第 k 拍的目标时间是开始时间 + k × 周期；`(k + phase) % div == 0` 的条目到期。
 #[test]
 fn sampling_with_divided_items() {
@@ -196,7 +209,7 @@ fn sampling_with_divided_items() {
     ];
     vendor::assign_phases(&mut list, &[false; 5]);
     assert_ne!(list[3].phase, list[4].phase);
-    let mut s = Sampler::start(&mut probe, list.clone(), 1000, false).unwrap();
+    let mut s = Sampler::start(&mut probe, vars(&list), 1000, false).unwrap();
     // 所有条目都到期时一帧的字节数：帧头 10 + 位图 1 + 各条目的值
     assert_eq!(s.setup.max_frame_bytes, Some(10 + 1 + 4 + 4 + 8 + 1 + 4));
     let mut frames = Vec::new();
@@ -266,7 +279,7 @@ fn sampling_rejected_reports_estimate() {
         sub(&t[1], 1, 1, 0),
         sub(&t[2], 2, 1, 0),
     ];
-    match Sampler::start(&mut probe, list, 20, false) {
+    match Sampler::start(&mut probe, vars(&list), 20, false) {
         Err(StartError::Rejected(r)) => {
             assert_eq!(r.status, vendor::STATUS_RESOURCE);
             let est = r.est_frame_us.unwrap();
@@ -287,7 +300,7 @@ fn sampling_counters_and_gaps() {
     sim.set_ring_bytes(400);
     let t = targets(&mut syms, &["counter", "*null_p1"]);
     let list = vec![sub(&t[0], 0, 1, 0), sub(&t[1], 1, 1, 0)];
-    let mut s = Sampler::start(&mut probe, list, 500, false).unwrap();
+    let mut s = Sampler::start(&mut probe, vars(&list), 500, false).unwrap();
     std::thread::sleep(Duration::from_millis(100));
     let mut frames = Vec::new();
     loop {
@@ -450,4 +463,36 @@ fn item_errors_are_typed_and_checked_locally() {
         Err(Error::Usage(_))
     ));
     assert_eq!(sim.requests().len(), before);
+}
+
+/// 条目数超过探针 INFO 报告的上限时在本地报错，不发 SUB_SET；没给相位的分频条目被错开。
+#[test]
+fn sampler_checks_item_limit_and_spreads_phases() {
+    let (sim, mut probe, mut syms) = setup();
+    probe.connect_swd(4_000_000).unwrap();
+    let counter = targets(&mut syms, &["counter"]).remove(0);
+    let many: Vec<Var> = (0..=xrdap_sim::MAX_ITEMS as u16)
+        .map(|i| Var {
+            item: counter.item(i),
+            div: 1,
+            phase: None,
+        })
+        .collect();
+    let before = sim.requests().len();
+    assert!(matches!(
+        Sampler::start(&mut probe, many, 1000, false),
+        Err(StartError::Other(xrdap::Error::Usage(_)))
+    ));
+    assert!(sim.requests()[before..]
+        .iter()
+        .all(|r| r[0] != vendor::CMD_SUB_SET));
+    let two = (0..2)
+        .map(|i| Var {
+            item: counter.item(i),
+            div: 10,
+            phase: None,
+        })
+        .collect();
+    let s = Sampler::start(&mut probe, two, 1000, false).unwrap();
+    assert_ne!(s.items()[0].phase, s.items()[1].phase);
 }

@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
-use xrdap::vendor::{self, SubItem};
-use xrdap::watch::{HostFrame, Sampler, StartError};
+
+use xrdap::watch::{HostFrame, Sampler, StartError, Var};
 
 use super::text::{display_width, rjust};
 use super::CliResult;
@@ -93,24 +93,18 @@ pub fn cmd_watch(
     err: &mut dyn Write,
     stop: &AtomicBool,
 ) -> CliResult {
-    if specs.len() > 32 {
-        return Err(format!("一次最多采样 32 个变量，现在有 {} 个", specs.len()).into());
-    }
-    let mut items: Vec<SubItem> = specs
+    let vars = specs
         .iter()
         .enumerate()
-        .map(|(i, (t, div, phase))| SubItem {
+        .map(|(i, (t, div, phase))| Var {
             item: t.item(i as u16),
             div: *div,
-            phase: phase.unwrap_or(0),
+            phase: *phase,
         })
         .collect();
-    let fixed: Vec<bool> = specs.iter().map(|(_, _, p)| p.is_some()).collect();
-    vendor::assign_phases(&mut items, &fixed);
     let targets: Vec<Target> = specs.into_iter().map(|(t, _, _)| t).collect();
-    let ring_bytes = probe.vendor_info().map(|i| i.ring_bytes).unwrap_or(16384);
 
-    let mut sampler = match Sampler::start(probe, items, opts.period_us, opts.stop_on_full) {
+    let mut sampler = match Sampler::start(probe, vars, opts.period_us, opts.stop_on_full) {
         Ok(s) => s,
         Err(StartError::Rejected(r)) => {
             let est = r.est_frame_us.unwrap_or(0);
@@ -167,7 +161,7 @@ pub fn cmd_watch(
     output.header()?;
 
     let started = Instant::now();
-    let interval = sampler.poll_interval(ring_bytes);
+    let interval = sampler.poll_interval();
     let mut last_status = Instant::now();
     let result: CliResult = (|| {
         while !stop.load(Ordering::SeqCst) {

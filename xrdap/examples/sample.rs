@@ -12,8 +12,7 @@ use std::time::{Duration, Instant};
 use xrdap::addr::Spec;
 use xrdap::expr::Resolver;
 use xrdap::open::{open, OpenOptions};
-use xrdap::vendor::SubItem;
-use xrdap::watch::Sampler;
+use xrdap::watch::{Sampler, Var};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
@@ -32,16 +31,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     probe.connect_swd(4_000_000)?;
 
     // 每拍都采（div 1），周期 1 ms；探针拒绝时会给出估计的单帧耗时
-    let items = targets
+    let vars = targets
         .iter()
         .enumerate()
-        .map(|(i, t)| SubItem {
+        .map(|(i, t)| Var {
             item: t.item(i as u16),
             div: 1,
-            phase: 0,
+            phase: None,
         })
         .collect();
-    let mut sampler = Sampler::start(&mut probe, items, 1000, false)
+    let mut sampler = Sampler::start(&mut probe, vars, 1000, false)
         .map_err(|e| format!("开始采样失败：{e:?}"))?;
 
     let end = Instant::now() + Duration::from_secs(1);
