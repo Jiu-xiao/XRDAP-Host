@@ -1,12 +1,15 @@
-//! 界面用到的数据类型：连接方式、监视项、变量表的行、CSV 录制、共享状态。
+//! 界面用到的数据类型：找到的探针、监视项、变量表的行、CSV 录制、共享状态。
 
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{self, BufWriter, Write};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{channel, Sender};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use eframe::egui::Color32;
+use xrdap::discover::{ProbeEntry, SerialPortInfo};
 use xrdap::expr::Target;
 
 use super::series::Series;
@@ -15,35 +18,11 @@ use super::series::Series;
 pub(super) const KEEP_S: f64 = 120.0;
 pub(super) const MAX_POINTS: usize = 500_000;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Kind {
-    Usb,
-    Serial,
-    Tcp,
-}
-
-impl Kind {
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            Kind::Usb => "USB",
-            Kind::Serial => "串口",
-            Kind::Tcp => "TCP",
-        }
-    }
-    pub(super) fn key(self) -> &'static str {
-        match self {
-            Kind::Usb => "usb",
-            Kind::Serial => "serial",
-            Kind::Tcp => "tcp",
-        }
-    }
-    pub(super) fn from_key(s: &str) -> Self {
-        match s {
-            "serial" => Kind::Serial,
-            "tcp" => Kind::Tcp,
-            _ => Kind::Usb,
-        }
-    }
+/// 后台查找的结果：找到的探针，和没有打开检查的其他串口。
+#[derive(Default)]
+pub(super) struct Found {
+    pub(super) probes: Vec<ProbeEntry>,
+    pub(super) others: Vec<SerialPortInfo>,
 }
 
 pub(super) struct Watch {
@@ -105,12 +84,52 @@ pub(super) fn is_system_var(name: &str, unit: &str) -> bool {
         || UNIT_MARKS.iter().any(|m| u.contains(m))
 }
 
+/// 正在录制的 CSV。一行一行交给写文件的线程，界面线程不碰文件。
 pub(super) struct Csv {
     pub(super) path: PathBuf,
-    pub(super) out: BufWriter<File>,
     pub(super) rows: u64,
     /// 从这个电脑时间（Unix 微秒）起的帧才写。选文件时对话框挡住界面，期间积压的帧不算
     pub(super) start_unix_us: i64,
+    lines: Sender<String>,
+    writer: JoinHandle<io::Result<()>>,
+}
+
+impl Csv {
+    /// 开始录制：写文件的线程创建文件、先写表头。
+    pub(super) fn start(path: &Path, header: String, start_unix_us: i64) -> Self {
+        let (lines, rx) = channel::<String>();
+        let file = path.to_path_buf();
+        let writer = std::thread::spawn(move || {
+            let mut out = BufWriter::new(File::create(&file)?);
+            writeln!(out, "{header}")?;
+            for line in rx {
+                writeln!(out, "{line}")?;
+            }
+            out.flush()
+        });
+        Self {
+            path: path.to_path_buf(),
+            rows: 0,
+            start_unix_us,
+            lines,
+            writer,
+        }
+    }
+
+    /// 交一行出去；写文件的线程已经因为出错退出时返回 false。
+    pub(super) fn push(&mut self, line: String) -> bool {
+        self.rows += 1;
+        self.lines.send(line).is_ok()
+    }
+
+    /// 结束录制，等写文件的线程写完，返回写了多少行或出错的原因。
+    pub(super) fn finish(self) -> io::Result<u64> {
+        drop(self.lines);
+        match self.writer.join() {
+            Ok(r) => r.map(|()| self.rows),
+            Err(_) => Err(io::Error::other("写文件的线程异常退出")),
+        }
+    }
 }
 
 /// 共享为 USB DAP 的界面状态。

@@ -1,8 +1,5 @@
 //! 中间上方：采样周期、开始停止、读一次、CSV 录制、曲线窗口和采样统计。
 
-use std::fs::File;
-use std::io::{BufWriter, Write};
-
 use eframe::egui::{self, RichText};
 use xrdap::cortex::CoreState;
 
@@ -66,30 +63,16 @@ impl App {
                 .filter_map(|id| self.watches.iter().find(|w| w.id == *id))
                 .map(|w| w.target.name.as_str()),
         );
-        let res = File::create(&path).and_then(|f| {
-            let mut out = BufWriter::new(f);
-            writeln!(out, "{line}")?;
-            Ok(out)
-        });
-        match res {
-            Ok(out) => {
-                self.log(format!("开始录制 {}", path.display()));
-                self.csv = Some(Csv {
-                    path,
-                    out,
-                    rows: 0,
-                    start_unix_us,
-                });
-            }
-            Err(e) => self.log(format!("打开 {} 失败：{e}", path.display())),
-        }
+        self.log(format!("开始录制 {}", path.display()));
+        self.csv = Some(Csv::start(&path, line, start_unix_us));
     }
 
     pub(crate) fn stop_csv(&mut self) {
-        if let Some(mut c) = self.csv.take() {
-            match c.out.flush() {
-                Ok(()) => self.log(format!("录制结束：{}，{} 行", c.path.display(), c.rows)),
-                Err(e) => self.log(format!("写 {} 失败：{e}", c.path.display())),
+        if let Some(c) = self.csv.take() {
+            let path = c.path.clone();
+            match c.finish() {
+                Ok(rows) => self.log(format!("录制结束：{}，{rows} 行", path.display())),
+                Err(e) => self.log(format!("写 {} 失败：{e}", path.display())),
             }
         }
     }
@@ -112,7 +95,11 @@ impl App {
                     self.send(Cmd::Stop);
                 }
             } else {
-                let can = self.usable() && !self.starting && !self.watches.is_empty();
+                // 读 ELF 期间监视表还没定下来
+                let can = self.usable()
+                    && !self.starting
+                    && !self.watches.is_empty()
+                    && self.elf_loading.is_none();
                 start = ui
                     .add_enabled(can, egui::Button::new("▶ 开始采样"))
                     .clicked();

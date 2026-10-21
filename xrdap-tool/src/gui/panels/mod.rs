@@ -6,3 +6,5 @@ mod elf_vars;
 mod plot_panel;
 mod watches;
 mod wifi;
+
+pub(crate) use elf_vars::{ElfLoaded, SavedWatch};

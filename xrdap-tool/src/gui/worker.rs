@@ -4,24 +4,23 @@
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
-use xrdap::addr::{Addr, Spec};
+use xrdap::addr::Spec;
 use xrdap::cortex::{self, AfterReset, CoreStatus};
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
 use xrdap::open::{self, OpenOptions};
+use xrdap::share::{Event as ShareEvent, Protocol, Share};
 use xrdap::vendor::wifi::WifiStatus;
 use xrdap::vendor::{self, Item, ItemResult};
 use xrdap::watch::{HostFrame, Sampler, StartError, Stats, Var};
 
-use xrdap::share::{Event as ShareEvent, Protocol, Share};
-
 /// 共享为 USB DAP 时的监听地址：只给本机用
-const SHARE_LISTEN: &str = "127.0.0.1:3240";
+pub const SHARE_LISTEN: &str = "127.0.0.1:3240";
 
-/// 连哪块探针：USB、串口或 TCP；`baud` 只对串口有用
+/// 连哪块探针：探针说明（和命令行的 -p 一样，空为自动选择），`baud` 只对串口有用。
 #[derive(Debug, Clone)]
 pub struct Conn {
-    pub addr: Addr,
+    pub spec: String,
     pub baud: Option<u32>,
 }
 
@@ -62,13 +61,27 @@ pub enum CoreCmd {
     Reset(AfterReset),
 }
 
+/// 失败的是哪一类操作：界面只结束这一类“进行中”的状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    Connect,
+    Read,
+    Sample,
+    Share,
+    Wifi,
+}
+
 pub enum Event {
     Connected {
         probe: String,
         target: String,
     },
     Disconnected,
-    Error(String),
+    /// 一个操作失败；`msg` 直接给用户看
+    Failed {
+        op: Op,
+        msg: String,
+    },
     ReadDone(u64, Vec<ItemResult>),
     WriteDone {
         name: String,
@@ -109,6 +122,14 @@ pub enum Event {
     },
 }
 
+fn failed(op: Op, msg: impl Into<String>) -> Event {
+    Event::Failed {
+        op,
+        msg: msg.into(),
+    }
+}
+
+const NOT_CONNECTED: &str = "还没有连接";
 const TIMEOUT: Duration = Duration::from_millis(2000);
 
 fn open(conn: &Conn) -> Result<Probe, String> {
@@ -117,7 +138,7 @@ fn open(conn: &Conn) -> Result<Probe, String> {
         baud: conn.baud,
         ..OpenOptions::default()
     };
-    open::open(&Spec::Addr(conn.addr.clone()), &opts).map_err(|e| e.to_string())
+    open::open(&Spec::parse(&conn.spec), &opts).map_err(|e| e.to_string())
 }
 
 fn items_of(targets: &[Target]) -> Vec<Item> {
@@ -144,6 +165,13 @@ fn write_target(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
         name: target.name.clone(),
         ok,
         text,
+    }
+}
+
+fn read_targets(probe: &mut Probe, tag: u64, targets: &[Target]) -> Event {
+    match probe.read(&items_of(targets)) {
+        Ok(r) => Event::ReadDone(tag, r),
+        Err(e) => failed(Op::Read, format!("读取失败：{e}")),
     }
 }
 
@@ -175,7 +203,7 @@ fn wifi_apply(probe: &mut Probe, change: &WifiChange, send: &impl Fn(Event)) -> 
             true
         }
         Err(e) => {
-            send(Event::Error(format!("配置 Wi-Fi 失败：{e}")));
+            send(failed(Op::Wifi, format!("配置 Wi-Fi 失败：{e}")));
             false
         }
     }
@@ -188,7 +216,13 @@ fn poll_core(probe: &mut Probe) -> Event {
     }
 }
 
-pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send + 'static) {
+/// 后台线程的主循环，直到界面关掉命令通道。`share_listen` 是共享为 USB DAP 时的监听地址。
+pub fn run(
+    rx: Receiver<Cmd>,
+    tx: Sender<Event>,
+    wake: impl Fn() + Clone + Send + 'static,
+    share_listen: &str,
+) {
     // 采样帧和统计不唤醒界面：界面采样时自己按固定帧率刷新
     let share_notify = {
         let (tx, wake) = (tx.clone(), wake.clone());
@@ -235,7 +269,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                     let mut p = s.stop();
                     send(Event::ShareStopped);
                     if let Err(e) = xrdap::watch::connect(&mut p, clock) {
-                        send(Event::Error(format!("重新连接目标失败：{e}")));
+                        send(failed(Op::Share, format!("重新连接目标失败：{e}")));
                     }
                     send(poll_core(&mut p));
                     probe = Some(p);
@@ -250,9 +284,18 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                     share = Some(s);
                     continue;
                 }
-                _ => {
+                other => {
                     share = Some(s);
-                    send(Event::Error("正在共享为 USB DAP，先停止共享".into()));
+                    let msg = "正在共享为 USB DAP，先停止共享";
+                    send(match other {
+                        Cmd::Core(c) => Event::Core {
+                            cmd: Some(c),
+                            status: Err(msg.into()),
+                        },
+                        Cmd::WifiStatus | Cmd::WifiApply(_) => failed(Op::Wifi, msg),
+                        Cmd::Start { .. } => failed(Op::Sample, msg),
+                        _ => failed(Op::Read, msg),
+                    });
                     continue;
                 }
             }
@@ -261,7 +304,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
             Cmd::Share(false) => {}
             Cmd::Share(true) => match probe.take() {
                 Some(p) => {
-                    match Share::start(p, Protocol::Usbip, SHARE_LISTEN, share_notify.clone()) {
+                    match Share::start(p, Protocol::Usbip, share_listen, share_notify.clone()) {
                         Ok(s) => {
                             send(Event::Sharing {
                                 attach: s.attach_hint(),
@@ -271,11 +314,11 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                         }
                         Err((p, e)) => {
                             probe = Some(p);
-                            send(Event::Error(e.to_string()));
+                            send(failed(Op::Share, e.to_string()));
                         }
                     }
                 }
-                None => send(Event::Error("还没有连接".into())),
+                None => send(failed(Op::Share, NOT_CONNECTED)),
             },
             Cmd::Connect(conn, c) => {
                 probe = None;
@@ -298,7 +341,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                         send(wifi_status(&mut p));
                         probe = Some(p);
                     }
-                    Err(e) => send(Event::Error(e)),
+                    Err(e) => send(failed(Op::Connect, e)),
                 }
             }
             Cmd::Disconnect => {
@@ -306,15 +349,16 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                 send(Event::Disconnected);
             }
             Cmd::Read(tag, targets) => match probe.as_mut() {
-                Some(p) => match p.read(&items_of(&targets)) {
-                    Ok(r) => send(Event::ReadDone(tag, r)),
-                    Err(e) => send(Event::Error(format!("读取失败：{e}"))),
-                },
-                None => send(Event::Error("还没有连接".into())),
+                Some(p) => send(read_targets(p, tag, &targets)),
+                None => send(failed(Op::Read, NOT_CONNECTED)),
             },
             Cmd::Write(target, bytes) => match probe.as_mut() {
                 Some(p) => send(write_target(p, &target, &bytes)),
-                None => send(Event::Error("还没有连接".into())),
+                None => send(Event::WriteDone {
+                    name: target.name,
+                    ok: false,
+                    text: NOT_CONNECTED.into(),
+                }),
             },
             Cmd::Stop => send(Event::Stopped),
             Cmd::PollCore => {
@@ -324,11 +368,14 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
             }
             Cmd::Core(c) => match probe.as_mut() {
                 Some(p) => send(core_cmd(p, c)),
-                None => send(Event::Error("还没有连接".into())),
+                None => send(Event::Core {
+                    cmd: Some(c),
+                    status: Err(NOT_CONNECTED.into()),
+                }),
             },
             Cmd::WifiStatus => match probe.as_mut() {
                 Some(p) => send(wifi_status(p)),
-                None => send(Event::Error("还没有连接".into())),
+                None => send(Event::WifiStatus(Err(NOT_CONNECTED.into()))),
             },
             Cmd::WifiApply(change) => match probe.as_mut() {
                 Some(p) => {
@@ -338,7 +385,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                         send(Event::Disconnected);
                     }
                 }
-                None => send(Event::Error("还没有连接".into())),
+                None => send(failed(Op::Wifi, NOT_CONNECTED)),
             },
             Cmd::Start {
                 targets,
@@ -347,7 +394,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                 stop_on_full,
             } => {
                 let Some(p) = probe.as_mut() else {
-                    send(Event::Error("还没有连接".into()));
+                    send(failed(Op::Sample, NOT_CONNECTED));
                     continue;
                 };
                 let vars = targets
@@ -369,7 +416,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                         continue;
                     }
                     Err(StartError::Other(e)) => {
-                        send(Event::Error(format!("开始采样失败：{e}")));
+                        send(failed(Op::Sample, format!("开始采样失败：{e}")));
                         continue;
                     }
                 };
@@ -383,10 +430,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                     match rx.try_recv() {
                         Ok(Cmd::Write(t, b)) => send(write_target(sampler.probe_mut(), &t, &b)),
                         Ok(Cmd::Read(tag, targets)) => {
-                            match sampler.probe_mut().read(&items_of(&targets)) {
-                                Ok(r) => send(Event::ReadDone(tag, r)),
-                                Err(e) => send(Event::Error(format!("读取失败：{e}"))),
-                            }
+                            send(read_targets(sampler.probe_mut(), tag, &targets))
                         }
                         Ok(Cmd::PollCore) => send(poll_core(sampler.probe_mut())),
                         Ok(Cmd::Core(c)) => send(core_cmd(sampler.probe_mut(), c)),
@@ -423,7 +467,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                 send(Event::Stats(sampler.stats()));
                 drop(sampler);
                 if let Some(e) = err {
-                    send(Event::Error(e));
+                    send(failed(Op::Sample, e));
                 }
                 send(Event::Stopped);
             }
@@ -436,16 +480,6 @@ mod tests {
     use super::*;
     use std::sync::mpsc::channel;
 
-    /// 连到一个新的模拟探针（TCP）。
-    fn sim_conn() -> Conn {
-        Conn {
-            addr: Addr::Tcp {
-                host: xrdap_sim::Sim::new().serve_tcp().to_string(),
-            },
-            baud: None,
-        }
-    }
-
     fn next(rx: &Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
         loop {
             let ev = rx
@@ -457,62 +491,76 @@ mod tests {
         }
     }
 
-    #[test]
-    fn share_blocks_other_commands_and_gives_probe_back() {
+    /// 后台线程连到一个新的模拟探针（TCP），共享时监听本机的空闲端口。
+    fn start() -> (Sender<Cmd>, Receiver<Event>, std::thread::JoinHandle<()>) {
         let (cmd_tx, cmd_rx) = channel();
         let (ev_tx, ev_rx) = channel();
-        let worker = std::thread::spawn(move || run(cmd_rx, ev_tx, || {}));
-
-        cmd_tx.send(Cmd::Connect(sim_conn(), 4_000_000)).unwrap();
+        let worker = std::thread::spawn(move || run(cmd_rx, ev_tx, || {}, "127.0.0.1:0"));
+        let spec = xrdap_sim::Sim::new().serve_tcp().to_string();
+        cmd_tx
+            .send(Cmd::Connect(Conn { spec, baud: None }, 4_000_000))
+            .unwrap();
         next(&ev_rx, |e| matches!(e, Event::Connected { .. }));
+        (cmd_tx, ev_rx, worker)
+    }
 
+    #[test]
+    fn share_blocks_other_commands_and_gives_probe_back() {
+        let (cmd_tx, ev_rx, worker) = start();
         cmd_tx.send(Cmd::Share(true)).unwrap();
-        // 3240 被别的程序占着时共享失败，探针留在后台线程，照样可以停
-        let started = next(&ev_rx, |e| {
-            matches!(e, Event::Sharing { .. } | Event::Error(_))
-        });
-        if let Event::Sharing { attach, .. } = &started {
-            assert!(attach.starts_with("usbip attach -r 127.0.0.1"));
-            cmd_tx.send(Cmd::PollCore).unwrap();
-            cmd_tx.send(Cmd::Core(CoreCmd::Halt)).unwrap();
-            next(
-                &ev_rx,
-                |e| matches!(e, Event::Error(m) if m.contains("共享")),
-            );
-            cmd_tx.send(Cmd::Share(false)).unwrap();
-            next(&ev_rx, |e| matches!(e, Event::ShareStopped));
+        match next(&ev_rx, |e| {
+            matches!(e, Event::Sharing { .. } | Event::Failed { .. })
+        }) {
+            Event::Sharing { attach, .. } => assert!(attach.contains("attach -r 127.0.0.1")),
+            _ => panic!("共享没有开始"),
         }
+        cmd_tx.send(Cmd::PollCore).unwrap();
+        cmd_tx.send(Cmd::Core(CoreCmd::Halt)).unwrap();
+        // 共享期间内核命令不执行，结果里说明原因
+        next(
+            &ev_rx,
+            |e| matches!(e, Event::Core { cmd: Some(_), status: Err(m) } if m.contains("共享")),
+        );
+        cmd_tx.send(Cmd::Share(false)).unwrap();
+        next(&ev_rx, |e| matches!(e, Event::ShareStopped));
         // 探针回到后台线程：内核命令能执行
         cmd_tx.send(Cmd::Core(CoreCmd::Halt)).unwrap();
-        next(&ev_rx, |e| matches!(e, Event::Core { cmd: Some(_), .. }));
-
+        next(&ev_rx, |e| {
+            matches!(
+                e,
+                Event::Core {
+                    cmd: Some(_),
+                    status: Ok(_)
+                }
+            )
+        });
         drop(cmd_tx);
         worker.join().unwrap();
     }
 
+    /// 失败事件标明是哪一类操作：Wi-Fi 保存失败只结束 Wi-Fi 的操作，连接还在。
     #[test]
-    fn wifi_status_after_connect_and_failed_set_keeps_connection() {
-        let (cmd_tx, cmd_rx) = channel();
-        let (ev_tx, ev_rx) = channel();
-        let worker = std::thread::spawn(move || run(cmd_rx, ev_tx, || {}));
-
-        cmd_tx.send(Cmd::Connect(sim_conn(), 4_000_000)).unwrap();
-        // 连接后自动查询一次 Wi-Fi 状态
+    fn failed_wifi_set_is_reported_as_wifi_and_keeps_connection() {
+        let (cmd_tx, ev_rx, worker) = start();
         next(&ev_rx, |e| matches!(e, Event::WifiStatus(Ok(_))));
-        // 密码不足 8 字节（协议文档 3.7），保存失败，连接还在
+        // 密码不足 8 字节（协议文档 3.7）
         cmd_tx
             .send(Cmd::WifiApply(WifiChange::Set {
                 ssid: "lab".into(),
                 password: "short".into(),
             }))
             .unwrap();
-        next(
-            &ev_rx,
-            |e| matches!(e, Event::Error(m) if m.contains("Wi-Fi")),
-        );
+        next(&ev_rx, |e| matches!(e, Event::Failed { op: Op::Wifi, .. }));
         cmd_tx.send(Cmd::Core(CoreCmd::Halt)).unwrap();
-        next(&ev_rx, |e| matches!(e, Event::Core { cmd: Some(_), .. }));
-
+        next(&ev_rx, |e| {
+            matches!(
+                e,
+                Event::Core {
+                    cmd: Some(_),
+                    status: Ok(_)
+                }
+            )
+        });
         drop(cmd_tx);
         worker.join().unwrap();
     }

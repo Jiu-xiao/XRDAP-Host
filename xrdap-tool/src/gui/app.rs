@@ -2,42 +2,38 @@
 //! `App` 是唯一的状态持有者；各块界面在 `panels/`，数据类型在 `model.rs`。
 
 use std::collections::{HashMap, VecDeque};
-use std::io::Write;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, RichText};
 use xrdap::cortex::{AfterReset, CoreStatus};
-use xrdap::discover::ProbeEntry;
 use xrdap::share::Event as ShareEvent;
 use xrdap::types::SymbolTable;
 use xrdap::vendor::wifi::WifiStatus;
 use xrdap::vendor::ItemResult;
 use xrdap::watch::{HostFrame, Stats};
 
-use super::model::{Csv, Kind, ShareState, VarRow, Watch};
+use super::model::{Csv, Found, ShareState, VarRow, Watch};
+use super::panels::{ElfLoaded, SavedWatch};
 use super::plot::PlotView;
-use super::worker::{self, Cmd, CoreCmd, Event};
+use super::worker::{self, Cmd, CoreCmd, Event, Op};
 
 const LOG_LINES: usize = 300;
 
 pub struct App {
+    pub(super) ctx: egui::Context,
     pub(super) tx: Option<Sender<Cmd>>,
     pub(super) rx: Receiver<Event>,
     pub(super) worker: Option<JoinHandle<()>>,
     pub(super) started: Instant,
 
-    pub(super) kind: Kind,
-    pub(super) usb_list: Vec<(Option<String>, String)>,
-    /// 找到的探针（USB、串口、局域网）；`finding` 不为空时正在后台找
-    pub(super) found: Vec<ProbeEntry>,
-    pub(super) finding: Option<Receiver<Vec<ProbeEntry>>>,
-    pub(super) usb_serial: String,
-    pub(super) serial_ports: Vec<String>,
-    pub(super) serial_port: String,
+    /// 找到的探针和其他串口；`finding` 不为空时正在后台找
+    pub(super) found: Found,
+    pub(super) finding: Option<Receiver<Found>>,
+    /// 探针说明，和命令行的 -p 写法相同；空为自动选择
+    pub(super) probe_spec: String,
     pub(super) baud: String,
-    pub(super) tcp_addr: String,
     pub(super) clock: String,
     pub(super) connecting: bool,
     pub(super) connected: bool,
@@ -57,6 +53,10 @@ pub struct App {
     pub(super) wifi_busy: bool,
 
     pub(super) elf_path: String,
+    /// 后台正在读的 ELF；读完前不能开始采样
+    pub(super) elf_loading: Option<Receiver<ElfLoaded>>,
+    /// 等 ELF 读完再恢复的监视项（启动时从设置里读出来的）
+    pub(super) restore: Vec<SavedWatch>,
     pub(super) syms: SymbolTable,
     pub(super) vars: Vec<VarRow>,
     pub(super) search: String,
@@ -90,28 +90,48 @@ pub struct App {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let font = super::fonts::install(&cc.egui_ctx);
+        let mut app = Self::with_settings(cc.egui_ctx.clone(), worker::SHARE_LISTEN, |k| {
+            cc.storage.and_then(|s| s.get_string(k))
+        });
+        match font {
+            Some(p) => app.log(format!("中文字体：{p}")),
+            None => app.log("没有找到中文字体，中文会显示成方框".into()),
+        }
+        app.start_finding();
+        app
+    }
+
+    /// 按保存的设置建立界面状态，启动后台线程，在后台开始读 ELF。
+    /// `share_listen` 是共享为 USB DAP 时的监听地址。
+    pub(super) fn with_settings(
+        ctx: egui::Context,
+        share_listen: &'static str,
+        get: impl Fn(&str) -> Option<String>,
+    ) -> Self {
         let (tx, worker_rx) = channel();
         let (worker_tx, rx) = channel();
-        let ctx = cc.egui_ctx.clone();
+        let repaint = ctx.clone();
         let worker = std::thread::Builder::new()
             .name("xrdap-worker".into())
-            .spawn(move || worker::run(worker_rx, worker_tx, move || ctx.request_repaint()))
+            .spawn(move || {
+                worker::run(
+                    worker_rx,
+                    worker_tx,
+                    move || repaint.request_repaint(),
+                    share_listen,
+                )
+            })
             .expect("启动后台线程");
-        let get = |k: &str| cc.storage.and_then(|s| s.get_string(k));
         let mut app = App {
+            ctx,
             tx: Some(tx),
             rx,
             worker: Some(worker),
             started: Instant::now(),
-            kind: Kind::from_key(&get("xrdap.kind").unwrap_or_default()),
-            usb_list: Vec::new(),
-            found: Vec::new(),
+            found: Found::default(),
             finding: None,
-            usb_serial: get("xrdap.usb").unwrap_or_default(),
-            serial_ports: Vec::new(),
-            serial_port: get("xrdap.serial").unwrap_or_default(),
+            probe_spec: get("xrdap.probe").unwrap_or_default(),
             baud: get("xrdap.serial_baud").unwrap_or_default(),
-            tcp_addr: get("xrdap.tcp").unwrap_or_default(),
             clock: get("xrdap.clock").unwrap_or_else(|| "4M".into()),
             connecting: false,
             connected: false,
@@ -128,6 +148,8 @@ impl App {
             wifi_password: String::new(),
             wifi_busy: false,
             elf_path: get("xrdap.elf").unwrap_or_default(),
+            elf_loading: None,
+            restore: Vec::new(),
             syms: SymbolTable::new(),
             vars: Vec::new(),
             search: String::new(),
@@ -159,25 +181,19 @@ impl App {
             csv: None,
             log: VecDeque::new(),
         };
-        match font {
-            Some(p) => app.log(format!("中文字体：{p}")),
-            None => app.log("没有找到中文字体，中文会显示成方框".into()),
-        }
-        app.refresh_usb();
-        app.refresh_serial();
-        app.start_finding(&cc.egui_ctx);
-        if !app.elf_path.trim().is_empty() {
-            app.load_elf();
-        }
-        if let Some(saved) = get("xrdap.watches") {
-            for line in saved.lines() {
-                let mut parts = line.split('\t');
-                let Some(name) = parts.next() else { continue };
-                let div = parts.next().and_then(|d| d.parse().ok()).unwrap_or(1);
-                let show = parts.next() != Some("0");
-                let chart = parts.next().and_then(|c| c.parse().ok()).unwrap_or(1);
-                app.add_expr(name, div, show, chart, true);
+        let saved: Vec<SavedWatch> = get("xrdap.watches")
+            .unwrap_or_default()
+            .lines()
+            .filter_map(SavedWatch::parse)
+            .collect();
+        if app.elf_path.trim().is_empty() {
+            for w in saved {
+                app.add_expr(&w.name, w.div, w.show, w.chart, true);
             }
+        } else {
+            // 按名字的监视项要等符号表
+            app.restore = saved;
+            app.load_elf();
         }
         app
     }
@@ -207,7 +223,7 @@ impl App {
             .iter()
             .map(|id| self.watches.iter().position(|w| w.id == *id))
             .collect();
-        let mut csv_err = None;
+        let mut csv_lost = false;
         let now = Instant::now();
         for f in &frames {
             let t0 = *self.t0_probe.get_or_insert(f.probe_us);
@@ -246,16 +262,15 @@ impl App {
             }
             let line = record.then(|| xrdap::csv::row(f, t, &cells));
             if let (Some(line), Some(c)) = (line, &mut self.csv) {
-                if let Err(e) = writeln!(c.out, "{line}") {
-                    csv_err = Some(e);
+                if !c.push(line) {
+                    csv_lost = true;
                     break;
                 }
-                c.rows += 1;
             }
         }
-        if let Some(e) = csv_err {
-            self.log(format!("写 CSV 失败：{e}"));
-            self.csv = None;
+        if csv_lost {
+            // 写文件的线程出错退出了，stop_csv 报告原因
+            self.stop_csv();
         }
     }
 
@@ -314,15 +329,18 @@ impl App {
                 self.sampling = false;
                 self.log("已断开".into());
             }
-            Event::Error(e) => {
-                if self.connecting {
-                    self.connected = false;
+            Event::Failed { op, msg } => {
+                match op {
+                    Op::Connect => {
+                        self.connecting = false;
+                        self.connected = false;
+                    }
+                    Op::Share => self.share_busy = false,
+                    Op::Wifi => self.wifi_busy = false,
+                    Op::Sample => self.starting = false,
+                    Op::Read => {}
                 }
-                self.connecting = false;
-                self.share_busy = false;
-                self.wifi_busy = false;
-                self.starting = false;
-                self.log(e);
+                self.log(msg);
             }
             Event::ReadDone(tag, results) => self.on_read_done(tag, results),
             Event::WriteDone { name, ok, text } => self.on_write_done(name, ok, text),
@@ -448,6 +466,7 @@ impl eframe::App for App {
         while let Ok(ev) = self.rx.try_recv() {
             self.handle(ev);
         }
+        self.poll_elf();
         egui::TopBottomPanel::bottom("log")
             .resizable(true)
             .default_height(110.0)
@@ -499,11 +518,8 @@ impl eframe::App for App {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // eframe 自己用 "window"、"egui" 这些键，这里的键都加 xrdap. 前缀
-        storage.set_string("xrdap.kind", self.kind.key().into());
-        storage.set_string("xrdap.usb", self.usb_serial.clone());
-        storage.set_string("xrdap.serial", self.serial_port.clone());
+        storage.set_string("xrdap.probe", self.probe_spec.clone());
         storage.set_string("xrdap.serial_baud", self.baud.clone());
-        storage.set_string("xrdap.tcp", self.tcp_addr.clone());
         storage.set_string("xrdap.clock", self.clock.clone());
         storage.set_string("xrdap.elf", self.elf_path.clone());
         storage.set_string("xrdap.period", self.period.clone());
@@ -513,26 +529,99 @@ impl eframe::App for App {
         let watches: Vec<String> = self
             .watches
             .iter()
-            .map(|w| {
-                format!(
-                    "{}\t{}\t{}\t{}",
-                    w.target.name,
-                    w.div,
-                    u8::from(w.show),
-                    w.chart
-                )
-            })
+            .map(|w| SavedWatch::of(w).line())
             .collect();
         storage.set_string("xrdap.watches", watches.join("\n"));
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // 先让后台线程停掉采样、断开探针，再退出
+        // 让后台线程停掉采样、断开探针。它可能正卡在打开探针里（串口最多等十几秒），
+        // 窗口最多等 EXIT_WAIT，之后进程退出时线程随之结束
+        const EXIT_WAIT: Duration = Duration::from_secs(3);
         self.send(Cmd::Disconnect);
         self.tx = None;
+        let deadline = Instant::now() + EXIT_WAIT;
         if let Some(h) = self.worker.take() {
-            let _ = h.join();
+            while !h.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
         }
         self.stop_csv();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        App::with_settings(egui::Context::default(), "127.0.0.1:0", |_| None)
+    }
+
+    fn wait_elf(a: &mut App) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while a.elf_loading.is_some() && Instant::now() < deadline {
+            a.poll_elf();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(a.elf_loading.is_none(), "ELF 没有读完");
+    }
+
+    /// 一个操作失败只结束它自己的“进行中”状态，别的操作照常等结果。
+    #[test]
+    fn failure_ends_only_its_own_operation() {
+        let mut a = app();
+        (a.connected, a.wifi_busy, a.share_busy, a.starting) = (true, true, true, true);
+        a.handle(Event::Failed {
+            op: Op::Read,
+            msg: "读取失败".into(),
+        });
+        assert!(a.connected && a.wifi_busy && a.share_busy && a.starting);
+        a.handle(Event::Failed {
+            op: Op::Wifi,
+            msg: "配置 Wi-Fi 失败".into(),
+        });
+        assert!(!a.wifi_busy && a.share_busy && a.starting && a.connected);
+    }
+
+    /// ELF 在后台读；采样时不重新读，正在采样的监视项不会被换掉。
+    #[test]
+    fn elf_loads_in_background_and_not_while_sampling() {
+        let mut a = app();
+        a.elf_path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../xrdap/tests/fixtures/types.elf"
+        )
+        .into();
+        a.load_elf();
+        wait_elf(&mut a);
+        assert!(a.vars.iter().any(|v| v.name == "counter"));
+        a.add_expr("counter", 1, true, 1, false);
+        let ids: Vec<u64> = a.watches.iter().map(|w| w.id).collect();
+        a.run_ids = ids.clone();
+        a.sampling = true;
+        a.load_elf();
+        assert!(a.elf_loading.is_none());
+        assert_eq!(a.watches.iter().map(|w| w.id).collect::<Vec<_>>(), ids);
+    }
+
+    /// 启动时按名字的监视项等 ELF 读完再恢复。
+    #[test]
+    fn saved_watches_wait_for_symbols() {
+        let mut a = App::with_settings(egui::Context::default(), "127.0.0.1:0", |k| match k {
+            "xrdap.elf" => Some(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../xrdap/tests/fixtures/types.elf"
+                )
+                .into(),
+            ),
+            "xrdap.watches" => Some("state.count	10	1	2".into()),
+            _ => None,
+        });
+        assert!(a.watches.is_empty());
+        wait_elf(&mut a);
+        assert_eq!(a.watches.len(), 1);
+        assert_eq!((a.watches[0].div, a.watches[0].chart), (10, 2));
     }
 }
