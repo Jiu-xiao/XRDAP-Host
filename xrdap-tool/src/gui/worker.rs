@@ -10,8 +10,8 @@ use xrdap::dap::Probe;
 use xrdap::expr::Target;
 use xrdap::open::{self, OpenOptions};
 use xrdap::vendor::wifi::WifiStatus;
-use xrdap::vendor::{self, Item, ItemResult, SubItem};
-use xrdap::watch::{HostFrame, Sampler, StartError, Stats};
+use xrdap::vendor::{self, Item, ItemResult};
+use xrdap::watch::{HostFrame, Sampler, StartError, Stats, Var};
 
 use xrdap::share::{Event as ShareEvent, Protocol, Share};
 
@@ -350,20 +350,17 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                     send(Event::Error("还没有连接".into()));
                     continue;
                 };
-                let mut items: Vec<SubItem> = targets
+                let vars = targets
                     .iter()
                     .zip(&divs)
                     .enumerate()
-                    .map(|(i, (t, d))| SubItem {
+                    .map(|(i, (t, d))| Var {
                         item: t.item(i as u16),
                         div: *d,
-                        phase: 0,
+                        phase: None,
                     })
                     .collect();
-                let fixed = vec![false; items.len()];
-                vendor::assign_phases(&mut items, &fixed);
-                let ring = p.vendor_info().map(|i| i.ring_bytes).unwrap_or(16384);
-                let mut sampler = match Sampler::start(p, items, period_us, stop_on_full) {
+                let mut sampler = match Sampler::start(p, vars, period_us, stop_on_full) {
                     Ok(s) => s,
                     Err(StartError::Rejected(r)) => {
                         send(Event::Rejected {
@@ -380,7 +377,7 @@ pub fn run(rx: Receiver<Cmd>, tx: Sender<Event>, wake: impl Fn() + Clone + Send 
                     est_frame_us: sampler.setup.est_frame_us.unwrap_or(0),
                     phases: sampler.items().iter().map(|s| (s.div, s.phase)).collect(),
                 });
-                let interval = sampler.poll_interval(ring).min(Duration::from_millis(20));
+                let interval = sampler.poll_interval().min(Duration::from_millis(20));
                 let mut last_stats = std::time::Instant::now();
                 let err = loop {
                     match rx.try_recv() {
