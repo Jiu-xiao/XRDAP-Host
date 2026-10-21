@@ -1,0 +1,11 @@
+[package]
+name = "xrdap-sim"
+description = "测试用的 XR-DAP 探针模拟器，只给本仓库的测试用，不发布 / Test-only XR-DAP probe simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+xrdap = { path = "../xrdap", default-features = false }
+object = { version = "0.40", default-features = false, features = ["read_core", "elf", "std"] }

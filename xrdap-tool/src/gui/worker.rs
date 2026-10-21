@@ -1,7 +1,6 @@
 //! 后台线程：独占探针，执行界面发来的命令，把结果和采样帧送回界面。
 //! 界面线程不直接碰探针，USB/串口/TCP 的阻塞读写都在这里。
 
-use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
@@ -9,9 +8,7 @@ use xrdap::addr::{Addr, Spec};
 use xrdap::cortex::{self, AfterReset, CoreStatus};
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
-use xrdap::fake::FakeProbe;
 use xrdap::open::{self, OpenOptions};
-use xrdap::types::SymbolTable;
 use xrdap::vendor::{self, Item, ItemResult, SubItem};
 use xrdap::watch::{HostFrame, Sampler, StartError, Stats};
 use xrdap::wifi::{self, WifiStatus};
@@ -21,12 +18,11 @@ use xrdap::share::{Event as ShareEvent, Protocol, Share};
 /// 共享为 USB DAP 时的监听地址：只给本机用
 const SHARE_LISTEN: &str = "127.0.0.1:3240";
 
+/// 连哪块探针：USB、串口或 TCP；`baud` 只对串口有用
 #[derive(Debug, Clone)]
-pub enum Conn {
-    /// 真探针：USB、串口或 TCP；`baud` 只对串口有用
-    Probe { addr: Addr, baud: Option<u32> },
-    /// 进程内的模拟探针；有 ELF 时按 ELF 填内存
-    Fake(Option<PathBuf>),
+pub struct Conn {
+    pub addr: Addr,
+    pub baud: Option<u32>,
 }
 
 pub enum Cmd {
@@ -116,27 +112,12 @@ pub enum Event {
 const TIMEOUT: Duration = Duration::from_millis(2000);
 
 fn open(conn: &Conn) -> Result<Probe, String> {
-    let e = |x: xrdap::Error| x.to_string();
-    Ok(match conn {
-        Conn::Probe { addr, baud } => {
-            let opts = OpenOptions {
-                timeout: TIMEOUT,
-                baud: *baud,
-                ..OpenOptions::default()
-            };
-            open::open(&Spec::Addr(addr.clone()), &opts).map_err(e)?
-        }
-        Conn::Fake(elf) => {
-            let fake = FakeProbe::new();
-            if let Some(path) = elf {
-                let data = std::fs::read(path).map_err(|x| x.to_string())?;
-                fake.load_elf_image(&data).map_err(e)?;
-                let syms: SymbolTable = xrdap::elf::load_bytes(&data).map_err(e)?;
-                fake.apply_g431_fixture(&syms);
-            }
-            Probe::new(Box::new(fake), TIMEOUT)
-        }
-    })
+    let opts = OpenOptions {
+        timeout: TIMEOUT,
+        baud: conn.baud,
+        ..OpenOptions::default()
+    };
+    open::open(&Spec::Addr(conn.addr.clone()), &opts).map_err(|e| e.to_string())
 }
 
 fn items_of(targets: &[Target]) -> Vec<Item> {
@@ -471,6 +452,16 @@ mod tests {
     use super::*;
     use std::sync::mpsc::channel;
 
+    /// 连到一个新的模拟探针（TCP）。
+    fn sim_conn() -> Conn {
+        Conn {
+            addr: Addr::Tcp {
+                host: xrdap_sim::Sim::new().serve_tcp().to_string(),
+            },
+            baud: None,
+        }
+    }
+
     fn next(rx: &Receiver<Event>, want: impl Fn(&Event) -> bool) -> Event {
         loop {
             let ev = rx
@@ -488,9 +479,7 @@ mod tests {
         let (ev_tx, ev_rx) = channel();
         let worker = std::thread::spawn(move || run(cmd_rx, ev_tx, || {}));
 
-        cmd_tx
-            .send(Cmd::Connect(Conn::Fake(None), 4_000_000))
-            .unwrap();
+        cmd_tx.send(Cmd::Connect(sim_conn(), 4_000_000)).unwrap();
         next(&ev_rx, |e| matches!(e, Event::Connected { .. }));
 
         cmd_tx.send(Cmd::Share(true)).unwrap();
@@ -523,15 +512,14 @@ mod tests {
         let (ev_tx, ev_rx) = channel();
         let worker = std::thread::spawn(move || run(cmd_rx, ev_tx, || {}));
 
-        cmd_tx
-            .send(Cmd::Connect(Conn::Fake(None), 4_000_000))
-            .unwrap();
-        // 模拟探针没有 0x86：连接后的自动查询给出错误，不影响连接
-        next(&ev_rx, |e| matches!(e, Event::WifiStatus(Err(_))));
+        cmd_tx.send(Cmd::Connect(sim_conn(), 4_000_000)).unwrap();
+        // 连接后自动查询一次 Wi-Fi 状态
+        next(&ev_rx, |e| matches!(e, Event::WifiStatus(Ok(_))));
+        // 密码不足 8 字节（协议文档 3.7），保存失败，连接还在
         cmd_tx
             .send(Cmd::WifiApply(WifiChange::Set {
                 ssid: "lab".into(),
-                password: "12345678".into(),
+                password: "short".into(),
             }))
             .unwrap();
         next(

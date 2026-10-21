@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use xrdap::expr::Resolver;
-use xrdap::types::SymbolTable;
 
 pub use connect::ConnOpts;
 pub use watch::{cmd_watch, WatchOpts};
@@ -221,8 +220,7 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
         Cmd::List { ask_serial } => probe::cmd_list(ask_serial, out),
         Cmd::Vars { pattern } => memory::cmd_vars(conn, pattern.as_deref(), out),
         Cmd::Info { no_target } => {
-            let syms = load_symbols(conn)?;
-            let mut probe = open_probe(conn, &syms, err)?;
+            let mut probe = open_probe(conn, err)?;
             probe::cmd_info(&mut probe, conn, !no_target, out)
         }
         Cmd::Read { exprs } => {
@@ -233,7 +231,7 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
                 targets.extend(r.resolve_all(e)?);
             }
             print_notes(&mut r.notes, out)?;
-            let mut probe = open_probe(conn, r.syms, err)?;
+            let mut probe = open_probe(conn, err)?;
             connect_target(&mut probe, conn)?;
             memory::cmd_read(&mut probe, &targets, out)
         }
@@ -250,7 +248,7 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
                 list.push((t, v.trim().to_string(), bytes));
             }
             print_notes(&mut r.notes, out)?;
-            let mut probe = open_probe(conn, r.syms, err)?;
+            let mut probe = open_probe(conn, err)?;
             connect_target(&mut probe, conn)?;
             memory::cmd_write(&mut probe, &list, out)
         }
@@ -273,7 +271,7 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
                 }
             }
             print_notes(&mut r.notes, out)?;
-            let mut probe = open_probe(conn, r.syms, err)?;
+            let mut probe = open_probe(conn, err)?;
             connect_target(&mut probe, conn)?;
             let opts = WatchOpts {
                 period_us,
@@ -288,18 +286,17 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
         Cmd::Run => core(conn, CoreOp::Run, out, err),
         Cmd::Reset { halt } => core(conn, CoreOp::Reset { halt }, out, err),
         Cmd::Wifi { op } => {
-            let mut probe = open_probe(conn, &SymbolTable::new(), err)?;
+            let mut probe = open_probe(conn, err)?;
             probe::cmd_wifi(&mut probe, &op, out)
         }
         Cmd::Share { protocol, listen } => {
-            let probe = open_probe(conn, &SymbolTable::new(), err)?;
+            let probe = open_probe(conn, err)?;
             share::cmd_share(probe, protocol, listen.as_deref(), out, stop)
         }
     }
 }
 
 fn core(conn: &ConnOpts, op: CoreOp, out: &mut dyn Write, err: &mut dyn Write) -> CliResult {
-    let syms = load_symbols(conn)?;
-    let mut probe = open_probe(conn, &syms, err)?;
+    let mut probe = open_probe(conn, err)?;
     probe::cmd_core(&mut probe, conn, op, out)
 }

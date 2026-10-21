@@ -1,7 +1,7 @@
 /*
  * DWARF 类型解析的测试夹具，只用来生成 types.elf，不在目标上运行。
  * 编译命令见同目录的 build.sh。全部变量放在 .data，初值由 ELF 带出，
- * 模拟探针按 ELF 的段内容填内存，测试据此核对读出的值。
+ * 测试用的模拟探针按 ELF 的段内容填内存，测试据此核对读出的值。
  */
 #include <stdbool.h>
 #include <stdint.h>
@@ -103,6 +103,17 @@ struct node nodes[3] = {
     {30, 0},
 };
 struct node *head = &nodes[0];
+
+/* 多级指针：chain_p1 声明为 uint32_t *，实际指向 chain_p2，读到底要先转换类型 */
+uint32_t chain_final = 0xCAFEBABEu;
+uint32_t *chain_p3 = &chain_final;
+uint32_t **chain_p2 = &chain_p3;
+uint32_t *chain_p1 = (uint32_t *)&chain_p2;
+uint32_t *null_p1 = 0;
+/* 指向没有内存的地址 */
+uint32_t *bad_p1 = (uint32_t *)0x5FFFFFF0u;
+uint32_t block[8] = {0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u,
+                     0x55555555u, 0x66666666u, 0x77777777u, 0x88888888u};
 
 void Reset_Handler(void);
 

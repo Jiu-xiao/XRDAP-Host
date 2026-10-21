@@ -20,7 +20,6 @@ pub(super) enum Kind {
     Usb,
     Serial,
     Tcp,
-    Fake,
 }
 
 impl Kind {
@@ -29,7 +28,6 @@ impl Kind {
             Kind::Usb => "USB",
             Kind::Serial => "串口",
             Kind::Tcp => "TCP",
-            Kind::Fake => "模拟",
         }
     }
     pub(super) fn key(self) -> &'static str {
@@ -37,14 +35,12 @@ impl Kind {
             Kind::Usb => "usb",
             Kind::Serial => "serial",
             Kind::Tcp => "tcp",
-            Kind::Fake => "fake",
         }
     }
     pub(super) fn from_key(s: &str) -> Self {
         match s {
             "serial" => Kind::Serial,
             "tcp" => Kind::Tcp,
-            "fake" => Kind::Fake,
             _ => Kind::Usb,
         }
     }

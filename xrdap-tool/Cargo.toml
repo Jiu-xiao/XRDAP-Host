@@ -14,7 +14,7 @@ name = "xrdap"
 path = "src/main.rs"
 
 [dependencies]
-xrdap = { path = "../xrdap", features = ["fake"] }
+xrdap = { path = "../xrdap" }
 clap = { workspace = true }
 ctrlc = "3.4"
 eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow", "persistence", "wayland", "x11"] }
@@ -24,3 +24,6 @@ rfd = "0.15"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
+
+[dev-dependencies]
+xrdap-sim = { path = "../xrdap-sim" }

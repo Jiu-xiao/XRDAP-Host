@@ -3828,6 +3828,15 @@ dependencies = [
  "nusb",
  "object",
  "serialport",
+ "xrdap-sim",
+]
+
+[[package]]
+name = "xrdap-sim"
+version = "0.5.2"
+dependencies = [
+ "object",
+ "xrdap",
 ]
 
 [[package]]
@@ -3842,6 +3851,7 @@ dependencies = [
  "rfd",
  "windows-sys 0.59.0",
  "xrdap",
+ "xrdap-sim",
 ]
 
 [[package]]

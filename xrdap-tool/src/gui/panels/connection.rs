@@ -1,6 +1,5 @@
 //! 左上：找到的探针、连接表单、内核状态和按钮、共享开关。
 
-use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
 use eframe::egui::{self, Color32, RichText};
@@ -42,7 +41,7 @@ impl App {
 
     fn conn(&self) -> Result<Conn, String> {
         Ok(match self.kind {
-            Kind::Usb => Conn::Probe {
+            Kind::Usb => Conn {
                 addr: Addr::Usb {
                     serial: Some(self.usb_serial.trim().to_string()).filter(|s| !s.is_empty()),
                 },
@@ -52,7 +51,7 @@ impl App {
                 if self.serial_port.trim().is_empty() {
                     return Err("先选一个串口".into());
                 }
-                Conn::Probe {
+                Conn {
                     addr: Addr::Serial {
                         port: self.serial_port.trim().to_string(),
                     },
@@ -66,16 +65,13 @@ impl App {
                 if self.tcp_addr.trim().is_empty() {
                     return Err("先填探针或转发程序的地址".into());
                 }
-                Conn::Probe {
+                Conn {
                     addr: Addr::Tcp {
                         host: self.tcp_addr.trim().to_string(),
                     },
                     baud: None,
                 }
             }
-            Kind::Fake => Conn::Fake(
-                Some(PathBuf::from(self.elf_path.trim())).filter(|p| !p.as_os_str().is_empty()),
-            ),
         })
     }
 
@@ -183,7 +179,7 @@ impl App {
         let mut refresh_serial = false;
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal(|ui| {
-                for k in [Kind::Usb, Kind::Serial, Kind::Tcp, Kind::Fake] {
+                for k in [Kind::Usb, Kind::Serial, Kind::Tcp] {
                     ui.selectable_value(&mut self.kind, k, k.label());
                 }
             });
@@ -245,9 +241,6 @@ impl App {
                             .hint_text("IP 或 IP:端口，默认端口 3241")
                             .desired_width(fill_width(ui)),
                     );
-                }
-                Kind::Fake => {
-                    ui.label("进程内的模拟探针，不需要硬件；有 ELF 时按 ELF 填内存");
                 }
             }
             ui.horizontal(|ui| {
