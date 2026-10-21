@@ -74,7 +74,10 @@ pub fn open_probe(conn: &ConnOpts, syms: &SymbolTable, err: &mut dyn Write) -> C
             fake.load_elf_image(&std::fs::read(path)?)?;
             fake.apply_g431_fixture(syms);
         }
-        return Ok(Probe::new(Box::new(fake)));
+        return Ok(Probe::new(
+            Box::new(fake),
+            Duration::from_millis(conn.timeout_ms),
+        ));
     }
     let opts = OpenOptions {
         timeout: Duration::from_millis(conn.timeout_ms),

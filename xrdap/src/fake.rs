@@ -77,6 +77,7 @@ struct State {
     skipped: u32,
     skip_every: Option<u64>,
     requests: Vec<Vec<u8>>,
+    out: VecDeque<Vec<u8>>,
     core: Core,
 }
 
@@ -124,6 +125,7 @@ impl FakeProbe {
             skipped: 0,
             skip_every: None,
             requests: Vec::new(),
+            out: VecDeque::new(),
             core: Core {
                 halted: false,
                 debugen: false,
@@ -258,10 +260,21 @@ impl FakeProbe {
 }
 
 impl Transport for FakeProbe {
-    fn xfer(&mut self, request: &[u8]) -> Result<Vec<u8>> {
+    fn send(&mut self, request: &[u8]) -> Result<()> {
         let mut st = self.st();
         st.requests.push(request.to_vec());
-        Ok(st.handle(request))
+        if crate::dap::expects_response(request) {
+            let resp = st.handle(request);
+            st.out.push_back(resp);
+        }
+        Ok(())
+    }
+
+    fn recv(&mut self, _timeout: std::time::Duration) -> Result<Vec<u8>> {
+        self.st()
+            .out
+            .pop_front()
+            .ok_or_else(|| crate::Error::Timeout("模拟探针没有待发的响应".into()))
     }
 
     fn describe(&self) -> String {

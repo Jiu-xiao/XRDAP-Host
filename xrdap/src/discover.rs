@@ -160,12 +160,13 @@ pub fn serial_profile(port: &str) -> SerialPortProfile {
 
 /// 问一个串口是不是探针：按 `bauds` 依次试，每个波特率在 `wait` 内回答 DAP_Info 就是。
 pub fn probe_serial(profile: &SerialPortProfile, wait: Duration) -> Option<Found> {
-    let t = profile.bauds.iter().find_map(|&baud| {
-        let mut t = SerialTransport::open(&profile.port, baud, profile.keep_lines, wait).ok()?;
-        t.handshake(wait).ok()?;
-        Some(t)
+    let mut probe = profile.bauds.iter().find_map(|&baud| {
+        let t = SerialTransport::open(&profile.port, baud, profile.keep_lines).ok()?;
+        let mut probe = Probe::new(Box::new(t), wait);
+        probe.wait_ready(wait).ok()?;
+        Some(probe)
     })?;
-    let id = Probe::new(Box::new(t)).identity().unwrap_or_default();
+    let id = probe.identity().unwrap_or_default();
     Some(Found {
         serial: id.serial,
         product: id.product,

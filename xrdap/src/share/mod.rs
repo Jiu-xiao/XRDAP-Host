@@ -34,6 +34,7 @@ mod link;
 mod openocd;
 mod usbip;
 
+use std::io;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -46,8 +47,9 @@ use crate::dap::Probe;
 use crate::{Error, Result};
 use link::{is_normal_end, Link};
 
-/// 探针没有应答时回的 DAP 响应：0xFF 表示命令不支持，调试工具会报错而不是一直等
-const DAP_INVALID: u8 = 0xFF;
+/// 执行一个 DAP 请求，返回探针的响应；没有响应的命令（DAP_TransferAbort）返回空包。
+type Exec<'a> = dyn FnMut(&[u8]) -> io::Result<Vec<u8>> + 'a;
+
 /// 等客户端时多久看一次停止标志
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
 
@@ -191,7 +193,12 @@ fn run(
             continue;
         };
         notify(Event::Client(peer));
-        let mut exec = |req: &[u8]| probe.xfer(req).unwrap_or_else(|_| vec![DAP_INVALID]);
+        // 探针读写出错（超时、断开）时结束这个客户端，原因经 Event::Idle 报告
+        let mut exec = |req: &[u8]| {
+            probe
+                .xfer(req)
+                .map_err(|e| io::Error::other(format!("探针：{e}")))
+        };
         let result = match protocol {
             Protocol::Usbip => usbip::serve(&mut link, device, &mut exec),
             Protocol::OpenOcd => openocd::serve(&mut link, &mut exec),
@@ -206,4 +213,79 @@ fn run(
         ));
     }
     probe
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frame::{parse_tcp_header, tcp_frame, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE};
+    use crate::transport::script::{Late, Script};
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::mpsc;
+
+    fn share(link: &Script) -> (Share, mpsc::Receiver<Event>) {
+        let probe = Probe::new(Box::new(link.clone()), Duration::from_secs(2));
+        let (tx, rx) = mpsc::channel();
+        let share = Share::start(probe, Protocol::OpenOcd, "127.0.0.1:0", move |e| {
+            let _ = tx.send(e);
+        })
+        .map_err(|(_, e)| e)
+        .unwrap();
+        (share, rx)
+    }
+
+    fn client(share: &Share) -> TcpStream {
+        let c = TcpStream::connect(share.addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c
+    }
+
+    fn read_frame(c: &mut TcpStream) -> Vec<u8> {
+        let mut h = [0u8; 8];
+        c.read_exact(&mut h).unwrap();
+        let mut p = vec![0u8; parse_tcp_header(&h, TCP_TYPE_RESPONSE).unwrap()];
+        c.read_exact(&mut p).unwrap();
+        p
+    }
+
+    /// CMSIS-DAP：DAP_TransferAbort 没有响应，共享时也不回帧；下一个命令的响应不错位。
+    #[test]
+    fn openocd_transfer_abort_gets_no_frame() {
+        let link = Script::default();
+        let (share, _events) = share(&link);
+        let mut c = client(&share);
+        c.write_all(&tcp_frame(&[0x07], TCP_TYPE_REQUEST)).unwrap();
+        c.write_all(&tcp_frame(&[0x00, 0xFF], TCP_TYPE_REQUEST))
+            .unwrap();
+        // 探针的第 0 个请求是共享开始时读身份的 DAP_Info，客户端的 0x07、DAP_Info 排在后面
+        let first = read_frame(&mut c);
+        assert_eq!(first[0], 0x00);
+        let sent = link.sent();
+        assert_eq!(sent[sent.len() - 2], vec![0x07]);
+        drop(c);
+        share.stop();
+    }
+
+    /// 探针不应答时断开这个客户端，并报告原因；不回假的 0xFF。
+    #[test]
+    fn probe_failure_ends_client_with_reason() {
+        let link = Script::default();
+        let (share, events) = share(&link);
+        let mut c = client(&share);
+        link.delay_next(Late::NextSend);
+        c.write_all(&tcp_frame(&[0x00, 0xFF], TCP_TYPE_REQUEST))
+            .unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(c.read(&mut buf).unwrap(), 0, "客户端应被断开，不应收到响应");
+        let reason = events
+            .iter()
+            .find_map(|e| match e {
+                Event::Idle(r) => Some(r),
+                Event::Client(_) => None,
+            })
+            .unwrap();
+        assert!(reason.is_some_and(|r| r.contains("探针")));
+        share.stop();
+    }
 }

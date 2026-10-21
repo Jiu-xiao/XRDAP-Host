@@ -9,8 +9,9 @@ use crate::frame::{
     parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
 };
 
-/// 处理一个客户端连接，直到对方断开或出错。
-pub(super) fn serve(s: &mut Link, exec: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> io::Result<()> {
+/// 处理一个客户端连接，直到对方断开或出错。没有响应的命令（DAP_TransferAbort，`exec`
+/// 返回空包）不回帧。
+pub(super) fn serve(s: &mut Link, exec: &mut super::Exec) -> io::Result<()> {
     let mut header = [0u8; TCP_HEADER_LEN];
     loop {
         s.read_full(&mut header)?;
@@ -18,6 +19,9 @@ pub(super) fn serve(s: &mut Link, exec: &mut dyn FnMut(&[u8]) -> Vec<u8>) -> io:
             .ok_or_else(|| bad(format!("OpenOCD TCP：帧头无效 {header:02X?}")))?;
         let mut request = vec![0u8; len];
         s.read_full(&mut request)?;
-        s.write_all(&tcp_frame(&exec(&request), TCP_TYPE_RESPONSE))?;
+        let response = exec(&request)?;
+        if !response.is_empty() {
+            s.write_all(&tcp_frame(&response, TCP_TYPE_RESPONSE))?;
+        }
     }
 }

@@ -1,7 +1,7 @@
 //! 串口传输：libxr Topic 帧，请求 topic `dap_req`，响应 topic `dap_resp`。
 //!
 //! 打开串口时，ESP32 开发板的 USB 转串口芯片会通过 DTR/RTS 让探针复位一次，
-//! 所以打开后先用 [`SerialTransport::handshake`] 等探针启动完。
+//! 所以打开后先用 [`Probe::wait_ready`](crate::dap::Probe::wait_ready) 等探针启动完。
 
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,13 +35,11 @@ pub struct SerialTransport {
     rx: Receiver<Vec<u8>>,
     stop: Arc<AtomicBool>,
     name: String,
-    /// 一个请求等待响应的超时。
-    pub timeout: Duration,
 }
 
 impl SerialTransport {
     /// 打开串口。`keep_lines` 为 false 时置 DTR=1、RTS=0（ESP32 开发板自动下载电路的运行状态）。
-    pub fn open(name: &str, baud: u32, keep_lines: bool, timeout: Duration) -> Result<Self> {
+    pub fn open(name: &str, baud: u32, keep_lines: bool) -> Result<Self> {
         let mut port =
             SerialPort::open(name, baud).map_err(|e| Error::Io(format!("打不开 {name}：{e}")))?;
         port.set_read_timeout(Duration::from_millis(100))
@@ -69,32 +67,29 @@ impl SerialTransport {
             rx,
             stop,
             name: name.to_string(),
-            timeout,
         })
     }
+}
 
-    /// 发一个请求，等它的响应。之前残留的响应（比如超时后才到的）先丢掉。
-    pub fn transaction(&mut self, request: &[u8]) -> Result<Vec<u8>> {
-        while self.rx.try_recv().is_ok() {}
+impl Transport for SerialTransport {
+    fn send(&mut self, request: &[u8]) -> Result<()> {
         let frame = serial_request_frame(request);
         self.port
             .write_all(&frame)
-            .map_err(|e| Error::Io(format!("串口写失败：{e}")))?;
-        self.port
-            .flush()
-            .map_err(|e| Error::Io(format!("串口写失败：{e}")))?;
+            .and_then(|()| self.port.flush())
+            .map_err(|e| Error::Io(format!("串口写失败：{e}")))
+    }
 
-        let deadline = Instant::now() + self.timeout;
+    fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>> {
+        let deadline = Instant::now() + timeout;
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(Error::Timeout("等待串口响应超时".into()));
-            }
-            match self.rx.recv_timeout(remaining) {
-                Ok(payload) => match dap_from_payload(&payload) {
-                    Some(packet) => return Ok(packet.to_vec()),
-                    None => continue,
-                },
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.rx.recv_timeout(left) {
+                Ok(payload) => {
+                    if let Some(packet) = dap_from_payload(&payload) {
+                        return Ok(packet.to_vec());
+                    }
+                }
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(Error::Timeout("等待串口响应超时".into()))
                 }
@@ -103,31 +98,6 @@ impl SerialTransport {
                 }
             }
         }
-    }
-
-    /// 反复发 DAP_Info(包长) 直到探针应答（最长 `wait`），返回 DAP_Info 的响应。
-    /// 打开串口引起的复位要等探针启动完。
-    pub fn handshake(&mut self, wait: Duration) -> Result<Vec<u8>> {
-        let normal = self.timeout;
-        self.timeout = Duration::from_millis(200);
-        let deadline = Instant::now() + wait;
-        let result = loop {
-            match self.transaction(&[0x00, 0xFF]) {
-                Ok(response) => break Ok(response),
-                Err(e) if Instant::now() >= deadline => {
-                    break Err(Error::Timeout(format!("探针没有应答：{e}")))
-                }
-                Err(_) => {}
-            }
-        };
-        self.timeout = normal;
-        result
-    }
-}
-
-impl Transport for SerialTransport {
-    fn xfer(&mut self, request: &[u8]) -> Result<Vec<u8>> {
-        self.transaction(request)
     }
 
     fn describe(&self) -> String {

@@ -197,7 +197,7 @@ fn watch_stops_on_ctrl_c() {
     let fake = FakeProbe::new();
     fake.load_elf_image(&std::fs::read(&elf).unwrap()).unwrap();
     fake.apply_g431_fixture(&syms);
-    let mut probe = Probe::new(Box::new(fake.clone()));
+    let mut probe = Probe::new(Box::new(fake.clone()), Duration::from_secs(2));
     probe.connect_swd(4_000_000).unwrap();
     let t = Resolver::new(&mut syms).resolve("tick").unwrap();
     let stop = Arc::new(AtomicBool::new(false));

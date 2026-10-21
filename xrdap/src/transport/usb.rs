@@ -12,6 +12,9 @@ use crate::{Error, Result};
 pub const VID: u16 = 0x1D50;
 pub const PID: u16 = 0x6199;
 
+/// 发一个 OUT 包的最长时间：探针收不下时（端点一直 NAK）算链路出错
+const SEND_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// 一个找到的探针。
 #[derive(Debug, Clone)]
 pub struct UsbProbeInfo {
@@ -54,13 +57,12 @@ pub struct UsbTransport {
     ep_out: Endpoint<Bulk, Out>,
     ep_in: Endpoint<Bulk, In>,
     in_len: usize,
-    timeout: Duration,
     serial: String,
 }
 
 impl UsbTransport {
     /// 打开探针。`serial` 为 None 时要求只插着一个探针。
-    pub fn open(serial: Option<&str>, timeout: Duration) -> Result<Self> {
+    pub fn open(serial: Option<&str>) -> Result<Self> {
         let found = probes()?;
         let info = match serial {
             Some(s) => found
@@ -152,7 +154,6 @@ impl UsbTransport {
             ep_out,
             ep_in,
             in_len: 0,
-            timeout,
             serial: serial_text,
         };
         t.set_packet_size(1024);
@@ -169,23 +170,26 @@ fn serial_list(found: &[DeviceInfo]) -> String {
 }
 
 impl Transport for UsbTransport {
-    fn xfer(&mut self, request: &[u8]) -> Result<Vec<u8>> {
+    fn send(&mut self, request: &[u8]) -> Result<()> {
         let done = self
             .ep_out
-            .transfer_blocking(Buffer::from(request.to_vec()), self.timeout);
+            .transfer_blocking(Buffer::from(request.to_vec()), SEND_TIMEOUT);
         done.status.map_err(|e| usb_err("USB 发送失败", e))?;
         // 请求长度正好是端点最大包长的整数倍时，没有短包标志传输结束，探针会一直等；补一个零长度包。
         let mps = self.ep_out.max_packet_size().max(1);
         if !request.is_empty() && request.len().is_multiple_of(mps) {
             let zlp = self
                 .ep_out
-                .transfer_blocking(Buffer::from(Vec::<u8>::new()), self.timeout);
+                .transfer_blocking(Buffer::from(Vec::<u8>::new()), SEND_TIMEOUT);
             zlp.status.map_err(|e| usb_err("USB 发送失败", e))?;
         }
+        Ok(())
+    }
 
+    fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>> {
         let done = self
             .ep_in
-            .transfer_blocking(Buffer::new(self.in_len), self.timeout);
+            .transfer_blocking(Buffer::new(self.in_len), timeout);
         match done.status {
             Ok(()) => Ok(done.buffer.into_vec()),
             Err(nusb::transfer::TransferError::Cancelled) => {
