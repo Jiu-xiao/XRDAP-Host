@@ -37,8 +37,8 @@
 //! | [`vendor`]、[`frame`]、[`transport`] | 厂商命令编码、串口/TCP 帧、三种传输 / Vendor encoding, serial/TCP framing, transports |
 //! | `fake`（feature `fake`）| 进程内的模拟探针，测试和演示用 / In-process fake probe for tests and demos |
 //!
-//! 字节格式见 XRDAP-ESP 仓库的 `docs/protocol.md`。完整示例在 `examples/`。
-//! Byte formats: `docs/protocol.md` in the XRDAP-ESP repository. Full examples: `examples/`.
+//! 字节格式见 XRDAP-Core 仓库的 `docs/protocol.md`。完整示例在 `examples/`。
+//! Byte formats: `docs/protocol.md` in the XRDAP-Core repository. Full examples: `examples/`.
 
 mod bytes;
 pub mod cortex;

@@ -141,7 +141,7 @@ let probe = xrdap::dap::Probe::new(Box::new(fake.clone()));
 | `vendor`, `frame`, `transport` | Vendor command encoding, serial and TCP frames, the three transports |
 | `fake` | Simulated probe (feature `fake`) |
 
-The byte formats of the vendor commands are in [docs/protocol.en.md of XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/docs/protocol.en.md).
+The byte formats of the vendor commands are in [docs/protocol.en.md of XRDAP-Core](https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.en.md).
 
 | Example | Action |
 |---|---|

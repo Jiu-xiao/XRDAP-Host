@@ -141,7 +141,7 @@ let probe = xrdap::dap::Probe::new(Box::new(fake.clone()));
 | `vendor`、`frame`、`transport` | 厂商命令编码、串口和 TCP 帧、三种传输 |
 | `fake` | 模拟探针（feature `fake`） |
 
-厂商命令的字节格式见 [XRDAP-ESP 的 docs/protocol.md](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/docs/protocol.md)。
+厂商命令的字节格式见 [XRDAP-Core 的 docs/protocol.md](https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md)。
 
 | 示例 | 作用 |
 |---|---|
