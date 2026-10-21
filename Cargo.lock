@@ -2745,17 +2745,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serial2"
-version = "0.2.38"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b16809bc35793b19ce4e0c53924bc0dce3937f15487997cfdaed936004180730"
-dependencies = [
- "cfg-if",
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "serialport"
 version = "4.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3838,7 +3827,6 @@ dependencies = [
  "mdns-sd",
  "nusb",
  "object",
- "serial2",
  "serialport",
 ]
 

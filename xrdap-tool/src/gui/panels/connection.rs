@@ -55,7 +55,6 @@ impl App {
                 Conn::Probe {
                     addr: Addr::Serial {
                         port: self.serial_port.trim().to_string(),
-                        keep_lines: self.keep_lines,
                     },
                     baud: match self.baud.trim() {
                         "" => None,
@@ -120,10 +119,9 @@ impl App {
                 self.kind = Kind::Usb;
                 self.usb_serial = serial.clone().unwrap_or_default();
             }
-            Addr::Serial { port, keep_lines } => {
+            Addr::Serial { port } => {
                 self.kind = Kind::Serial;
                 self.serial_port = port.clone();
-                self.keep_lines = *keep_lines;
                 if !self.serial_ports.contains(port) {
                     self.serial_ports.push(port.clone());
                 }
@@ -240,7 +238,6 @@ impl App {
                             "不填时按串口芯片自动选：CH343 等 4000000，CP2102、CH340 921600，其他芯片两个都试",
                         );
                     });
-                    ui.checkbox(&mut self.keep_lines, "不改 DTR/RTS（不复位探针）");
                 }
                 Kind::Tcp => {
                     ui.add(

@@ -37,7 +37,6 @@ pub struct App {
     pub(super) serial_ports: Vec<String>,
     pub(super) serial_port: String,
     pub(super) baud: String,
-    pub(super) keep_lines: bool,
     pub(super) tcp_addr: String,
     pub(super) clock: String,
     pub(super) connecting: bool,
@@ -112,7 +111,6 @@ impl App {
             serial_ports: Vec::new(),
             serial_port: get("xrdap.serial").unwrap_or_default(),
             baud: get("xrdap.serial_baud").unwrap_or_default(),
-            keep_lines: get("xrdap.keep_lines").is_some_and(|v| v == "1"),
             tcp_addr: get("xrdap.tcp").unwrap_or_default(),
             clock: get("xrdap.clock").unwrap_or_else(|| "4M".into()),
             connecting: false,
@@ -505,10 +503,6 @@ impl eframe::App for App {
         storage.set_string("xrdap.usb", self.usb_serial.clone());
         storage.set_string("xrdap.serial", self.serial_port.clone());
         storage.set_string("xrdap.serial_baud", self.baud.clone());
-        storage.set_string(
-            "xrdap.keep_lines",
-            if self.keep_lines { "1" } else { "0" }.into(),
-        );
         storage.set_string("xrdap.tcp", self.tcp_addr.clone());
         storage.set_string("xrdap.clock", self.clock.clone());
         storage.set_string("xrdap.elf", self.elf_path.clone());
