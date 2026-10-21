@@ -73,7 +73,6 @@ pub struct App {
     pub(super) starting: bool,
     pub(super) sampling: bool,
     pub(super) run_ids: Vec<u64>,
-    pub(super) est_frame_us: u32,
     pub(super) stats: Stats,
     pub(super) rate: f64,
     pub(super) rate_mark: Option<(Instant, u64)>,
@@ -164,7 +163,6 @@ impl App {
             starting: false,
             sampling: false,
             run_ids: Vec::new(),
-            est_frame_us: 0,
             stats: Stats::default(),
             rate: 0.0,
             rate_mark: None,
@@ -344,11 +342,7 @@ impl App {
             }
             Event::ReadDone(tag, results) => self.on_read_done(tag, results),
             Event::WriteDone { name, ok, text } => self.on_write_done(name, ok, text),
-            Event::Started {
-                est_frame_us,
-                phases,
-            } => self.on_started(est_frame_us, phases),
-            Event::Rejected { est_frame_us } => self.on_rejected(est_frame_us),
+            Event::Started { phases } => self.on_started(phases),
             Event::Frames(frames) => self.on_frames(frames),
             Event::Stats(s) => self.on_stats(s),
             Event::Stopped => self.on_stopped(),
@@ -401,10 +395,9 @@ impl App {
         ));
     }
 
-    fn on_started(&mut self, est_frame_us: u32, phases: Vec<(u16, u16)>) {
+    fn on_started(&mut self, phases: Vec<(u16, u16)>) {
         self.starting = false;
         self.sampling = true;
-        self.est_frame_us = est_frame_us;
         self.stats = Stats::default();
         self.rate = 0.0;
         self.rate_mark = None;
@@ -419,19 +412,7 @@ impl App {
         } else {
             String::new()
         };
-        self.log(format!(
-            "开始采样：{} 个变量，单帧估计 {est_frame_us} µs{extra}",
-            self.run_ids.len()
-        ));
-    }
-
-    fn on_rejected(&mut self, est_frame_us: u32) {
-        self.starting = false;
-        let p = xrdap::watch::suggest_period(est_frame_us);
-        self.log(format!(
-            "探针拒绝：单帧估计 {est_frame_us} µs，比周期长。周期已改成建议值 {p} µs，或者给变量加分频"
-        ));
-        self.period = format!("{p}us");
+        self.log(format!("开始采样：{} 个变量{extra}", self.run_ids.len()));
     }
 
     fn on_stats(&mut self, s: Stats) {

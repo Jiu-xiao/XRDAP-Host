@@ -32,7 +32,7 @@ fn main() -> xrdap::Result<()> {
     // Spec::Auto picks the only probe; Spec::parse("COM3"), Spec::parse("192.0.2.10")
     // or Spec::parse("DDEEFF") also work
     let mut probe = open(&Spec::Auto, &OpenOptions::default())?;
-    xrdap::watch::connect(&mut probe, 4_000_000)?;
+    probe.connect(4_000_000)?;
 
     let mut syms = xrdap::elf::load(std::path::Path::new("app.elf"))?;
     let mut resolver = Resolver::new(&mut syms);
@@ -43,7 +43,7 @@ fn main() -> xrdap::Result<()> {
 }
 ```
 
-`open` is the only way to open a probe; the syntax is in the `addr` module. Automatic selection and serial-number lookup look at USB, the LAN and Espressif USB ports recognised from their USB descriptor, without opening other serial ports; serial ports are opened with DTR and RTS deasserted. `watch::connect` connects the target and first stops sampling left running by an earlier session. `Resolver::resolve` accepts forms such as `state.speed`, `motor[1].pid->out`, `*ptr`, `(uint32_t***)p` and `0x20000010:u32`; `resolve_all` expands structs and arrays into members. A failed access returns `Error::Item` with the item status and the variable name. Full example: `read_write`.
+`open` is the only way to open a probe; the syntax is in the `addr` module. Automatic selection and serial-number lookup look at USB, the LAN and Espressif USB ports recognised from their USB descriptor, without opening other serial ports; serial ports are opened with DTR and RTS deasserted. `Probe::connect` queries INFO first, requires vendor extension protocol version 2, then connects the target; when another connection owns the probe it returns `Error::Busy` ("探针正被另一条连接使用"). The host stops only sampling it started. `Resolver::resolve` accepts forms such as `state.speed`, `motor[1].pid->out`, `*ptr`, `(uint32_t***)p` and `0x20000010:u32`; `resolve_all` expands structs and arrays into members. A failed access returns `Error::Item` with the item status and the variable name. Full example: `read_write`.
 
 ### Sampling on the probe
 
@@ -56,21 +56,22 @@ let vars = targets
     .enumerate()
     .map(|(i, t)| Var { item: t.item(i as u16), div: 1, phase: None })
     .collect();
-// Period 1000 µs; when the probe estimates it cannot keep up, StartError::Rejected carries
-// the estimated frame time
-let mut sampler = Sampler::start(probe, vars, 1000, false)
-    .map_err(|e| xrdap::Error::protocol(format!("{e:?}")))?;
+// Period 1000 µs; one SUB_START carries the whole configuration and starts sampling
+let mut sampler = Sampler::start(probe, vars, 1000, false)?;
 for _ in 0..100 {
     let (frames, _remaining) = sampler.poll()?;
     for f in frames {
         println!("{} µs: {:?}", f.probe_us, f.values);
+    }
+    if let Some(lag) = sampler.stats().lag() {
+        eprintln!("{}", lag.advice());
     }
     std::thread::sleep(sampler.poll_interval());
 }
 sampler.stop()?;
 ```
 
-Each frame carries the probe timestamp and one value per variable (`None` when not due, `Some(None)` when the read failed). `div` samples slow variables every few ticks; divided variables with `phase` None are staggered by `Sampler::start` to even out the bytes read per tick. With more variables than the item limit reported in the probe's INFO, `Sampler::start` returns an error before sending SUB_SET. Full example: `sample`.
+Each frame carries the probe timestamp and one value per variable (`None` when not due, `Some(None)` when the read failed). `div` samples slow variables every few ticks; divided variables with `phase` None are staggered by `Sampler::start` to even out the bytes read per tick. With more variables than the item limit reported in the probe's INFO, `Sampler::start` returns an error before sending SUB_START. The probe does not estimate timing; `Stats::lag` judges from skipped ticks, dropped frames and buffer fill whether sampling keeps up, and `Lag::advice` gives the advice. When sampling stops on the probe (for example because the session ended), `sampling_on_probe()` is false and the remaining frames can still be read. Full example: `sample`.
 
 ### Sharing the probe with Keil, pyOCD, probe-rs, OpenOCD
 
@@ -116,11 +117,12 @@ cortex::halt(probe)?;
 cortex::reset(probe, AfterReset::Run)?;
 println!("{}", cortex::status(probe)?.state.text());
 
-println!("{}", probe.wifi_status()?.describe());
+let wifi = probe.wifi_status()?;
+println!("{}\n{}", wifi.describe(), wifi.history());
 probe.wifi_set("lab", "12345678")?; // the probe restarts afterwards
 ```
 
-`cortex::reset` changes DEMCR.VC_CORERESET for the reset only and restores DEMCR at the end, on success or failure. Full example: `wifi`.
+`cortex::reset` changes DEMCR.VC_CORERESET for the reset only and restores DEMCR at the end, on success or failure. `wifi_status` also reports what last cleared the credentials, the reset reason of this boot and whether NVS was rebuilt; `wifi_clear` sends the clear request with its confirm byte, `86 02 A5`. Full example: `wifi`.
 
 ### Testing
 

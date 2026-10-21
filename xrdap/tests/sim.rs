@@ -8,7 +8,7 @@ use xrdap::dap::Probe;
 use xrdap::expr::{Resolver, Target};
 use xrdap::types::SymbolTable;
 use xrdap::vendor::{self, Item, SubItem};
-use xrdap::watch::{Sampler, StartError, Var};
+use xrdap::watch::{Lag, Sampler, Var};
 use xrdap_sim::Sim;
 
 const TIMEOUT: Duration = Duration::from_secs(2);
@@ -51,13 +51,13 @@ fn vendor_commands_need_connect() {
         .unwrap();
     assert_eq!(resp, [0x81, 0x04]);
     assert!(probe.read(std::slice::from_ref(&counter)).is_err());
-    let target = probe.connect_swd(4_000_000).unwrap();
+    let target = probe.connect(4_000_000).unwrap();
     assert_eq!(target.dpidr, xrdap_sim::DPIDR);
     assert!(target.describe().contains("ARM"));
     let r = probe.read(&[counter]).unwrap();
     assert_eq!(r[0].value, 12345u32.to_le_bytes());
     let info = probe.vendor_info().unwrap();
-    assert_eq!((info.version, info.max_items, info.max_depth), (1, 32, 8));
+    assert_eq!((info.version, info.max_items, info.max_depth), (2, 32, 8));
 }
 
 /// 协议文档 3.2、3.3 的条目状态：空指针 0x30+k、读指针出错 0x10+k、指针地址不对齐 0x20+k、
@@ -65,7 +65,7 @@ fn vendor_commands_need_connect() {
 #[test]
 fn read_item_status_per_protocol() {
     let (_sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     let t = targets(
         &mut syms,
         &[
@@ -121,7 +121,7 @@ fn read_item_status_per_protocol() {
 #[test]
 fn write_then_read_back() {
     let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     let t = targets(
         &mut syms,
         &["s8", "state.pair.hi", "big", "block[0]", "*chain_p3"],
@@ -151,7 +151,7 @@ fn write_then_read_back() {
 #[test]
 fn many_items_split_into_several_reads() {
     let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     let block = addr(&mut syms, "block[0]");
     let list: Vec<Item> = (0..40)
         .map(|i| Item::direct(i, 4, block + 4 * (i as u32 % 8)))
@@ -188,7 +188,7 @@ fn vars(list: &[SubItem]) -> Vec<Var> {
 #[test]
 fn sampling_with_divided_items() {
     let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     sim.add_counter(addr(&mut syms, "counter"), 4, 1000);
     let t = targets(
         &mut syms,
@@ -210,8 +210,6 @@ fn sampling_with_divided_items() {
     vendor::assign_phases(&mut list, &[false; 5]);
     assert_ne!(list[3].phase, list[4].phase);
     let mut s = Sampler::start(&mut probe, vars(&list), 1000, false).unwrap();
-    // 所有条目都到期时一帧的字节数：帧头 10 + 位图 1 + 各条目的值
-    assert_eq!(s.setup.max_frame_bytes, Some(10 + 1 + 4 + 4 + 8 + 1 + 4));
     let mut frames = Vec::new();
     let end = Instant::now() + Duration::from_millis(300);
     while Instant::now() < end {
@@ -267,35 +265,11 @@ fn sampling_with_divided_items() {
     assert_eq!(probe.xfer(&[0x02, 0x01]).unwrap(), [0x02, 0x01]);
 }
 
-/// 协议文档 3.4 SUB_SET：单帧估计大于周期时回 0x03，max_frame_bytes 和 est_frame_us 照样给出。
-#[test]
-fn sampling_rejected_reports_estimate() {
-    let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
-    sim.set_access_us(100);
-    let t = targets(&mut syms, &["counter", "big", "***(uint32_t***)chain_p1"]);
-    let list = vec![
-        sub(&t[0], 0, 1, 0),
-        sub(&t[1], 1, 1, 0),
-        sub(&t[2], 2, 1, 0),
-    ];
-    match Sampler::start(&mut probe, vars(&list), 20, false) {
-        Err(StartError::Rejected(r)) => {
-            assert_eq!(r.status, vendor::STATUS_RESOURCE);
-            let est = r.est_frame_us.unwrap();
-            assert!(est > 20);
-            assert!(xrdap::watch::suggest_period(est) >= est);
-        }
-        Err(StartError::Other(e)) => panic!("{e}"),
-        Ok(_) => panic!("应该被拒绝"),
-    };
-}
-
 /// 协议文档 3.5：跳拍计数、丢帧计数，以及读取失败的条目在位图里置 1。
 #[test]
 fn sampling_counters_and_gaps() {
     let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     sim.skip_every(Some(10));
     sim.set_ring_bytes(400);
     let t = targets(&mut syms, &["counter", "*null_p1"]);
@@ -316,9 +290,29 @@ fn sampling_counters_and_gaps() {
     assert!(st.missing > 0, "{st:?}");
     assert_eq!(st.failed_values, frames.len() as u64);
     assert!(frames.iter().all(|f| matches!(f.values[1], Some(None))));
+    // 跳拍说明 SWD 跟不上（协议文档 3.5 节的建议表）
+    assert_eq!(st.lag(), Some(Lag::Swd));
     // Sampler 销毁时停止采样
     drop(s);
     assert!(!sim.is_sampling());
+}
+
+/// 协议文档 3.4、3.5：探针不估计耗时、不拒绝短周期；跟不跟得上只看运行时的计数器。
+/// 只丢帧不跳拍时是读取跟不上。
+#[test]
+fn keeping_up_is_judged_from_counters() {
+    let (sim, mut probe, mut syms) = setup();
+    probe.connect(4_000_000).unwrap();
+    sim.set_ring_bytes(100);
+    let t = targets(&mut syms, &["counter", "big"]);
+    let list = vec![sub(&t[0], 0, 1, 0), sub(&t[1], 1, 1, 0)];
+    let mut s = Sampler::start(&mut probe, vars(&list), 1, false).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    s.poll().unwrap();
+    let st = s.stats();
+    assert_eq!(st.skipped, 0, "{st:?}");
+    assert!(st.dropped > 0, "{st:?}");
+    assert_eq!(st.lag(), Some(Lag::Read));
 }
 
 /// 协议文档第 2 节：TCP 帧；没有响应的命令（DAP_TransferAbort）不回帧。
@@ -329,7 +323,7 @@ fn tcp_transport_round_trip() {
     let t = xrdap::transport::tcp::TcpTransport::connect(&host, TIMEOUT).unwrap();
     let mut probe = Probe::new(Box::new(t), TIMEOUT);
     assert!(probe.describe().starts_with("TCP 127.0.0.1:"));
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     let start = Instant::now();
     assert!(probe.xfer(&[0x07]).unwrap().is_empty());
     assert!(start.elapsed() < Duration::from_millis(500));
@@ -345,7 +339,7 @@ fn tcp_transport_round_trip() {
 fn halt_resume_and_reset() {
     use xrdap::cortex::{self, AfterReset, CoreState};
     let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     let counter = addr(&mut syms, "counter");
     sim.add_counter(counter, 4, 1000);
     let read = |probe: &mut Probe| -> u32 { cortex::read_u32(probe, counter).unwrap() };
@@ -404,7 +398,7 @@ fn wifi_status_set_clear() {
 fn reset_always_restores_demcr() {
     use xrdap::cortex::{self, AfterReset, DEMCR, DHCSR};
     let (sim, mut probe, _) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     // TRCENA 和 VC_CORERESET 都是调试器之前设好的
     let original = (1 << 24) | 1;
     cortex::write_u32(&mut probe, DEMCR, original).unwrap();
@@ -418,22 +412,61 @@ fn reset_always_restores_demcr() {
     assert_eq!(sim.demcr(), 1 << 24, "复位失败");
 }
 
-/// 协议文档 3.1：采样期间标准命令回 FF。connect_swd 只报占用，不替别人停采样；
-/// watch::connect 停掉之前的会话留下的采样再连。
+/// 协议文档 3.1：另一个传输是会话主人时，标准命令回 `命令 FF`、厂商命令回 `命令 05`，
+/// DAP_Info 照常；主人断开后会话结束，它开始的采样停下。
 #[test]
-fn connect_while_sampling() {
-    let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+fn second_connection_gets_busy() {
+    let (sim, mut owner, mut syms) = setup();
+    owner.connect(4_000_000).unwrap();
     let t = targets(&mut syms, &["counter"]);
-    probe.sub_set(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
-    probe.sub_ctrl(vendor::SUB_START).unwrap();
-    let mut next = Probe::new(Box::new(sim.link()), TIMEOUT);
+    owner.sub_start(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
+    let mut other = Probe::new(Box::new(sim.link()), TIMEOUT);
+    assert!(other.identity().unwrap().serial.is_some());
+    for e in [
+        other.connect(4_000_000).unwrap_err(),
+        other.read(&[t[0].item(0)]).unwrap_err(),
+    ] {
+        assert!(
+            matches!(&e, xrdap::Error::Busy(m) if m == vendor::BUSY_TEXT),
+            "{e}"
+        );
+    }
+    assert!(sim.is_sampling());
+    drop(owner);
+    assert!(!sim.is_sampling());
+    other.connect(4_000_000).unwrap();
+}
+
+/// 用户决定（A1）：主机不停自己没开始的采样。同一条连接上还在运行的采样让连接报占用，
+/// 采样照常进行；SUB_START 回 0x02。
+#[test]
+fn sampling_not_started_here_is_left_alone() {
+    let (sim, mut probe, mut syms) = setup();
+    probe.connect(4_000_000).unwrap();
+    let t = targets(&mut syms, &["counter"]);
+    probe.sub_start(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
     assert!(matches!(
-        next.connect_swd(4_000_000),
+        probe.connect(4_000_000),
         Err(xrdap::Error::Busy(_))
     ));
+    assert!(Sampler::start(&mut probe, vars(&[sub(&t[0], 0, 1, 0)]), 1000, false).is_err());
     assert!(sim.is_sampling());
-    xrdap::watch::connect(&mut next, 4_000_000).unwrap();
+}
+
+/// 协议文档 3.4：会话结束后采样停下，SUB_READ 回 0x02 但照样带缓冲里的帧。
+#[test]
+fn sampler_reads_frames_after_probe_stops() {
+    let (sim, mut probe, mut syms) = setup();
+    probe.connect(4_000_000).unwrap();
+    let t = targets(&mut syms, &["counter"]);
+    let mut s = Sampler::start(&mut probe, vars(&[sub(&t[0], 0, 1, 0)]), 1000, false).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    // 探针那边的采样停了（例如会话结束）；用一条直接的 SUB_CTRL stop 模拟
+    s.probe_mut().sub_ctrl(vendor::SUB_STOP).unwrap();
+    let (frames, remaining) = s.poll().unwrap();
+    assert!(!frames.is_empty());
+    assert_eq!(remaining, 0);
+    assert!(!s.sampling_on_probe());
     assert!(!sim.is_sampling());
 }
 
@@ -442,7 +475,7 @@ fn connect_while_sampling() {
 fn item_errors_are_typed_and_checked_locally() {
     use xrdap::Error;
     let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     let null_p1 = targets(&mut syms, &["*null_p1"]).remove(0);
     match null_p1.read(&mut probe) {
         Err(Error::Item { status: 0x30, text }) => assert!(text.contains("null_p1"), "{text}"),
@@ -465,11 +498,11 @@ fn item_errors_are_typed_and_checked_locally() {
     assert_eq!(sim.requests().len(), before);
 }
 
-/// 条目数超过探针 INFO 报告的上限时在本地报错，不发 SUB_SET；没给相位的分频条目被错开。
+/// 条目数超过探针 INFO 报告的上限时在本地报错，不发 SUB_START；没给相位的分频条目被错开。
 #[test]
 fn sampler_checks_item_limit_and_spreads_phases() {
     let (sim, mut probe, mut syms) = setup();
-    probe.connect_swd(4_000_000).unwrap();
+    probe.connect(4_000_000).unwrap();
     let counter = targets(&mut syms, &["counter"]).remove(0);
     let many: Vec<Var> = (0..=xrdap_sim::MAX_ITEMS as u16)
         .map(|i| Var {
@@ -481,11 +514,11 @@ fn sampler_checks_item_limit_and_spreads_phases() {
     let before = sim.requests().len();
     assert!(matches!(
         Sampler::start(&mut probe, many, 1000, false),
-        Err(StartError::Other(xrdap::Error::Usage(_)))
+        Err(xrdap::Error::Usage(_))
     ));
     assert!(sim.requests()[before..]
         .iter()
-        .all(|r| r[0] != vendor::CMD_SUB_SET));
+        .all(|r| r[0] != vendor::CMD_SUB_START));
     let two = (0..2)
         .map(|i| Var {
             item: counter.item(i),

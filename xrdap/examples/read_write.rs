@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. 打开探针并连接 SWD 目标
     let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
     let mut probe = open(&spec, &OpenOptions::default())?;
-    xrdap::watch::connect(&mut probe, 4_000_000)?;
+    probe.connect(4_000_000)?;
 
     // 3. 写（如果给了新值），再读
     if let Some(v) = value {

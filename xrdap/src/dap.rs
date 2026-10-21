@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::bytes::le_u32;
 use crate::transport::Transport;
 use crate::vendor::wifi::{self, WifiStatus};
-use crate::vendor::{self, Item, ItemResult, SubItem, SubRead, SubSetResult, VendorInfo};
+use crate::vendor::{self, Item, ItemResult, SubItem, SubRead, VendorInfo};
 use crate::{Error, Result};
 
 /// DAP_Info 项：厂商名。
@@ -336,7 +336,7 @@ impl Probe {
 
     // -------------------------------------------------------------- SWD
 
-    /// 标准命令：响应要回显命令号。CMSIS-DAP 的必备命令回 `FF` 只有一个原因：探针正在采样，
+    /// 标准命令：响应要回显命令号。CMSIS-DAP 的必备命令回单个 `FF` 是因为探针正在采样，
     /// 只接受 DAP_Info 和厂商命令（协议文档 3.1 节）。
     fn simple(&mut self, request: &[u8], what: &str) -> Result<Vec<u8>> {
         let resp = self.xfer(request)?;
@@ -403,16 +403,33 @@ impl Probe {
         Ok(le_u32(&resp, 3))
     }
 
+    /// 开始一次会话：先查 INFO，厂商扩展的协议版本必须是 [`vendor::PROTOCOL_VERSION`]
+    /// （协议文档第 3 节），再连接目标（[`Probe::connect_swd`]）。另一条连接占着探针、
+    /// 或者这条连接上的采样还在运行时返回 [`Error::Busy`]；别人开始的采样不停。
+    ///
+    /// Start a session: query INFO, whose extension version must be
+    /// [`vendor::PROTOCOL_VERSION`], then connect the target. Returns [`Error::Busy`] while another
+    /// connection owns the probe or sampling on this connection is still running; sampling
+    /// started by someone else is left alone.
+    pub fn connect(&mut self, clock_hz: u32) -> Result<TargetInfo> {
+        self.vendor_info()?;
+        self.connect_swd(clock_hz)
+    }
+
     /// SWD 连接和 ADIv5 初始化：DAP_Connect(SWD)、设时钟、线复位加 JTAG 转 SWD、
     /// 读 DPIDR、清粘滞错误、调试域和系统域上电。之后厂商命令才能访问目标。
-    /// 探针正在采样时返回 [`Error::Busy`]。
+    /// 探针正在采样或被另一条连接占用时返回 [`Error::Busy`]。
     ///
     /// SWD connect and ADIv5 setup: DAP_Connect(SWD), clock, line reset with JTAG-to-SWD,
     /// DPIDR, sticky error clear, debug and system power-up. Vendor commands need it first.
-    /// Returns [`Error::Busy`] while the probe is sampling.
+    /// Returns [`Error::Busy`] while the probe is sampling or another connection owns it.
     pub fn connect_swd(&mut self, clock_hz: u32) -> Result<TargetInfo> {
         self.query_packet_size()?;
         let resp = self.simple(&[0x02, 0x01], "DAP_Connect")?;
+        // 另一个传输是会话主人时标准命令回 `命令 FF`（协议文档 3.1 节）
+        if resp.get(1) == Some(&DAP_INVALID) {
+            return Err(Error::Busy(vendor::BUSY_TEXT.into()));
+        }
         if resp.get(1) != Some(&0x01) {
             return Err(Error::protocol(format!(
                 "DAP_Connect(SWD) 失败：{}",
@@ -572,17 +589,13 @@ impl Probe {
         }
     }
 
-    /// 0x83 SUB_SET：设置采样周期、标志和采样条目。
+    /// 0x83 SUB_START：带上周期、标志和采样条目，开始采样；整体状态不为 0 时返回错误。
     ///
-    /// 0x83 SUB_SET: set the sampling period, flags and sampled items.
-    pub fn sub_set(
-        &mut self,
-        period_us: u32,
-        flags: u8,
-        items: &[SubItem],
-    ) -> Result<SubSetResult> {
-        let resp = self.xfer(&vendor::sub_set_request(period_us, flags, items))?;
-        vendor::parse_sub_set(&resp)
+    /// 0x83 SUB_START: start sampling with the period, flags and items; a non-zero overall
+    /// status is an error.
+    pub fn sub_start(&mut self, period_us: u32, flags: u8, items: &[SubItem]) -> Result<()> {
+        let resp = self.xfer(&vendor::sub_start_request(period_us, flags, items))?;
+        vendor::parse_sub_start(&resp)
     }
 
     /// 0x84 SUB_CTRL：控制采样；整体状态不为 0 时返回错误。

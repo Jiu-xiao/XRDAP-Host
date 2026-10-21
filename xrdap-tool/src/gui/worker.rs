@@ -12,7 +12,7 @@ use xrdap::open::{self, OpenOptions};
 use xrdap::share::{Event as ShareEvent, Protocol, Share};
 use xrdap::vendor::wifi::WifiStatus;
 use xrdap::vendor::{self, Item, ItemResult};
-use xrdap::watch::{HostFrame, Sampler, StartError, Stats, Var};
+use xrdap::watch::{HostFrame, Sampler, Stats, Var};
 
 /// 共享为 USB DAP 时的监听地址：只给本机用
 pub const SHARE_LISTEN: &str = "127.0.0.1:3240";
@@ -88,12 +88,9 @@ pub enum Event {
         ok: bool,
         text: String,
     },
+    /// 开始采样；`phases` 是每个变量的 (分频, 相位)
     Started {
-        est_frame_us: u32,
         phases: Vec<(u16, u16)>,
-    },
-    Rejected {
-        est_frame_us: u32,
     },
     Frames(Vec<HostFrame>),
     Stats(Stats),
@@ -268,7 +265,7 @@ pub fn run(
                 Cmd::Share(false) => {
                     let mut p = s.stop();
                     send(Event::ShareStopped);
-                    if let Err(e) = xrdap::watch::connect(&mut p, clock) {
+                    if let Err(e) = p.connect(clock) {
                         send(failed(Op::Share, format!("重新连接目标失败：{e}")));
                     }
                     send(poll_core(&mut p));
@@ -324,8 +321,7 @@ pub fn run(
                 probe = None;
                 clock = c;
                 match open(&conn).and_then(|mut p| {
-                    let t = xrdap::watch::connect(&mut p, c)
-                        .map_err(|e| format!("连接目标失败：{e}"))?;
+                    let t = p.connect(c).map_err(|e| format!("连接目标失败：{e}"))?;
                     Ok((p, t))
                 }) {
                     Ok((mut p, t)) => {
@@ -409,19 +405,12 @@ pub fn run(
                     .collect();
                 let mut sampler = match Sampler::start(p, vars, period_us, stop_on_full) {
                     Ok(s) => s,
-                    Err(StartError::Rejected(r)) => {
-                        send(Event::Rejected {
-                            est_frame_us: r.est_frame_us.unwrap_or(0),
-                        });
-                        continue;
-                    }
-                    Err(StartError::Other(e)) => {
+                    Err(e) => {
                         send(failed(Op::Sample, format!("开始采样失败：{e}")));
                         continue;
                     }
                 };
                 send(Event::Started {
-                    est_frame_us: sampler.setup.est_frame_us.unwrap_or(0),
                     phases: sampler.items().iter().map(|s| (s.div, s.phase)).collect(),
                 });
                 let interval = sampler.poll_interval().min(Duration::from_millis(20));
@@ -454,6 +443,9 @@ pub fn run(
                                 send(Event::Stats(sampler.stats()));
                             }
                             if remaining == 0 {
+                                if !sampler.sampling_on_probe() {
+                                    break Some("探针上的采样已经停止（会话结束）".into());
+                                }
                                 std::thread::sleep(interval);
                             }
                         }
@@ -561,6 +553,27 @@ mod tests {
                 }
             )
         });
+        drop(cmd_tx);
+        worker.join().unwrap();
+    }
+
+    /// 协议文档 3.1：另一条连接占着探针时，连接失败并显示“探针正被另一条连接使用”。
+    #[test]
+    fn connect_reports_busy_probe() {
+        let sim = xrdap_sim::Sim::new();
+        let mut owner = Probe::new(Box::new(sim.link()), TIMEOUT);
+        owner.connect(4_000_000).unwrap();
+        let (cmd_tx, cmd_rx) = channel();
+        let (ev_tx, ev_rx) = channel();
+        let worker = std::thread::spawn(move || run(cmd_rx, ev_tx, || {}, "127.0.0.1:0"));
+        let spec = sim.serve_tcp().to_string();
+        cmd_tx
+            .send(Cmd::Connect(Conn { spec, baud: None }, 4_000_000))
+            .unwrap();
+        next(
+            &ev_rx,
+            |e| matches!(e, Event::Failed { op: Op::Connect, msg } if msg.contains("探针正被另一条连接使用")),
+        );
         drop(cmd_tx);
         worker.join().unwrap();
     }

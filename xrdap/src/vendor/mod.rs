@@ -23,10 +23,10 @@ pub const CMD_READ: u8 = 0x81;
 ///
 /// Command byte: WRITE.
 pub const CMD_WRITE: u8 = 0x82;
-/// 命令字节：SUB_SET。
+/// 命令字节：SUB_START（协议版本 2，一条命令带全部配置并开始采样）。
 ///
-/// Command byte: SUB_SET.
-pub const CMD_SUB_SET: u8 = 0x83;
+/// Command byte: SUB_START (protocol version 2; carries the whole configuration and starts).
+pub const CMD_SUB_START: u8 = 0x83;
 /// 命令字节：SUB_CTRL。
 ///
 /// Command byte: SUB_CTRL.
@@ -56,15 +56,26 @@ pub const STATUS_RESOURCE: u8 = 0x03;
 ///
 /// Overall status: no target connected.
 pub const STATUS_NO_TARGET: u8 = 0x04;
+/// 整体状态：另一个传输是会话主人（协议文档 3.1 节）。
+///
+/// Overall status: another transport owns the probe (protocol section 3.1).
+pub const STATUS_BUSY: u8 = 0x05;
+
+/// 本库实现的厂商扩展协议版本；INFO 报告别的版本时不使用扩展。
+///
+/// The vendor extension protocol version this library implements; with any other version
+/// reported by INFO the extension is not used.
+pub const PROTOCOL_VERSION: u8 = 2;
+
+/// 探针被另一条连接占用时给用户看的说明。
+///
+/// The message shown when another connection owns the probe.
+pub const BUSY_TEXT: &str = "探针正被另一条连接使用";
 
 /// SUB_CTRL 的 op：停止采样。
 ///
 /// SUB_CTRL op: stop sampling.
 pub const SUB_STOP: u8 = 0;
-/// SUB_CTRL 的 op：开始采样。
-///
-/// SUB_CTRL op: start sampling.
-pub const SUB_START: u8 = 1;
 
 /// 一次请求、一个订阅最多的条目数（协议文档 3.4 节 INFO）。
 ///
@@ -91,9 +102,12 @@ pub fn status_text(status: u8) -> &'static str {
     match status {
         STATUS_OK => "成功",
         STATUS_ARG => "参数非法",
-        STATUS_STATE => "当前状态不允许（采样中、没有成功的 SUB_SET，或 SWD 链路忙）",
-        STATUS_RESOURCE => "资源不足（条目太多、响应放不进一个包，或周期太短）",
-        STATUS_NO_TARGET => "没有连接目标（没有 DAP_Connect，或读 AP 的 CSW 失败）",
+        STATUS_STATE => "当前状态不允许（已经在采样）",
+        STATUS_RESOURCE => {
+            "资源不足（条目超过 32 个、回复放不进剩余空间、用到超过 8 个 AP，或所有条目都到期的一帧放不进采样缓冲）"
+        }
+        STATUS_NO_TARGET => "没有连接目标（这次会话还没有 DAP_Connect，或读 AP 的 CSW 失败）",
+        STATUS_BUSY => BUSY_TEXT,
         _ => "未定义的状态",
     }
 }
@@ -253,15 +267,23 @@ fn check_header(resp: &[u8], cmd: u8) -> Result<u8> {
     Ok(resp[1])
 }
 
+/// 非 0 的整体状态对应的错误；另一条连接占用探针时是 [`Error::Busy`]。
+fn status_error(cmd: u8, status: u8) -> Error {
+    match status {
+        STATUS_BUSY => Error::Busy(BUSY_TEXT.into()),
+        status => Error::Status {
+            cmd,
+            status,
+            text: status_text(status),
+        },
+    }
+}
+
 /// 整体状态不为 0 时转成错误。
 fn require_ok(resp: &[u8], cmd: u8) -> Result<()> {
     match check_header(resp, cmd)? {
         STATUS_OK => Ok(()),
-        status => Err(Error::Status {
-            cmd,
-            status,
-            text: status_text(status),
-        }),
+        status => Err(status_error(cmd, status)),
     }
 }
 
@@ -307,10 +329,6 @@ pub struct VendorInfo {
     ///
     /// The probe's current time in µs.
     pub probe_time_us: u64,
-    /// 一次 SWD 访问（写 TAR 加读一个 AP 寄存器）的标定耗时，µs。
-    ///
-    /// Calibrated duration of one SWD access (a TAR write plus an AP register read), in µs.
-    pub access_us: u32,
 }
 
 impl VendorInfo {
@@ -333,12 +351,23 @@ pub fn info_request() -> Vec<u8> {
     vec![CMD_INFO]
 }
 
-/// 解码 INFO 响应。
+/// 解码 INFO 响应（协议版本 2 为 22 字节）。版本不是 [`PROTOCOL_VERSION`] 时是错误，
+/// 不做兼容。
 ///
-/// Decode an INFO response.
+/// Decode an INFO response (22 bytes in protocol version 2). Any version other than
+/// [`PROTOCOL_VERSION`] is an error; there is no compatibility.
 pub fn parse_info(resp: &[u8]) -> Result<VendorInfo> {
     require_ok(resp, CMD_INFO)?;
-    if resp.len() < 26 {
+    match resp.get(2) {
+        Some(&PROTOCOL_VERSION) => {}
+        Some(v) => {
+            return Err(Error::protocol(format!(
+                "探针的厂商扩展是协议版本 {v}，这个版本的 xrdap 需要版本 {PROTOCOL_VERSION}，请升级探针固件"
+            )))
+        }
+        None => return Err(Error::protocol(format!("INFO 响应太短：{}", hex(resp)))),
+    }
+    if resp.len() < 22 {
         return Err(Error::protocol(format!("INFO 响应太短：{}", hex(resp))));
     }
     Ok(VendorInfo {
@@ -348,7 +377,6 @@ pub fn parse_info(resp: &[u8]) -> Result<VendorInfo> {
         max_depth: resp[9],
         ring_bytes: le_u32(resp, 10),
         probe_time_us: le_u64(resp, 14),
-        access_us: le_u32(resp, 22),
     })
 }
 
@@ -462,11 +490,12 @@ pub fn parse_write(resp: &[u8], items: &[(Item, Vec<u8>)]) -> Result<Vec<ItemRes
 
 // ------------------------------------------------------------------ 采样
 
-/// SUB_SET 请求包：采样周期、标志和采样条目。
+/// SUB_START 请求包：采样周期、标志和采样条目。探针检查通过后立即开始采样。
 ///
-/// The SUB_SET request packet: sampling period, flags and sampled items.
-pub fn sub_set_request(period_us: u32, flags: u8, items: &[SubItem]) -> Vec<u8> {
-    let mut out = vec![CMD_SUB_SET];
+/// The SUB_START request packet: period, flags and items. The probe starts sampling once the
+/// checks pass.
+pub fn sub_start_request(period_us: u32, flags: u8, items: &[SubItem]) -> Vec<u8> {
+    let mut out = vec![CMD_SUB_START];
     out.extend_from_slice(&period_us.to_le_bytes());
     out.push(flags);
     out.extend_from_slice(&(items.len() as u16).to_le_bytes());
@@ -478,50 +507,16 @@ pub fn sub_set_request(period_us: u32, flags: u8, items: &[SubItem]) -> Vec<u8> 
     out
 }
 
-/// SUB_SET 的结果。status 为 0x03 时 max_frame_bytes、est_frame_us 照样有效。
+/// SUB_START 的响应：整体状态不为 0 时是错误。
 ///
-/// The result of SUB_SET. With status 0x03, `max_frame_bytes` and `est_frame_us` are still
-/// valid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SubSetResult {
-    /// 整体状态。
-    ///
-    /// Overall status.
-    pub status: u8,
-    /// 所有条目都到期时一帧的字节数；响应不带这一项时为 None。
-    ///
-    /// Bytes of one frame when every item is due; None when the response carries no such field.
-    pub max_frame_bytes: Option<u16>,
-    /// 探针估计的单帧耗时，µs；响应不带这一项时为 None。
-    ///
-    /// The probe's estimate of one frame's duration in µs; None when the response carries no
-    /// such field.
-    pub est_frame_us: Option<u32>,
+/// The SUB_START response: a non-zero overall status is an error.
+pub fn parse_sub_start(resp: &[u8]) -> Result<()> {
+    require_ok(resp, CMD_SUB_START)
 }
 
-/// 解码 SUB_SET 响应。
+/// SUB_CTRL 请求包，`op` 见 [`SUB_STOP`]。
 ///
-/// Decode a SUB_SET response.
-pub fn parse_sub_set(resp: &[u8]) -> Result<SubSetResult> {
-    let status = check_header(resp, CMD_SUB_SET)?;
-    if resp.len() >= 8 {
-        Ok(SubSetResult {
-            status,
-            max_frame_bytes: Some(le_u16(resp, 2)),
-            est_frame_us: Some(le_u32(resp, 4)),
-        })
-    } else {
-        Ok(SubSetResult {
-            status,
-            max_frame_bytes: None,
-            est_frame_us: None,
-        })
-    }
-}
-
-/// SUB_CTRL 请求包，`op` 见 [`SUB_STOP`]、[`SUB_START`]。
-///
-/// The SUB_CTRL request packet; see [`SUB_STOP`] and [`SUB_START`] for `op`.
+/// The SUB_CTRL request packet; see [`SUB_STOP`] for `op`.
 pub fn sub_ctrl_request(op: u8) -> Vec<u8> {
     vec![CMD_SUB_CTRL, op]
 }
@@ -547,6 +542,11 @@ pub fn sub_read_request(max_bytes: u16) -> Vec<u8> {
 /// The 0x85 SUB_READ response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubRead {
+    /// 探针还在采样（整体状态 0x00）；为 false 时采样已经停止（状态 0x02），缓冲里的帧照样返回。
+    ///
+    /// The probe is still sampling (status 0x00); false when sampling has stopped (status 0x02),
+    /// with the buffered frames still returned.
+    pub sampling: bool,
     /// 探针当前时间，µs。
     ///
     /// The probe's current time in µs.
@@ -577,11 +577,17 @@ pub struct SubRead {
 ///
 /// Decode a SUB_READ response.
 pub fn parse_sub_read(resp: &[u8]) -> Result<SubRead> {
-    require_ok(resp, CMD_SUB_READ)?;
+    // 0x02 表示没在采样，响应照样带完整的头和帧（协议文档 3.4 节）
+    let sampling = match check_header(resp, CMD_SUB_READ)? {
+        STATUS_OK => true,
+        STATUS_STATE => false,
+        status => return Err(status_error(CMD_SUB_READ, status)),
+    };
     if resp.len() < SUB_READ_HEADER {
         return Err(Error::protocol(format!("SUB_READ 响应太短：{}", hex(resp))));
     }
     Ok(SubRead {
+        sampling,
         probe_time_us: le_u64(resp, 2),
         remaining: le_u32(resp, 10),
         dropped: le_u32(resp, 14),
@@ -604,15 +610,15 @@ pub struct Frame {
     ///
     /// Probe time in µs (48 bits).
     pub timestamp_us: u64,
-    /// 到期的条目：(在 SUB_SET 里的下标, 值)。失败时值为 None。
+    /// 到期的条目：(在 SUB_START 里的下标, 值)。失败时值为 None。
     ///
-    /// The items that were due: (index in SUB_SET, value). The value is None on failure.
+    /// The items that were due: (index in SUB_START, value). The value is None on failure.
     pub values: Vec<(usize, Option<Vec<u8>>)>,
 }
 
-/// 按 SUB_SET 的条目表解码 SUB_READ 返回的帧。到期的条目由节拍序号和 div、phase 推算。
+/// 按 SUB_START 的条目表解码 SUB_READ 返回的帧。到期的条目由节拍序号和 div、phase 推算。
 ///
-/// Decode the frames returned by SUB_READ against the item table of SUB_SET. The due items
+/// Decode the frames returned by SUB_READ against the item table of SUB_START. The due items
 /// follow from the tick number and each item's div and phase.
 pub fn decode_frames(raw: &[u8], items: &[SubItem], count: u16) -> Result<Vec<Frame>> {
     let mut pos = 0;
@@ -659,10 +665,9 @@ pub fn decode_frames(raw: &[u8], items: &[SubItem], count: u16) -> Result<Vec<Fr
     Ok(frames)
 }
 
-/// 所有条目都到期时一帧的字节数（与探针 SUB_SET 返回的 max_frame_bytes 相同）。
+/// 所有条目都到期时一帧的字节数（不含 2 字节长度）。
 ///
-/// Bytes of one frame when every item is due (the same as the `max_frame_bytes` the probe
-/// returns for SUB_SET).
+/// Bytes of one frame when every item is due (without the 2-byte length).
 pub fn max_frame_bytes(items: &[SubItem]) -> usize {
     FRAME_HEADER
         + items.len().div_ceil(8)
@@ -749,25 +754,45 @@ mod tests {
             .collect()
     }
 
+    /// 协议文档 3.8 的 INFO 例子（版本 2）；版本 1 的探针不用。
     #[test]
     fn info_example() {
         let info = parse_info(&unhex(
-            "80 00 01 0F000000 2000 08 00400000 40420F0000000000 32000000",
+            "80 00 02 1F000000 2000 08 00400000 40420F0000000000",
         ))
         .unwrap();
         assert_eq!(
             info,
             VendorInfo {
-                version: 1,
-                features: 0x0F,
+                version: 2,
+                features: 0x1F,
                 max_items: 32,
                 max_depth: 8,
                 ring_bytes: 16384,
                 probe_time_us: 1_000_000,
-                access_us: 50,
             }
         );
         assert_eq!(info.feature_names().len(), 4);
+        let v1 = parse_info(&unhex(
+            "80 00 01 0F000000 2000 08 00400000 40420F0000000000 32000000",
+        ))
+        .unwrap_err();
+        assert!(v1.to_string().contains("协议版本 1"), "{v1}");
+    }
+
+    /// 协议文档 3.2 和 3.8：另一个传输占着探针时厂商命令回 `命令 05`。
+    #[test]
+    fn busy_status() {
+        let items = [Item::direct(1, 4, 0x2000_0000)];
+        let e = parse_read(&unhex("81 05"), &items).unwrap_err();
+        assert!(matches!(&e, Error::Busy(m) if m == BUSY_TEXT), "{e}");
+        assert!(matches!(
+            parse_read(&unhex("81 03"), &items),
+            Err(Error::Status {
+                status: STATUS_RESOURCE,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -828,36 +853,37 @@ mod tests {
         ]
     }
 
+    /// 协议文档 3.8 的 SUB_START 例子。
     #[test]
-    fn sub_set_example() {
+    fn sub_start_example() {
         let items = doc_sub_items();
         let mut expect = unhex("83 E8030000 00 0200");
         expect.extend(unhex("00 1000 04 00010020 00 0000 0100 0000"));
         expect.extend(unhex("00 1100 02 04010020 00 0000 0A00 0300"));
-        assert_eq!(sub_set_request(1000, 0, &items), expect);
+        assert_eq!(sub_start_request(1000, 0, &items), expect);
         assert_eq!(max_frame_bytes(&items), 17);
-        let ok = parse_sub_set(&unhex("83 00 1100 78000000")).unwrap();
-        assert_eq!(
-            ok,
-            SubSetResult {
-                status: 0,
-                max_frame_bytes: Some(17),
-                est_frame_us: Some(120)
-            }
-        );
-        let rejected = parse_sub_set(&unhex("83 03 1100 78000000")).unwrap();
-        assert_eq!(rejected.status, STATUS_RESOURCE);
-        assert_eq!(rejected.est_frame_us, Some(120));
-        let no_target = parse_sub_set(&unhex("83 04")).unwrap();
-        assert_eq!(no_target.status, STATUS_NO_TARGET);
-        assert_eq!(no_target.est_frame_us, None);
+        parse_sub_start(&unhex("83 00")).unwrap();
+        assert!(matches!(
+            parse_sub_start(&unhex("83 02")),
+            Err(Error::Status {
+                status: STATUS_STATE,
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_sub_start(&unhex("83 04")),
+            Err(Error::Status {
+                status: STATUS_NO_TARGET,
+                ..
+            })
+        ));
         let due: Vec<u64> = (0..30).filter(|&k| items[1].due(k)).collect();
         assert_eq!(due, vec![7, 17, 27]);
     }
 
     #[test]
     fn sub_ctrl_and_ff() {
-        assert_eq!(sub_ctrl_request(SUB_START), unhex("84 01"));
+        assert_eq!(sub_ctrl_request(SUB_STOP), unhex("84 00"));
         parse_sub_ctrl(&unhex("84 00")).unwrap();
         assert!(matches!(
             parse_sub_ctrl(&unhex("84 02")),
@@ -870,6 +896,19 @@ mod tests {
         assert_eq!(sub_read_request(1024), unhex("85 0004"));
     }
 
+    /// 协议文档 3.4：SUB_READ 回 0x02 表示没在采样，头和帧照样带。
+    #[test]
+    fn sub_read_after_stop_still_carries_frames() {
+        let resp = unhex(
+            "85 02 80610F0000000000 00000000 00000000 00000000 0100
+             06000000 B0590F000000 00 07000000",
+        );
+        let r = parse_sub_read(&resp).unwrap();
+        assert!(!r.sampling);
+        assert_eq!(r.frame_count, 1);
+        assert!(parse_sub_read(&unhex("85 05")).is_err());
+    }
+
     #[test]
     fn sub_read_example_decodes() {
         let resp = unhex(
@@ -878,6 +917,7 @@ mod tests {
              07000000 985D0F000000 00 08000000 3412",
         );
         let r = parse_sub_read(&resp).unwrap();
+        assert!(r.sampling);
         assert_eq!(r.probe_time_us, 1_008_000);
         assert_eq!(r.frame_count, 2);
         let items = doc_sub_items();
