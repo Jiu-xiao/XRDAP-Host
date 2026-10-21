@@ -33,7 +33,6 @@
 //! | [`expr`]、[`types`]、[`elf`] | 变量表达式、类型、DWARF / Variable expressions, types, DWARF |
 //! | [`watch`]、[`csv`] | 探针端采样、CSV 记录 / Probe-side sampling, CSV records |
 //! | [`cortex`] | 内核状态和停住、继续、复位 / Core state, halt, resume, reset |
-//! | [`wifi`] | 探针 Wi-Fi 的查询、设置、清除 / Query, set and clear the probe's Wi-Fi |
 //! | [`share`] | 把探针共享成 USB/IP 设备或 OpenOCD TCP 后端 / Share a probe over USB/IP or as an OpenOCD TCP backend |
 //! | [`vendor`]、[`frame`]、[`transport`] | 厂商命令编码、串口/TCP 帧、三种传输 / Vendor encoding, serial/TCP framing, transports |
 //!
@@ -57,6 +56,5 @@ pub mod transport;
 pub mod types;
 pub mod vendor;
 pub mod watch;
-pub mod wifi;
 
 pub use error::{Error, Result};

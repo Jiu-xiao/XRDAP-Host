@@ -5,9 +5,32 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::dap::Probe;
+use crate::dap::{Probe, TargetInfo};
 use crate::vendor::{self, SubItem, SubSetResult};
 use crate::{Error, Result};
+
+/// 让探针停止采样（SUB_CTRL stop，协议文档 3.4）。没在采样时也成功。
+///
+/// Stop sampling on the probe (SUB_CTRL stop); succeeds when not sampling too.
+pub fn stop(probe: &mut Probe) -> Result<()> {
+    probe.sub_ctrl(vendor::SUB_STOP)
+}
+
+/// 连接目标。探针还在采样时（之前的会话没有停，DAP_Connect 回 FF）先停掉采样再连。
+///
+/// 会话归属定下来以后（采样只由开始它的会话停），这里改成只停自己的采样，别人的报占用。
+///
+/// Connect the target. When the probe is still sampling (an earlier session did not stop),
+/// stop sampling first and connect again.
+pub fn connect(probe: &mut Probe, clock_hz: u32) -> Result<TargetInfo> {
+    match probe.connect_swd(clock_hz) {
+        Err(Error::Busy(_)) => {
+            stop(probe)?;
+            probe.connect_swd(clock_hz)
+        }
+        other => other,
+    }
+}
 
 /// 解析周期：`1000`（µs）、`500us`、`500µs`、`2ms`、`2.5ms`、`1s`。
 pub fn parse_period(text: &str) -> Result<u32> {
@@ -203,7 +226,7 @@ impl<'a> Sampler<'a> {
         let flags = u8::from(stop_on_full);
         let mut setup = probe.sub_set(period_us, flags, &items)?;
         if setup.status == vendor::STATUS_STATE {
-            probe.stop_sampling()?;
+            stop(probe)?;
             setup = probe.sub_set(period_us, flags, &items)?;
         }
         match setup.status {
@@ -215,6 +238,7 @@ impl<'a> Sampler<'a> {
                 return Err(StartError::Other(Error::Status {
                     cmd: vendor::CMD_SUB_SET,
                     status,
+                    text: vendor::status_text(status),
                 }))
             }
         }
@@ -230,15 +254,7 @@ impl<'a> Sampler<'a> {
             running: false,
             max_read,
         };
-        match s.probe.sub_ctrl(vendor::SUB_START)? {
-            vendor::STATUS_OK => {}
-            status => {
-                return Err(StartError::Other(Error::Status {
-                    cmd: vendor::CMD_SUB_CTRL,
-                    status,
-                }))
-            }
-        }
+        s.probe.sub_ctrl(vendor::SUB_START)?;
         s.running = true;
         Ok(s)
     }
@@ -327,7 +343,7 @@ impl<'a> Sampler<'a> {
             return Ok(Vec::new());
         }
         self.running = false;
-        self.probe.stop_sampling()?;
+        stop(self.probe)?;
         let mut out = Vec::new();
         for _ in 0..64 {
             let (frames, remaining) = self.poll()?;
@@ -344,7 +360,7 @@ impl<'a> Sampler<'a> {
 impl Drop for Sampler<'_> {
     fn drop(&mut self) {
         if self.running {
-            let _ = self.probe.stop_sampling();
+            let _ = stop(self.probe);
         }
     }
 }

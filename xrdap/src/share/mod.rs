@@ -205,7 +205,7 @@ fn run(
             Protocol::OpenOcd => openocd::serve(&mut link, &mut exec),
         };
         // 客户端开过采样的话替它停掉，否则探针会一直占着 SWD
-        let _ = probe.stop_sampling();
+        let _ = crate::watch::stop(&mut probe);
         notify(Event::Idle(
             result
                 .err()

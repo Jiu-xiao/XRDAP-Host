@@ -6,7 +6,6 @@ use xrdap::addr::Addr;
 use xrdap::cortex::{self, AfterReset};
 use xrdap::dap::{self, Probe};
 use xrdap::discover::{self, ProbeEntry};
-use xrdap::wifi;
 
 use super::{CliResult, CoreOp, WifiCmd};
 
@@ -130,7 +129,7 @@ pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> C
         Err(e) => writeln!(out, "厂商扩展：不可用（{e}）")?,
     }
     if let Some(clock) = clock {
-        match probe.connect_swd(clock) {
+        match xrdap::watch::connect(probe, clock) {
             Ok(t) => {
                 writeln!(out, "目标：{}，SWD 时钟 {clock} Hz", t.describe())?;
                 let core = cortex::info(probe).map(|i| i.describe());
@@ -153,13 +152,13 @@ pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> C
 
 pub fn cmd_wifi(probe: &mut Probe, op: &WifiCmd, out: &mut dyn Write) -> CliResult {
     match op {
-        WifiCmd::Status { .. } => writeln!(out, "{}", wifi::status(probe)?.describe())?,
+        WifiCmd::Status { .. } => writeln!(out, "{}", probe.wifi_status()?.describe())?,
         WifiCmd::Set { ssid, password, .. } => {
-            wifi::set(probe, ssid, password.as_deref().unwrap_or(""))?;
+            probe.wifi_set(ssid, password.as_deref().unwrap_or(""))?;
             writeln!(out, "已保存，探针重启后连接热点 {ssid}")?;
         }
         WifiCmd::Clear { .. } => {
-            wifi::clear(probe)?;
+            probe.wifi_clear()?;
             writeln!(out, "已清除，探针重启后不再连 Wi-Fi")?;
         }
     }

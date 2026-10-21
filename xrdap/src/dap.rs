@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::bytes::le_u32;
 use crate::transport::Transport;
+use crate::vendor::wifi::{self, WifiStatus};
 use crate::vendor::{self, Item, ItemResult, SubItem, SubRead, SubSetResult, VendorInfo};
 use crate::{Error, Result};
 
@@ -11,10 +12,7 @@ pub const ID_VENDOR: u8 = 0x01;
 pub const ID_PRODUCT: u8 = 0x02;
 pub const ID_SERIAL: u8 = 0x03;
 pub const ID_PROTOCOL: u8 = 0x04;
-pub const ID_TARGET_VENDOR: u8 = 0x05;
-pub const ID_TARGET_NAME: u8 = 0x06;
 pub const ID_FIRMWARE: u8 = 0x09;
-pub const ID_CAPABILITIES: u8 = 0xF0;
 pub const ID_PACKET_COUNT: u8 = 0xFE;
 pub const ID_PACKET_SIZE: u8 = 0xFF;
 
@@ -283,8 +281,15 @@ impl Probe {
 
     // -------------------------------------------------------------- SWD
 
+    /// 标准命令：响应要回显命令号。CMSIS-DAP 的必备命令回 `FF` 只有一个原因：探针正在采样，
+    /// 只接受 DAP_Info 和厂商命令（协议文档 3.1 节）。
     fn simple(&mut self, request: &[u8], what: &str) -> Result<Vec<u8>> {
         let resp = self.xfer(request)?;
+        if resp == [DAP_INVALID] {
+            return Err(Error::Busy(format!(
+                "{what}：探针正在采样，采样期间只接受 DAP_Info 和厂商命令"
+            )));
+        }
         if resp.first() != Some(&request[0]) {
             return Err(Error::protocol(format!(
                 "{what} 的响应格式不对：{}",
@@ -326,7 +331,7 @@ impl Probe {
                 7 => "没有应答（检查接线、目标供电）",
                 _ => "错误",
             };
-            return Err(Error::Io(format!(
+            return Err(Error::Target(format!(
                 "{what} 失败：SWD 应答 {reason}（响应 {}）",
                 vendor::hex(&resp)
             )));
@@ -343,31 +348,17 @@ impl Probe {
         Ok(le_u32(&resp, 3))
     }
 
-    /// 让探针停止采样。采样期间探针只接受 DAP_Info、DAP_HostStatus 和厂商命令。
-    pub fn stop_sampling(&mut self) -> Result<()> {
-        let resp = self.xfer(&vendor::sub_ctrl_request(vendor::SUB_STOP))?;
-        match vendor::parse_sub_ctrl(&resp)? {
-            vendor::STATUS_OK => Ok(()),
-            status => Err(Error::Status {
-                cmd: vendor::CMD_SUB_CTRL,
-                status,
-            }),
-        }
-    }
-
     /// SWD 连接和 ADIv5 初始化：DAP_Connect(SWD)、设时钟、线复位加 JTAG 转 SWD、
     /// 读 DPIDR、清粘滞错误、调试域和系统域上电。之后厂商命令才能访问目标。
+    /// 探针正在采样时返回 [`Error::Busy`]。
+    ///
+    /// SWD connect and ADIv5 setup: DAP_Connect(SWD), clock, line reset with JTAG-to-SWD,
+    /// DPIDR, sticky error clear, debug and system power-up. Vendor commands need it first.
+    /// Returns [`Error::Busy`] while the probe is sampling.
     pub fn connect_swd(&mut self, clock_hz: u32) -> Result<TargetInfo> {
         self.query_packet_size()?;
-        let resp = self.xfer(&[0x02, 0x01])?;
-        let resp = if resp == [0xFF] {
-            // 上一个会话留下的采样还在运行
-            self.stop_sampling()?;
-            self.xfer(&[0x02, 0x01])?
-        } else {
-            resp
-        };
-        if resp.len() < 2 || resp[0] != 0x02 || resp[1] != 0x01 {
+        let resp = self.simple(&[0x02, 0x01], "DAP_Connect")?;
+        if resp.get(1) != Some(&0x01) {
             return Err(Error::protocol(format!(
                 "DAP_Connect(SWD) 失败：{}",
                 vendor::hex(&resp)
@@ -404,7 +395,7 @@ impl Probe {
                 break;
             }
             if Instant::now() > deadline {
-                return Err(Error::Io(format!(
+                return Err(Error::Target(format!(
                     "调试域上电没有应答（CTRL/STAT 0x{cs:08X}）"
                 )));
             }
@@ -414,6 +405,7 @@ impl Probe {
 
     // -------------------------------------------------------------- 厂商命令
 
+    /// 0x80 INFO。
     pub fn vendor_info(&mut self) -> Result<VendorInfo> {
         let resp = self.xfer(&vendor::info_request())?;
         vendor::parse_info(&resp)
@@ -430,7 +422,7 @@ impl Probe {
         while start < items.len() {
             let mut end = start + 1;
             while end < items.len()
-                && end - start < 32
+                && end - start < vendor::MAX_ITEMS
                 && resp_len(&items[start..end + 1]) <= self.packet_size
             {
                 end += 1;
@@ -441,8 +433,11 @@ impl Probe {
         out
     }
 
-    /// 读一组条目。超过一个 READ 的容量时自动分成多次。
+    /// 0x81 READ：读一组条目。超过一个 READ 的容量时自动分成多次。
+    ///
+    /// 0x81 READ of a list of items, split into several requests when needed.
     pub fn read(&mut self, items: &[Item]) -> Result<Vec<ItemResult>> {
+        items.iter().try_for_each(Item::check)?;
         let mut out = Vec::with_capacity(items.len());
         let len = |p: &[Item]| {
             let req = 2 + p.iter().map(Item::encoded_len).sum::<usize>();
@@ -456,8 +451,21 @@ impl Probe {
         Ok(out)
     }
 
-    /// 写一组条目，value 为 size 字节的小端值。
+    /// 0x82 WRITE：写一组条目，value 为 size 字节的小端值。
+    ///
+    /// 0x82 WRITE of a list of items; each value is `size` little-endian bytes.
     pub fn write(&mut self, items: &[(Item, Vec<u8>)]) -> Result<Vec<ItemResult>> {
+        for (item, value) in items {
+            item.check()?;
+            if value.len() != item.size as usize {
+                return Err(Error::usage(format!(
+                    "条目 {} 的值有 {} 字节，访问宽度是 {}",
+                    item.id,
+                    value.len(),
+                    item.size
+                )));
+            }
+        }
         let mut out = Vec::with_capacity(items.len());
         let packet = self.packet_size;
         let req_len = |p: &[(Item, Vec<u8>)]| {
@@ -477,6 +485,37 @@ impl Probe {
         Ok(out)
     }
 
+    /// 读一个条目的值；条目状态不为 0 时返回 [`Error::Item`]。
+    ///
+    /// Read one item; a non-zero item status is [`Error::Item`].
+    pub fn read_one(&mut self, item: &Item) -> Result<Vec<u8>> {
+        let r = self.read(std::slice::from_ref(item))?;
+        let r = r
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::protocol("READ 没有返回结果"))?;
+        match r.status {
+            vendor::STATUS_OK => Ok(r.value),
+            status => Err(item_error(item, status)),
+        }
+    }
+
+    /// 写一个条目；条目状态不为 0 时返回 [`Error::Item`]。
+    ///
+    /// Write one item; a non-zero item status is [`Error::Item`].
+    pub fn write_one(&mut self, item: &Item, value: &[u8]) -> Result<()> {
+        let r = self.write(&[(item.clone(), value.to_vec())])?;
+        let r = r
+            .into_iter()
+            .next()
+            .ok_or_else(|| Error::protocol("WRITE 没有返回结果"))?;
+        match r.status {
+            vendor::STATUS_OK => Ok(()),
+            status => Err(item_error(item, status)),
+        }
+    }
+
+    /// 0x83 SUB_SET。
     pub fn sub_set(
         &mut self,
         period_us: u32,
@@ -487,15 +526,49 @@ impl Probe {
         vendor::parse_sub_set(&resp)
     }
 
-    pub fn sub_ctrl(&mut self, op: u8) -> Result<u8> {
+    /// 0x84 SUB_CTRL；整体状态不为 0 时是错误。
+    pub fn sub_ctrl(&mut self, op: u8) -> Result<()> {
         let resp = self.xfer(&vendor::sub_ctrl_request(op))?;
         vendor::parse_sub_ctrl(&resp)
     }
 
-    /// SUB_READ，同时返回请求前后的本机时间。
+    /// 0x85 SUB_READ，同时返回请求前后的本机时间。
     pub fn sub_read(&mut self, max_bytes: u16) -> Result<(SubRead, Instant, Instant)> {
         let (resp, before, after) = self.xfer_timed(&vendor::sub_read_request(max_bytes))?;
         Ok((vendor::parse_sub_read(&resp)?, before, after))
+    }
+
+    /// 0x86：查询 Wi-Fi 状态。
+    ///
+    /// 0x86: query the Wi-Fi state.
+    pub fn wifi_status(&mut self) -> Result<WifiStatus> {
+        wifi::parse_status(&self.xfer(&wifi::status_request())?)
+    }
+
+    /// 0x86：保存热点参数。成功后探针约 0.5 秒后重启并连接新热点，这个连接随之断开。
+    ///
+    /// 0x86: save credentials. On success the probe restarts after about 0.5 s and this
+    /// connection is lost.
+    pub fn wifi_set(&mut self, ssid: &str, password: &str) -> Result<()> {
+        wifi::parse_reply(&self.xfer(&wifi::set_request(ssid, password)?)?)
+    }
+
+    /// 0x86：清除热点参数。成功后探针约 0.5 秒后重启，不再连 Wi-Fi。
+    ///
+    /// 0x86: clear credentials. On success the probe restarts after about 0.5 s.
+    pub fn wifi_clear(&mut self) -> Result<()> {
+        wifi::parse_reply(&self.xfer(&wifi::clear_request())?)
+    }
+}
+
+fn item_error(item: &Item, status: u8) -> Error {
+    Error::Item {
+        status,
+        text: format!(
+            "0x{:08X} 处的条目：{}",
+            item.base,
+            vendor::item_status_text(status, &[])
+        ),
     }
 }
 

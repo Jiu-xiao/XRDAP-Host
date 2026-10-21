@@ -12,9 +12,9 @@ use xrdap::cortex::{AfterReset, CoreStatus};
 use xrdap::discover::ProbeEntry;
 use xrdap::share::Event as ShareEvent;
 use xrdap::types::SymbolTable;
+use xrdap::vendor::wifi::WifiStatus;
 use xrdap::vendor::ItemResult;
 use xrdap::watch::{HostFrame, Stats};
-use xrdap::wifi::WifiStatus;
 
 use super::model::{Csv, Kind, ShareState, VarRow, Watch};
 use super::plot::PlotView;

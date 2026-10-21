@@ -1,4 +1,12 @@
-//! XR 厂商扩展命令 0x80 到 0x85 的请求编码和响应解码。字节格式见 docs/protocol.md 第 3 节。
+//! XR 厂商扩展命令的请求编码和响应解码：0x80 到 0x85 在这里，0x86（Wi-Fi 配置）在
+//! [`wifi`]。字节格式见 XRDAP-Core 的协议文档第 3 节：
+//! <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>
+//!
+//! Request encoding and response decoding of the XR vendor commands: 0x80 to 0x85 here,
+//! 0x86 (Wi-Fi configuration) in [`wifi`]. Byte formats: section 3 of the XRDAP-Core protocol
+//! document.
+
+pub mod wifi;
 
 use crate::bytes::{le_u16, le_u32, le_u48, le_u64};
 use crate::{Error, Result};
@@ -20,13 +28,18 @@ pub const SUB_STOP: u8 = 0;
 pub const SUB_START: u8 = 1;
 pub const SUB_CLEAR: u8 = 2;
 
+/// 一次请求、一个订阅最多的条目数（协议文档 3.4 节 INFO）。
+pub const MAX_ITEMS: usize = 32;
+/// 一个条目最多经过的指针级数（协议文档 3.3 节）。
 pub const MAX_DEPTH: usize = 8;
 /// SUB_READ 响应头的字节数。
 pub const SUB_READ_HEADER: usize = 24;
 /// 帧头：节拍序号 4 字节 + 时间戳 6 字节。
 pub const FRAME_HEADER: usize = 10;
 
-/// 整体状态的说明。
+/// 0x80 到 0x85 的整体状态的说明。
+///
+/// Meaning of an overall status of commands 0x80 to 0x85.
 pub fn status_text(status: u8) -> &'static str {
     match status {
         STATUS_OK => "成功",
@@ -99,7 +112,9 @@ impl Item {
         out.extend_from_slice(&self.final_off.to_le_bytes());
     }
 
-    /// 本地检查：size 和解引用次数。
+    /// 本地检查：size 和解引用次数（协议文档 3.3 节的取值范围）。
+    ///
+    /// Local check of size and dereference count against the ranges of protocol 3.3.
     pub fn check(&self) -> Result<()> {
         if !matches!(self.size, 1 | 2 | 4 | 8) {
             return Err(Error::usage(format!("访问宽度 {} 不是 1/2/4/8", self.size)));
@@ -148,7 +163,11 @@ fn check_header(resp: &[u8], cmd: u8) -> Result<u8> {
 fn require_ok(resp: &[u8], cmd: u8) -> Result<()> {
     match check_header(resp, cmd)? {
         STATUS_OK => Ok(()),
-        status => Err(Error::Status { cmd, status }),
+        status => Err(Error::Status {
+            cmd,
+            status,
+            text: status_text(status),
+        }),
     }
 }
 
@@ -330,9 +349,9 @@ pub fn sub_ctrl_request(op: u8) -> Vec<u8> {
     vec![CMD_SUB_CTRL, op]
 }
 
-/// SUB_CTRL 返回整体状态。
-pub fn parse_sub_ctrl(resp: &[u8]) -> Result<u8> {
-    check_header(resp, CMD_SUB_CTRL)
+/// SUB_CTRL 的响应：整体状态不为 0 时是错误。
+pub fn parse_sub_ctrl(resp: &[u8]) -> Result<()> {
+    require_ok(resp, CMD_SUB_CTRL)
 }
 
 pub fn sub_read_request(max_bytes: u16) -> Vec<u8> {
@@ -610,7 +629,14 @@ mod tests {
     #[test]
     fn sub_ctrl_and_ff() {
         assert_eq!(sub_ctrl_request(SUB_START), unhex("84 01"));
-        assert_eq!(parse_sub_ctrl(&unhex("84 00")).unwrap(), 0);
+        parse_sub_ctrl(&unhex("84 00")).unwrap();
+        assert!(matches!(
+            parse_sub_ctrl(&unhex("84 02")),
+            Err(Error::Status {
+                status: STATUS_STATE,
+                ..
+            })
+        ));
         assert!(parse_sub_ctrl(&[0xFF]).is_err());
         assert_eq!(sub_read_request(1024), unhex("85 0004"));
     }
