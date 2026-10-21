@@ -63,9 +63,13 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Cmd {
-    /// 列出 USB、串口、局域网上的探针，以及选它们时 --probe 的写法
+    /// 列出 USB、串口、局域网上的探针，以及选它们时 -p 的写法。默认不打开串口
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
-    List,
+    List {
+        /// 逐个打开可能接着探针的串口，发 DAP_Info 询问（打开串口可能让接在上面的开发板复位）
+        #[arg(long)]
+        ask_serial: bool,
+    },
 
     /// 显示探针信息：DAP_Info、厂商扩展 INFO，并连接目标读 DPIDR
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
@@ -214,7 +218,7 @@ pub fn run(cli: Cli, out: &mut dyn Write, err: &mut dyn Write, stop: &AtomicBool
         return Ok(());
     };
     match cmd {
-        Cmd::List => probe::cmd_list(out),
+        Cmd::List { ask_serial } => probe::cmd_list(ask_serial, out),
         Cmd::Vars { pattern } => memory::cmd_vars(conn, pattern.as_deref(), out),
         Cmd::Info { no_target } => {
             let syms = load_symbols(conn)?;

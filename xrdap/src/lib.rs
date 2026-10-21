@@ -9,12 +9,13 @@
 //!
 //! ```no_run
 //! use xrdap::expr::Resolver;
+//! use xrdap::addr::Spec;
 //! use xrdap::open::{open, OpenOptions};
 //!
 //! # fn main() -> xrdap::Result<()> {
-//! // 自动选唯一的探针；也可以写 Some("COM35")、Some("192.168.0.108")、Some("93EF1C")
-//! // Auto-select the only probe; Some("COM35"), Some("192.168.0.108"), Some("93EF1C") also work
-//! let mut probe = open(None, &OpenOptions::default())?;
+//! // 自动选唯一的探针；也可以写 Spec::parse("COM3")、Spec::parse("192.0.2.10")、Spec::parse("DDEEFF")
+//! // Auto-select the only probe; Spec::parse("COM3"), ("192.0.2.10") or ("DDEEFF") also work
+//! let mut probe = open(&Spec::Auto, &OpenOptions::default())?;
 //! probe.connect_swd(4_000_000)?;
 //!
 //! let mut syms = xrdap::elf::load(std::path::Path::new("app.elf"))?;
@@ -40,11 +41,11 @@
 //! 字节格式见 XRDAP-Core 仓库的 `docs/protocol.md`。完整示例在 `examples/`。
 //! Byte formats: `docs/protocol.md` in the XRDAP-Core repository. Full examples: `examples/`.
 
+pub mod addr;
 mod bytes;
 pub mod cortex;
 pub mod csv;
 pub mod dap;
-#[cfg(feature = "discover")]
 pub mod discover;
 #[cfg(feature = "elf")]
 pub mod elf;

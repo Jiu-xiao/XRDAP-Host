@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
+use xrdap::addr::{Addr, Spec};
 use xrdap::cortex::{self, AfterReset, CoreStatus};
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
 use xrdap::fake::FakeProbe;
-use xrdap::open::{self, Addr, OpenOptions};
+use xrdap::open::{self, OpenOptions};
 use xrdap::types::SymbolTable;
 use xrdap::vendor::{self, Item, ItemResult, SubItem};
 use xrdap::watch::{HostFrame, Sampler, StartError, Stats};
@@ -123,7 +124,7 @@ fn open(conn: &Conn) -> Result<Probe, String> {
                 baud: *baud,
                 ..OpenOptions::default()
             };
-            open::open_addr(addr, &opts).map_err(e)?
+            open::open(&Spec::Addr(addr.clone()), &opts).map_err(e)?
         }
         Conn::Fake(elf) => {
             let fake = FakeProbe::new();

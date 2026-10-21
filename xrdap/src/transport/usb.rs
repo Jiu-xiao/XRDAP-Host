@@ -69,22 +69,22 @@ impl UsbTransport {
                 .iter()
                 .find(|d| d.serial_number() == Some(s))
                 .ok_or_else(|| {
-                    Error::Io(format!(
-                        "没有找到序列号为 {s} 的探针（找到 {} 个：{}）",
+                    Error::Select(format!(
+                        "没有找到序列号为 {s} 的 USB 探针（找到 {} 块：{}）",
                         found.len(),
                         serial_list(&found)
                     ))
                 })?,
             None => match found.len() {
                 0 => {
-                    return Err(Error::Io(format!(
+                    return Err(Error::Select(format!(
                         "没有找到 USB 探针（VID:PID {VID:04X}:{PID:04X}）"
                     )))
                 }
                 1 => &found[0],
                 n => {
-                    return Err(Error::usage(format!(
-                        "插着 {n} 个探针，用 -p usb:<序列号> 选一个：{}",
+                    return Err(Error::Select(format!(
+                        "插着 {n} 块 USB 探针：{}",
                         serial_list(&found)
                     )))
                 }

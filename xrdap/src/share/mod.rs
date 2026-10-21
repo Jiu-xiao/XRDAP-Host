@@ -16,11 +16,12 @@
 //! the probe until [`Share::stop`] hands it back.
 //!
 //! ```no_run
+//! use xrdap::addr::Spec;
 //! use xrdap::open::{open, OpenOptions};
 //! use xrdap::share::{Protocol, Share};
 //!
 //! # fn main() -> xrdap::Result<()> {
-//! let probe = open(Some("COM7"), &OpenOptions::default())?;
+//! let probe = open(&Spec::parse("COM7"), &OpenOptions::default())?;
 //! let share = Share::start(probe, Protocol::Usbip, "127.0.0.1:3240", |e| println!("{e:?}"))
 //!     .map_err(|(_, e)| e)?;
 //! println!("挂载：{}", share.attach_hint());

@@ -2,22 +2,79 @@
 
 use std::io::Write;
 
+use xrdap::addr::Addr;
 use xrdap::cortex::{self, AfterReset};
 use xrdap::dap::{self, Probe};
-use xrdap::discover;
+use xrdap::discover::{self, ProbeEntry};
 use xrdap::wifi;
 
 use super::connect::{connect_target, ConnOpts};
 use super::{CliResult, CoreOp, WifiCmd};
 
-pub fn cmd_list(out: &mut dyn Write) -> CliResult {
-    let probes = discover::group(discover::find(&discover::Options::default()));
+/// 列出探针。`ask_serial` 为 false 时不打开任何串口，只列出可能接着探针的串口。
+pub fn cmd_list(ask_serial: bool, out: &mut dyn Write) -> CliResult {
+    let probes = discover::group(discover::find(&discover::Options {
+        ask_serial,
+        ..Default::default()
+    }));
     if probes.is_empty() {
-        writeln!(out, "没有找到探针（USB、串口、局域网都没有）")?;
-        return Ok(());
+        writeln!(out, "没有找到探针")?;
     }
-    write!(out, "{}", discover::table(&probes))?;
+    write!(out, "{}", table(&probes))?;
+    let listed: Vec<&Addr> = probes
+        .iter()
+        .flat_map(|p| &p.links)
+        .map(|l| &l.addr)
+        .collect();
+    let unchecked: Vec<_> = discover::serial_ports()
+        .into_iter()
+        .filter(|s| {
+            !listed.contains(&&Addr::Serial {
+                port: s.port.clone(),
+            })
+        })
+        .collect();
+    if !unchecked.is_empty() {
+        if ask_serial {
+            writeln!(out, "没有应答的串口：")?;
+        } else {
+            writeln!(
+                out,
+                "没有打开检查的串口（用 -p 串口名 连接，或 xrdap list --ask-serial 逐个打开询问）："
+            )?;
+        }
+        for s in unchecked {
+            writeln!(out, "    {}  {}", s.port, s.chip.name())?;
+        }
+    }
     Ok(())
+}
+
+/// 每块探针一行序列号和产品，下面每行一个连接和选它时 -p 的写法。
+fn table(probes: &[ProbeEntry]) -> String {
+    let mut s = String::new();
+    for p in probes {
+        s.push_str(&format!(
+            "{}  {}
+",
+            p.serial.as_deref().unwrap_or("（没有序列号）"),
+            p.product.as_deref().unwrap_or("")
+        ));
+        for l in &p.links {
+            let note = l
+                .note
+                .as_deref()
+                .map(|n| format!("（{n}）"))
+                .unwrap_or_default();
+            s.push_str(&format!(
+                "    {}{note}    -p {}
+",
+                l.addr,
+                l.addr.spec()
+            ));
+        }
+    }
+    s
 }
 
 pub fn cmd_info(

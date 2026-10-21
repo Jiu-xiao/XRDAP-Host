@@ -5,10 +5,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Args;
+use xrdap::addr::{Addr, Spec};
 use xrdap::dap::{self, Probe};
 use xrdap::fake::FakeProbe;
-use xrdap::open::{self, Addr, OpenOptions, Spec};
+use xrdap::open::{self, OpenOptions};
 use xrdap::types::SymbolTable;
+use xrdap::Error;
 
 use super::CliResult;
 
@@ -80,15 +82,14 @@ pub fn open_probe(conn: &ConnOpts, syms: &SymbolTable, err: &mut dyn Write) -> C
         baud: conn.baud,
         ..OpenOptions::default()
     };
-    match open::parse(conn.probe.as_deref()) {
-        Spec::Addr(addr @ Addr::Serial { .. }) => {
-            writeln!(err, "打开{addr}，等探针应答……")?;
-            Ok(open::open_addr(&addr, &opts)?)
-        }
-        Spec::Addr(addr) => Ok(open::open_addr(&addr, &opts)?),
-        // 自动选择或按序列号找：先找，再按找到的连接打开
-        Spec::Auto | Spec::Serial(_) => Ok(open::open(conn.probe.as_deref(), &opts)?),
+    let spec = Spec::parse(conn.probe.as_deref().unwrap_or(""));
+    if let Spec::Addr(addr @ Addr::Serial { .. }) = &spec {
+        writeln!(err, "打开{addr}，等探针应答……")?;
     }
+    open::open(&spec, &opts).map_err(|e| match e {
+        Error::Select(msg) => format!("{msg}。用 -p 指定一块探针，xrdap list 列出全部").into(),
+        e => e.into(),
+    })
 }
 
 pub fn connect_target(probe: &mut Probe, conn: &ConnOpts) -> CliResult<dap::TargetInfo> {

@@ -10,7 +10,6 @@
 pub(crate) mod script;
 pub mod serial;
 pub mod tcp;
-#[cfg(feature = "usb")]
 pub mod usb;
 
 use std::time::Duration;

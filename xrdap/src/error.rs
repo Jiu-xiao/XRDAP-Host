@@ -13,6 +13,8 @@ pub enum Error {
     Status { cmd: u8, status: u8 },
     /// 表达式、符号或参数有问题。
     Usage(String),
+    /// 没能选定一块探针：一块都没找到，或者找到不止一块。
+    Select(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -30,9 +32,11 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::Io(msg) | Error::Timeout(msg) | Error::Protocol(msg) | Error::Usage(msg) => {
-                f.write_str(msg)
-            }
+            Error::Io(msg)
+            | Error::Timeout(msg)
+            | Error::Protocol(msg)
+            | Error::Usage(msg)
+            | Error::Select(msg) => f.write_str(msg),
             Error::Status { cmd, status } => write!(
                 f,
                 "命令 0x{cmd:02X} 返回状态 0x{status:02X}：{}",

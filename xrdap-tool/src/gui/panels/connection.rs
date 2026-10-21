@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
 use eframe::egui::{self, Color32, RichText};
+use xrdap::addr::Addr;
 use xrdap::cortex::{AfterReset, CoreState};
 use xrdap::discover;
-use xrdap::open::Addr;
 
 use crate::gui::app::App;
 use crate::gui::model::Kind;

@@ -6,7 +6,7 @@
 //!
 //! ```no_run
 //! # fn main() -> xrdap::Result<()> {
-//! let mut probe = xrdap::open::open(None, &Default::default())?;
+//! let mut probe = xrdap::open::open(&xrdap::addr::Spec::Auto, &Default::default())?;
 //! let st = xrdap::wifi::status(&mut probe)?;
 //! println!("{}", st.describe());
 //! # Ok(())

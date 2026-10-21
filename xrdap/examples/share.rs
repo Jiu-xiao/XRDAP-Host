@@ -9,12 +9,13 @@
 //! 来说设备被拔掉。探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap --probe`），不设时自动选
 //! 唯一的那块。
 
+use xrdap::addr::Spec;
 use xrdap::open::{open, OpenOptions};
 use xrdap::share::{Event, Protocol, Share};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let spec = std::env::var("XRDAP_PROBE").ok();
-    let probe = open(spec.as_deref(), &OpenOptions::default())?;
+    let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
+    let probe = open(&spec, &OpenOptions::default())?;
     let share = Share::start(probe, Protocol::Usbip, "127.0.0.1:3240", |e| match e {
         Event::Client(peer) => println!("{peer} 已连接"),
         Event::Idle(None) => println!("已断开"),
