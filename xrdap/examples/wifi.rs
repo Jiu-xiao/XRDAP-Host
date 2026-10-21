@@ -7,11 +7,12 @@
 //!
 //! 探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap --probe`），不设时自动选唯一的那块。
 
+use xrdap::addr::Spec;
 use xrdap::open::{open, OpenOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let spec = std::env::var("XRDAP_PROBE").ok();
-    let mut probe = open(spec.as_deref(), &OpenOptions::default())?;
+    let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
+    let mut probe = open(&spec, &OpenOptions::default())?;
     let mut args = std::env::args().skip(1);
     match args.next() {
         None => println!("{}", xrdap::wifi::status(&mut probe)?.describe()),

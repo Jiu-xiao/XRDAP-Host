@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+use xrdap::addr::Spec;
 use xrdap::expr::Resolver;
 use xrdap::open::{open, OpenOptions};
 
@@ -26,8 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = Resolver::new(&mut syms).resolve(&expr)?;
 
     // 2. 打开探针并连接 SWD 目标
-    let spec = std::env::var("XRDAP_PROBE").ok();
-    let mut probe = open(spec.as_deref(), &OpenOptions::default())?;
+    let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
+    let mut probe = open(&spec, &OpenOptions::default())?;
     probe.connect_swd(4_000_000)?;
 
     // 3. 写（如果给了新值），再读

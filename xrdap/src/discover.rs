@@ -1,55 +1,85 @@
 //! 找探针：USB（VID:PID 1D50:6199）、串口、局域网（mDNS）。
 //!
 //! - USB：列出 VID:PID 为 1D50:6199 的设备，序列号来自 USB 描述符。
-//! - 串口：只看常见 USB 转串口芯片（WCH CH34x、Silicon Labs CP210x、FTDI）和乐鑫芯片自带的
-//!   USB Serial/JTAG，打开后发 DAP_Info，按时回答的就是探针，同时读出序列号。别的串口不打开。
-//!   S3 板上的 USB 转串口打开时可能让探针复位一次，所以第一次找串口最长要等 `serial_wait`。
+//! - 串口：只看系统列出的端口和它们的 USB 描述符，默认**不打开**任何串口——打开串口可能复位
+//!   接在上面的别的开发板。乐鑫芯片自带的 USB Serial/JTAG（VID:PID 303A:1001）按描述符认作
+//!   探针：描述符里的序列号是芯片的 MAC，探针序列号由它得出。别的串口只有
+//!   [`Options::ask_serial`] 打开时才逐个打开、发 DAP_Info 确认。
 //! - 局域网：浏览 mDNS 服务 `_xrdap._tcp`，TXT 里带序列号。
 //!
 //! 同一块探针可能同时经 USB、串口、Wi-Fi 被找到，序列号相同；[`group`] 把它们合成一项。
 //!
+//! Find probes on USB (1D50:6199), serial ports and the LAN (mDNS). Serial ports are only
+//! listed with their USB descriptors and never opened by default, since opening a port can
+//! reset another board on it. Espressif's built-in USB Serial/JTAG (303A:1001) is recognised
+//! from its descriptor, whose serial number is the chip MAC. Other ports are opened and asked
+//! for DAP_Info only with [`Options::ask_serial`].
+//!
 //! ```no_run
-//! use xrdap::discover::{find, group, table, Options};
-//! let probes = group(find(&Options::default()));
-//! print!("{}", table(&probes));
+//! use xrdap::discover::{find, group, Options};
+//! for p in group(find(&Options::default())) {
+//!     println!("{:?} {:?}", p.serial, p.best());
+//! }
 //! ```
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use crate::addr::Addr;
 use crate::dap::Probe;
-use crate::open::Addr;
 use crate::transport::serial::{SerialTransport, DEFAULT_BAUD, SAFE_BAUD};
+use crate::transport::usb;
 use crate::Result;
 
+/// 探针序列号的前缀，后面是芯片唯一 ID 的大写十六进制（协议文档 4.1 节）。
+///
+/// Prefix of probe serial numbers, followed by the chip's unique ID in upper-case hex.
+pub const SERIAL_PREFIX: &str = "XRobot-XRDAP-";
+
 /// 找到的一个连接：一块探针经某种方式可达。
+///
+/// One way to reach a probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
-    /// 探针序列号，例如 XRobot-XRDAP-E8069093EF1C
+    /// 探针序列号，例如 `XRobot-XRDAP-AABBCCDDEEFF`
+    ///
+    /// Probe serial number
     pub serial: Option<String>,
-    /// 产品名，例如 XR-DAP-S3
+    /// 产品名，例如 `XR-DAP-S3`
+    ///
+    /// Product name
     pub product: Option<String>,
     pub addr: Addr,
     /// 补充说明，例如 mDNS 主机名
+    ///
+    /// Extra note, e.g. the mDNS host name
     pub note: Option<String>,
 }
 
 /// 一块探针和它所有可达的连接。
+///
+/// One probe and every way to reach it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeEntry {
     pub serial: Option<String>,
     pub product: Option<String>,
     /// 按 USB、串口、TCP 排好序
+    ///
+    /// Sorted USB, serial, TCP
     pub links: Vec<Found>,
 }
 
 impl ProbeEntry {
     /// 推荐用的连接：USB 优先，其次串口，再次 TCP。
+    ///
+    /// The preferred address: USB, then serial, then TCP.
     pub fn best(&self) -> &Addr {
         &self.links[0].addr
     }
 
     /// 序列号是否和 `text` 相同，或以它结尾（不分大小写）。
+    ///
+    /// Whether the serial number equals `text` or ends with it (case-insensitive).
     pub fn matches(&self, text: &str) -> bool {
         let Some(sn) = &self.serial else {
             return false;
@@ -60,12 +90,19 @@ impl ProbeEntry {
 }
 
 /// 找哪些连接、找多久。
+///
+/// What to search and for how long.
 #[derive(Debug, Clone)]
 pub struct Options {
     pub usb: bool,
-    pub serial: bool,
     pub mdns: bool,
-    /// 串口应答、mDNS 浏览的等待时间
+    /// 逐个打开可能接着探针的串口，发 DAP_Info 确认（会让打开时就复位的开发板复位）
+    ///
+    /// Open each candidate serial port and ask DAP_Info (resets boards that reset on open)
+    pub ask_serial: bool,
+    /// mDNS 浏览、串口应答的等待时间
+    ///
+    /// Time to browse mDNS and to wait for serial answers
     pub time: Duration,
 }
 
@@ -73,16 +110,18 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             usb: true,
-            serial: true,
             mdns: true,
+            ask_serial: false,
             time: Duration::from_millis(1500),
         }
     }
 }
 
 /// USB 上的探针。
+///
+/// Probes on USB.
 pub fn usb() -> Result<Vec<Found>> {
-    Ok(crate::transport::usb::list()?
+    Ok(usb::list()?
         .into_iter()
         .map(|p| Found {
             addr: Addr::Usb {
@@ -95,69 +134,152 @@ pub fn usb() -> Result<Vec<Found>> {
         .collect())
 }
 
-const VID_WCH: u16 = 0x1A86;
-const VID_SILABS: u16 = 0x10C4;
-const VID_FTDI: u16 = 0x0403;
-const VID_ESPRESSIF: u16 = 0x303A;
-
-/// WCH 里最高只到 2 Mbaud 的型号：CH340、CH341
-const PID_WCH_SLOW: [u16; 2] = [0x7523, 0x5523];
-
-/// 一个可能接着探针的串口，以及按它的 USB 转串口芯片该怎么打开。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SerialPortProfile {
-    pub port: String,
-    /// 依次尝试的波特率。S3 板上的 CH343 跑 4 Mbaud；CP2102、CH340 到不了 4 Mbaud，
-    /// 只试传统 ESP32 固件用的 921600
-    pub bauds: &'static [u32],
+/// 串口的 USB 转串口芯片，按 USB VID/PID 判断。
+///
+/// The USB-serial chip behind a port, judged from its USB VID/PID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chip {
+    /// 乐鑫芯片自带的 USB Serial/JTAG（303A:1001），不看波特率
+    ///
+    /// Espressif built-in USB Serial/JTAG; the baud rate has no effect
+    EspressifUsb,
+    /// WCH CH343 等，能跑 4 Mbaud
+    ///
+    /// WCH CH343 and similar, 4 Mbaud capable
+    WchFast,
+    /// WCH CH340、CH341，最高 2 Mbaud
+    ///
+    /// WCH CH340/CH341, at most 2 Mbaud
+    WchSlow,
+    SiliconLabs,
+    Ftdi,
+    /// 不认识或不是 USB 串口
+    ///
+    /// Unknown, or not a USB serial port
+    Other,
 }
 
-const BAUDS_FAST: &[u32] = &[DEFAULT_BAUD, SAFE_BAUD];
-const BAUDS_SAFE: &[u32] = &[SAFE_BAUD];
-/// USB Serial/JTAG 不看波特率
-const BAUDS_ANY: &[u32] = &[DEFAULT_BAUD];
+impl Chip {
+    fn from_usb(vid: u16, pid: u16) -> Chip {
+        match (vid, pid) {
+            (0x303A, 0x1001) => Chip::EspressifUsb,
+            (0x1A86, 0x7523 | 0x5523) => Chip::WchSlow,
+            (0x1A86, _) => Chip::WchFast,
+            (0x10C4, _) => Chip::SiliconLabs,
+            (0x0403, _) => Chip::Ftdi,
+            _ => Chip::Other,
+        }
+    }
 
-/// 可能接着探针的串口：常见 USB 转串口芯片和乐鑫 USB Serial/JTAG。
-pub fn serial_candidates() -> Vec<SerialPortProfile> {
+    /// 依次尝试的波特率。CH343 跑探针固件的 4 Mbaud；CP2102、CH340 到不了，只试传统 ESP32
+    /// 固件的 921600；不认识的芯片两个都试。
+    ///
+    /// Baud rates to try, in order: 4 Mbaud firmware on capable chips, 921600 (classic ESP32
+    /// firmware) on slow ones, both on unknown chips.
+    pub fn bauds(self) -> &'static [u32] {
+        match self {
+            Chip::EspressifUsb => &[DEFAULT_BAUD],
+            Chip::WchSlow | Chip::SiliconLabs => &[SAFE_BAUD],
+            Chip::WchFast | Chip::Ftdi | Chip::Other => &[DEFAULT_BAUD, SAFE_BAUD],
+        }
+    }
+
+    /// 芯片名，给人看。
+    ///
+    /// Chip name for people.
+    pub fn name(self) -> &'static str {
+        match self {
+            Chip::EspressifUsb => "乐鑫 USB Serial/JTAG",
+            Chip::WchFast => "WCH CH34x",
+            Chip::WchSlow => "WCH CH340/CH341",
+            Chip::SiliconLabs => "Silicon Labs CP210x",
+            Chip::Ftdi => "FTDI",
+            Chip::Other => "其他",
+        }
+    }
+}
+
+/// 系统列出的一个串口和它的 USB 描述符。
+///
+/// One serial port as listed by the system, with its USB descriptor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SerialPortInfo {
+    pub port: String,
+    pub chip: Chip,
+    /// USB 描述符里的序列号
+    ///
+    /// Serial number from the USB descriptor
+    pub usb_serial: Option<String>,
+}
+
+impl SerialPortInfo {
+    /// 乐鑫 USB Serial/JTAG 上的探针序列号：描述符里的 MAC（`AA:BB:CC:DD:EE:FF`）去掉分隔符、
+    /// 转大写，加上 [`SERIAL_PREFIX`]。别的芯片返回 None（要打开串口问才知道）。
+    ///
+    /// The probe serial number behind an Espressif USB Serial/JTAG port, derived from the MAC in
+    /// its descriptor; None for other chips (the port must be opened to know).
+    pub fn probe_serial(&self) -> Option<String> {
+        if self.chip != Chip::EspressifUsb {
+            return None;
+        }
+        let hex: String = self
+            .usb_serial
+            .as_deref()?
+            .chars()
+            .filter(char::is_ascii_hexdigit)
+            .collect();
+        (hex.len() == 12).then(|| format!("{SERIAL_PREFIX}{}", hex.to_ascii_uppercase()))
+    }
+}
+
+/// 可能接着探针的串口：认识芯片的 USB 串口。只读系统的端口列表，不打开。
+///
+/// Serial ports that may lead to a probe: USB ports with a known chip. Reads the system's
+/// port list only; nothing is opened.
+pub fn serial_ports() -> Vec<SerialPortInfo> {
     let Ok(ports) = serialport::available_ports() else {
         return Vec::new();
     };
-    ports
+    let mut out: Vec<SerialPortInfo> = ports
         .into_iter()
         .filter_map(|p| {
             let serialport::SerialPortType::UsbPort(u) = p.port_type else {
                 return None;
             };
-            let bauds = match u.vid {
-                VID_ESPRESSIF => BAUDS_ANY,
-                VID_SILABS => BAUDS_SAFE,
-                VID_WCH if PID_WCH_SLOW.contains(&u.pid) => BAUDS_SAFE,
-                VID_WCH | VID_FTDI => BAUDS_FAST,
-                _ => return None,
-            };
-            Some(SerialPortProfile {
+            let chip = Chip::from_usb(u.vid, u.pid);
+            (chip != Chip::Other).then_some(SerialPortInfo {
                 port: p.port_name,
-                bauds,
+                chip,
+                usb_serial: u.serial_number,
             })
         })
-        .collect()
+        .collect();
+    out.sort_by(|a, b| a.port.cmp(&b.port));
+    out
 }
 
-/// 一个串口按芯片该怎么打开；不是已知的 USB 转串口芯片时先试 4 Mbaud 再试 921600。
-pub fn serial_profile(port: &str) -> SerialPortProfile {
-    serial_candidates()
+/// 一个串口的信息；不在 [`serial_ports`] 里时芯片记为 [`Chip::Other`]。
+///
+/// Information on one port; [`Chip::Other`] when it is not in [`serial_ports`].
+pub fn serial_port(port: &str) -> SerialPortInfo {
+    serial_ports()
         .into_iter()
         .find(|p| p.port.eq_ignore_ascii_case(port))
-        .unwrap_or(SerialPortProfile {
+        .unwrap_or(SerialPortInfo {
             port: port.to_string(),
-            bauds: BAUDS_FAST,
+            chip: Chip::Other,
+            usb_serial: None,
         })
 }
 
-/// 问一个串口是不是探针：按 `bauds` 依次试，每个波特率在 `wait` 内回答 DAP_Info 就是。
-pub fn probe_serial(profile: &SerialPortProfile, wait: Duration) -> Option<Found> {
-    let mut probe = profile.bauds.iter().find_map(|&baud| {
-        let t = SerialTransport::open(&profile.port, baud).ok()?;
+/// 打开一个串口问它是不是探针：按芯片的波特率依次试，每个波特率在 `wait` 内回答 DAP_Info
+/// 就是。会打开串口。
+///
+/// Open a port and ask whether a probe is there: try the chip's baud rates in turn; a DAP_Info
+/// answer within `wait` means yes. This opens the port.
+pub fn ask_serial(info: &SerialPortInfo, wait: Duration) -> Option<Found> {
+    let mut probe = info.chip.bauds().iter().find_map(|&baud| {
+        let t = SerialTransport::open(&info.port, baud).ok()?;
         let mut probe = Probe::new(Box::new(t), wait);
         probe.wait_ready(wait).ok()?;
         Some(probe)
@@ -167,28 +289,39 @@ pub fn probe_serial(profile: &SerialPortProfile, wait: Duration) -> Option<Found
         serial: id.serial,
         product: id.product,
         addr: Addr::Serial {
-            port: profile.port.clone(),
+            port: info.port.clone(),
         },
         note: None,
     })
 }
 
-/// 串口上的探针。各个候选口同时问，每个口每种波特率约 `wait`。
-pub fn serial(wait: Duration) -> Vec<Found> {
-    let handles: Vec<_> = serial_candidates()
-        .into_iter()
-        .map(|p| std::thread::spawn(move || probe_serial(&p, wait)))
-        .collect();
-    handles
-        .into_iter()
-        .filter_map(|h| h.join().ok().flatten())
+type Ask = fn(&SerialPortInfo, Duration) -> Option<Found>;
+
+/// 按描述符认出的串口探针（乐鑫 USB Serial/JTAG），不打开串口。
+fn serial_by_descriptor(ports: &[SerialPortInfo]) -> Vec<Found> {
+    ports
+        .iter()
+        .filter_map(|p| {
+            Some(Found {
+                serial: Some(p.probe_serial()?),
+                product: None,
+                addr: Addr::Serial {
+                    port: p.port.clone(),
+                },
+                note: Some(format!("{}，按 USB 描述符识别", p.chip.name())),
+            })
+        })
         .collect()
 }
 
 /// mDNS 服务类型。
+///
+/// The mDNS service type.
 pub const MDNS_SERVICE: &str = "_xrdap._tcp.local.";
 
 /// 局域网里经 mDNS 广播的探针，浏览 `time` 这么久。
+///
+/// Probes advertised over mDNS on the LAN, browsing for `time`.
 pub fn mdns(time: Duration) -> Result<Vec<Found>> {
     let err = |e: mdns_sd::Error| crate::Error::Io(format!("mDNS：{e}"));
     let daemon = mdns_sd::ServiceDaemon::new().map_err(err)?;
@@ -232,20 +365,30 @@ fn product_from_chip(chip: &str) -> &str {
     }
 }
 
-/// 按 `opts` 找全部连接。串口和 mDNS 同时进行，总共约 `opts.time`；出错的那一类跳过。
+/// 按 `opts` 找全部连接。mDNS 浏览和串口询问同时进行，总共约 `opts.time`；出错的那一类跳过。
+///
+/// Find every connection per `opts`. mDNS browsing and serial asking run in parallel, about
+/// `opts.time` in total; a category that fails is skipped.
 pub fn find(opts: &Options) -> Vec<Found> {
+    collect(opts, &serial_ports(), ask_serial)
+}
+
+/// [`find`] 的主体；`ask` 是打开串口询问的那一步。
+fn collect(opts: &Options, ports: &[SerialPortInfo], ask: Ask) -> Vec<Found> {
     let time = opts.time;
-    let serial = opts
-        .serial
-        .then(|| std::thread::spawn(move || serial(time)));
+    let asked: Vec<_> = ports
+        .iter()
+        .filter(|p| opts.ask_serial && p.chip != Chip::EspressifUsb)
+        .cloned()
+        .map(|p| std::thread::spawn(move || ask(&p, time)))
+        .collect();
     let mdns = opts.mdns.then(|| std::thread::spawn(move || mdns(time)));
     let mut out = Vec::new();
     if opts.usb {
         out.extend(usb().unwrap_or_default());
     }
-    if let Some(h) = serial {
-        out.extend(h.join().unwrap_or_default());
-    }
+    out.extend(serial_by_descriptor(ports));
+    out.extend(asked.into_iter().filter_map(|h| h.join().ok().flatten()));
     if let Some(h) = mdns {
         out.extend(h.join().ok().and_then(|r| r.ok()).unwrap_or_default());
     }
@@ -261,6 +404,9 @@ fn link_rank(a: &Addr) -> u8 {
 }
 
 /// 把同一序列号的连接合成一块探针；没有序列号的各算一块。按序列号排序。
+///
+/// Merge connections with the same serial number into one probe; each one without a serial
+/// number is a probe of its own. Sorted by serial number.
 pub fn group(found: Vec<Found>) -> Vec<ProbeEntry> {
     let mut by_serial: BTreeMap<String, ProbeEntry> = BTreeMap::new();
     let mut anonymous = Vec::new();
@@ -291,41 +437,6 @@ pub fn group(found: Vec<Found>) -> Vec<ProbeEntry> {
     out
 }
 
-/// 给人看的表：每块探针一行序列号和产品，下面每行一个连接，后面是 `--probe` 的写法。
-pub fn table(probes: &[ProbeEntry]) -> String {
-    let mut s = String::new();
-    for p in probes {
-        s.push_str(&format!(
-            "{}  {}\n",
-            p.serial.as_deref().unwrap_or("（没有序列号）"),
-            p.product.as_deref().unwrap_or("")
-        ));
-        for l in &p.links {
-            let note = l
-                .note
-                .as_deref()
-                .map(|n| format!("（{n}）"))
-                .unwrap_or_default();
-            s.push_str(&format!(
-                "    {}{note}    --probe {}\n",
-                l.addr,
-                spec_of(&l.addr)
-            ));
-        }
-    }
-    s
-}
-
-/// 连接对应的 `--probe` 写法。
-pub fn spec_of(addr: &Addr) -> String {
-    match addr {
-        Addr::Usb { serial: Some(s) } => format!("usb:{s}"),
-        Addr::Usb { serial: None } => "usb".into(),
-        Addr::Serial { port, .. } => port.clone(),
-        Addr::Tcp { host } => host.clone(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,14 +452,77 @@ mod tests {
 
     #[test]
     fn unknown_serial_port_tries_both_firmware_bauds() {
-        let p = serial_profile("XRDAP-NO-SUCH-PORT");
-        assert_eq!(p.bauds, &[DEFAULT_BAUD, SAFE_BAUD]);
+        let p = serial_port("XRDAP-NO-SUCH-PORT");
+        assert_eq!(p.chip, Chip::Other);
+        assert_eq!(p.chip.bauds(), &[DEFAULT_BAUD, SAFE_BAUD]);
+    }
+
+    /// 用户决定（B11）：乐鑫自带 USB 口按描述符认，探针序列号是 MAC 的大写十六进制
+    /// （协议文档 4.1 节）。
+    #[test]
+    fn espressif_usb_port_recognised_by_descriptor() {
+        let port = |chip, sn: &str| SerialPortInfo {
+            port: "COM9".into(),
+            chip,
+            usb_serial: Some(sn.into()),
+        };
+        let esp = port(Chip::EspressifUsb, "aa:bb:cc:dd:ee:ff");
+        assert_eq!(
+            esp.probe_serial().as_deref(),
+            Some("XRobot-XRDAP-AABBCCDDEEFF")
+        );
+        assert_eq!(Chip::from_usb(0x303A, 0x1001), Chip::EspressifUsb);
+        // 别的芯片只看描述符认不出来
+        assert_eq!(port(Chip::WchFast, "5A7B012345").probe_serial(), None);
+        assert_eq!(port(Chip::EspressifUsb, "not-a-mac").probe_serial(), None);
+        let f = serial_by_descriptor(&[esp, port(Chip::SiliconLabs, "0001")]);
+        assert_eq!(f.len(), 1);
+        assert_eq!(
+            f[0].addr,
+            Addr::Serial {
+                port: "COM9".into()
+            }
+        );
+    }
+
+    /// 用户决定（B11）：默认只列出串口，不打开；要求询问时才打开，乐鑫 USB 口不用问。
+    #[test]
+    fn serial_ports_opened_only_when_asked() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static OPENED: AtomicUsize = AtomicUsize::new(0);
+        fn ask(_: &SerialPortInfo, _: Duration) -> Option<Found> {
+            OPENED.fetch_add(1, Ordering::SeqCst);
+            None
+        }
+        let ports = [
+            SerialPortInfo {
+                port: "COM3".into(),
+                chip: Chip::WchFast,
+                usb_serial: None,
+            },
+            SerialPortInfo {
+                port: "COM9".into(),
+                chip: Chip::EspressifUsb,
+                usb_serial: Some("AA:BB:CC:DD:EE:FF".into()),
+            },
+        ];
+        let mut opts = Options {
+            usb: false,
+            mdns: false,
+            ..Options::default()
+        };
+        let found = collect(&opts, &ports, ask);
+        assert_eq!(OPENED.load(Ordering::SeqCst), 0);
+        assert_eq!(found.len(), 1, "乐鑫 USB 口按描述符列出");
+        opts.ask_serial = true;
+        collect(&opts, &ports, ask);
+        assert_eq!(OPENED.load(Ordering::SeqCst), 1, "只问 CH34x 那个口");
     }
 
     #[test]
     fn group_and_match() {
         let tcp = Addr::Tcp {
-            host: "10.0.0.2:3241".into(),
+            host: "192.0.2.10:3241".into(),
         };
         let usb = Addr::Usb {
             serial: Some("XRobot-XRDAP-AABBCC".into()),
@@ -369,8 +543,5 @@ mod tests {
         assert!(g[1].matches("XRobot-XRDAP-AABBCC"));
         assert!(!g[1].matches("1122"));
         assert!(!g[1].matches(""));
-        let t = table(&g);
-        assert!(t.contains("--probe COM9"));
-        assert!(t.contains("--probe usb:XRobot-XRDAP-AABBCC"));
     }
 }

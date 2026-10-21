@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use xrdap::addr::Spec;
 use xrdap::expr::Resolver;
 use xrdap::open::{open, OpenOptions};
 use xrdap::vendor::SubItem;
@@ -26,8 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|e| resolver.resolve(&e))
         .collect::<xrdap::Result<Vec<_>>>()?;
 
-    let spec = std::env::var("XRDAP_PROBE").ok();
-    let mut probe = open(spec.as_deref(), &OpenOptions::default())?;
+    let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
+    let mut probe = open(&spec, &OpenOptions::default())?;
     probe.connect_swd(4_000_000)?;
 
     // 每拍都采（div 1），周期 1 ms；探针拒绝时会给出估计的单帧耗时
