@@ -46,7 +46,7 @@ mod usbip;
 use std::io;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -122,6 +122,18 @@ impl Share {
     /// Start sharing on `listen` (e.g. `127.0.0.1:3240`). On failure the probe is handed back.
     /// `notify` is called on the share thread.
     pub fn start(
+        probe: Probe,
+        protocol: Protocol,
+        listen: &str,
+        notify: impl Fn(Event) + Send + 'static,
+    ) -> std::result::Result<Self, (Probe, Error)> {
+        let thread = std::thread::Builder::new().name("xrdap-share".into());
+        Self::start_on(thread, probe, protocol, listen, notify)
+    }
+
+    /// [`Share::start`] 的主体，共享线程按 `thread` 创建。
+    fn start_on(
+        thread: std::thread::Builder,
         mut probe: Probe,
         protocol: Protocol,
         listen: &str,
@@ -144,14 +156,23 @@ impl Share {
             Err(e) => return Err((probe, e)),
         };
         let stop = Arc::new(AtomicBool::new(false));
-        let thread = {
+        // 探针在线程建好之后才交过去：建线程失败时探针还在这里，可以还给调用方
+        let (handoff, receive) = mpsc::sync_channel::<Probe>(1);
+        let spawned = {
             let stop = stop.clone();
             let device = device.clone();
-            std::thread::Builder::new()
-                .name("xrdap-share".into())
-                .spawn(move || run(listener, protocol, &device, probe, &stop, notify))
-                .expect("创建共享线程")
+            thread.spawn(move || {
+                let probe = receive.recv().expect("start 建好线程后立即交出探针");
+                run(listener, protocol, &device, probe, &stop, notify)
+            })
         };
+        let thread = match spawned {
+            Ok(t) => t,
+            Err(e) => return Err((probe, Error::Io(format!("创建共享线程失败：{e}")))),
+        };
+        if let Err(mpsc::SendError(probe)) = handoff.send(probe) {
+            return Err((probe, Error::Io("共享线程没有启动".into())));
+        }
         Ok(Self {
             protocol,
             addr,
@@ -300,6 +321,22 @@ mod tests {
         assert_eq!(sent[sent.len() - 2], vec![0x07]);
         drop(c);
         share.stop();
+    }
+
+    /// 建不了共享线程时不 panic，探针交还给调用方。
+    #[test]
+    fn spawn_failure_returns_the_probe() {
+        let link = Script::default();
+        let probe = Probe::new(Box::new(link.clone()), Duration::from_secs(2));
+        // 栈大到系统给不出来，建线程失败
+        let huge = std::thread::Builder::new().stack_size(usize::MAX / 2);
+        let Err((mut probe, e)) =
+            Share::start_on(huge, probe, Protocol::OpenOcd, "127.0.0.1:0", |_| {})
+        else {
+            panic!("共享线程不应该建得起来");
+        };
+        assert!(e.to_string().contains("共享线程"), "{e}");
+        assert!(probe.identity().is_ok());
     }
 
     /// 探针不应答时断开这个客户端，并报告原因；不回假的 0xFF。
