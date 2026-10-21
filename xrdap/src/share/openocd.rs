@@ -1,6 +1,10 @@
 //! OpenOCD `cmsis-dap backend tcp` 的服务端：一个请求帧对应一个响应帧。
 //! 帧格式：`"DAP\0" + 长度(u16 小端) + 类型(1 请求 2 响应) + 保留(1) + DAP 包`，见
 //! [`crate::frame`]。
+//!
+//! Server side of OpenOCD's `cmsis-dap backend tcp`: one request frame gets one response
+//! frame. Frame format: `"DAP\0"`, length (u16 little-endian), type (1 request, 2 response),
+//! a reserved byte and the DAP packet; see [`crate::frame`].
 
 use std::io;
 

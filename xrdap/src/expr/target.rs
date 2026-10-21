@@ -1,4 +1,7 @@
 //! 解析好的变量：厂商条目、访问位置，以及按类型读写目标内存。
+//!
+//! A resolved variable: the vendor item, the access location, and typed reads and writes of
+//! target memory.
 
 use crate::dap::Probe;
 use crate::types::ValueType;
@@ -6,20 +9,45 @@ use crate::vendor::{self, Item};
 use crate::{Error, Result};
 
 /// 解析好的一个变量：可以直接变成厂商条目。
+///
+/// A resolved variable that converts directly into a vendor item.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
-    /// 表达式的写法，输出时用作名字
+    /// 表达式的写法，输出时用作名字。
+    ///
+    /// The expression as written, used as the name in output.
     pub name: String,
+    /// MEM-AP 编号。
+    ///
+    /// MEM-AP number.
     pub ap: u8,
+    /// 起始地址。
+    ///
+    /// Start address.
     pub base: u32,
+    /// 每一级指针的偏移。
+    ///
+    /// Offset of each pointer level.
     pub derefs: Vec<i16>,
+    /// 最后一级指针之后的偏移。
+    ///
+    /// Offset applied after the last pointer level.
     pub final_off: i16,
+    /// 值的类型。
+    ///
+    /// Type of the value.
     pub ty: ValueType,
-    /// 各级指针的表达式，第 k 个对应第 k 级解引用，用于错误提示
+    /// 各级指针的表达式，第 k 个对应第 k 级解引用，用于错误提示。
+    ///
+    /// The expression of each pointer level; the k-th entry belongs to dereference level k.
+    /// Used in error messages.
     pub chain: Vec<String>,
 }
 
 impl Target {
+    /// 以 `id` 为编号生成厂商条目。
+    ///
+    /// Build the vendor item with the identifier `id`.
     pub fn item(&self, id: u16) -> Item {
         Item {
             ap: self.ap,
@@ -31,13 +59,18 @@ impl Target {
         }
     }
 
-    /// 不经过指针时的地址。
+    /// 不经过指针时的地址；经过指针时为 None。
+    ///
+    /// The address when no pointer is involved; None when the access passes through pointers.
     pub fn direct_addr(&self) -> Option<u32> {
         self.derefs.is_empty().then_some(self.base)
     }
 
     /// 位置的简短说明：`0x20000010`；经过指针时 `[x]` 表示读 x 处的指针，
     /// 例如 `[[0x20000034]+4]+8`。
+    ///
+    /// A short description of the location: `0x20000010`; with pointers, `[x]` means the pointer
+    /// read at x, e.g. `[[0x20000034]+4]+8`.
     pub fn location(&self) -> String {
         let off = |d: i64| match d {
             0 => String::new(),
@@ -53,12 +86,15 @@ impl Target {
 
     /// 读这个变量的当前值（`ty.size` 字节，小端）。探针要先连上目标（[`Probe::connect_swd`]）。
     ///
-    /// Read the current value (`ty.size` little-endian bytes); the target must be connected.
+    /// Read the current value (`ty.size` little-endian bytes). The probe must be connected to the
+    /// target first ([`Probe::connect_swd`]).
     pub fn read(&self, probe: &mut Probe) -> Result<Vec<u8>> {
         probe.read_one(&self.item(0)).map_err(|e| self.named(e))
     }
 
     /// 读出并按类型格式化，例如 `1.5`、`42 (0x2A)`、`RUN (1)`。
+    ///
+    /// Read the value and format it by type, e.g. `1.5`, `42 (0x2A)` or `RUN (1)`.
     pub fn read_text(&self, probe: &mut Probe) -> Result<String> {
         Ok(self.ty.format(&self.read(probe)?))
     }

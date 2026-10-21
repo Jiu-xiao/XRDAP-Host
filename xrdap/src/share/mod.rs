@@ -10,10 +10,18 @@
 //! （对它来说设备被拔掉），把探针交回来。同一时间只服务一个客户端，客户端离开时如果探针还在
 //! 采样就替它停掉。
 //!
-//! Share one probe with other debug tools: as a USB CMSIS-DAP v2 device over USB/IP
-//! (Keil, pyOCD, probe-rs, OpenOCD) or as OpenOCD's CMSIS-DAP TCP backend. The probe may
-//! be attached over serial, TCP or USB; the share runs in a background thread that owns
-//! the probe until [`Share::stop`] hands it back.
+//! Share one probe with other debug tools.
+//!
+//! | Protocol | Port | Used by |
+//! |---|---|---|
+//! | [`Protocol::Usbip`] | 3240 | After a USB/IP client attaches it (`usbip` in the Linux kernel tools, usbip-win2 on Windows), the system shows a USB CMSIS-DAP v2 probe that Keil, pyOCD, probe-rs and OpenOCD can use |
+//! | [`Protocol::OpenOcd`] | 3241 | OpenOCD's `cmsis-dap backend tcp` |
+//!
+//! The probe may be attached over serial, TCP or USB; a common use is turning an ESP32-C3
+//! plugged into the computer (serial) into a USB probe. The share runs in a background thread
+//! that owns the probe. [`Share::stop`] disconnects the client in use (the device appears
+//! unplugged to it) and hands the probe back. Only one client is served at a time; when a
+//! client leaves while the probe is still sampling, sampling is stopped for it.
 //!
 //! ```no_run
 //! use xrdap::addr::Spec;
@@ -21,7 +29,7 @@
 //! use xrdap::share::{Protocol, Share};
 //!
 //! # fn main() -> xrdap::Result<()> {
-//! let probe = open(&Spec::parse("COM7"), &OpenOptions::default())?;
+//! let probe = open(&Spec::parse("COM3"), &OpenOptions::default())?;
 //! let share = Share::start(probe, Protocol::Usbip, "127.0.0.1:3240", |e| println!("{e:?}"))
 //!     .map_err(|(_, e)| e)?;
 //! println!("挂载：{}", share.attach_hint());
@@ -55,16 +63,24 @@ type Exec<'a> = dyn FnMut(&[u8]) -> io::Result<Vec<u8>> + 'a;
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
 
 /// 共享给别的工具时用的协议。
+///
+/// The protocol used to share the probe with other tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
-    /// USB/IP 虚拟 USB 探针
+    /// USB/IP 虚拟 USB 探针。
+    ///
+    /// USB/IP virtual USB probe.
     Usbip,
-    /// OpenOCD 的 CMSIS-DAP TCP 后端
+    /// OpenOCD 的 CMSIS-DAP TCP 后端。
+    ///
+    /// OpenOCD's CMSIS-DAP TCP backend.
     OpenOcd,
 }
 
 impl Protocol {
-    /// 默认端口：USB/IP 3240，OpenOCD 3241
+    /// 默认端口：USB/IP 3240，OpenOCD 3241。
+    ///
+    /// Default port: 3240 for USB/IP, 3241 for OpenOCD.
     pub fn default_port(self) -> u16 {
         match self {
             Protocol::Usbip => 3240,
@@ -74,15 +90,23 @@ impl Protocol {
 }
 
 /// 共享线程报告的变化。
+///
+/// A change reported by the share thread.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// 客户端连上（USB/IP 的挂载或设备列表查询，或 OpenOCD 连接）
+    /// 客户端连上（USB/IP 的挂载或设备列表查询，或 OpenOCD 连接）。
+    ///
+    /// A client connected (a USB/IP attach or device-list query, or an OpenOCD connection).
     Client(SocketAddr),
-    /// 客户端断开；`Some` 是异常断开的原因
+    /// 客户端断开；`Some` 是异常断开的原因。
+    ///
+    /// The client disconnected; `Some` carries the reason of an abnormal disconnect.
     Idle(Option<String>),
 }
 
 /// 正在进行的共享。
+///
+/// A running share.
 pub struct Share {
     protocol: Protocol,
     addr: SocketAddr,
@@ -94,6 +118,9 @@ pub struct Share {
 impl Share {
     /// 在 `listen`（例如 `127.0.0.1:3240`）上开始共享。失败时把探针还回来。
     /// `notify` 在共享线程里调用。
+    ///
+    /// Start sharing on `listen` (e.g. `127.0.0.1:3240`). On failure the probe is handed back.
+    /// `notify` is called on the share thread.
     pub fn start(
         mut probe: Probe,
         protocol: Protocol,
@@ -134,12 +161,17 @@ impl Share {
         })
     }
 
-    /// USB/IP 虚拟设备的产品名和序列号
+    /// USB/IP 虚拟设备的产品名和序列号。
+    ///
+    /// Product name and serial number of the USB/IP virtual device.
     pub fn device(&self) -> &DeviceInfo {
         &self.device
     }
 
     /// 客户端一侧怎么用：USB/IP 的挂载命令，或 OpenOCD 的配置行。
+    ///
+    /// How the client side uses it: the USB/IP attach command, or the OpenOCD configuration
+    /// line.
     pub fn attach_hint(&self) -> String {
         let host = if self.addr.ip().is_unspecified() {
             "<本机 IP>".to_string()
@@ -159,7 +191,9 @@ impl Share {
         }
     }
 
-    /// 停止共享：0.1 秒内断开正在用的客户端，取回探针。
+    /// 停止共享：断开正在用的客户端，取回探针。
+    ///
+    /// Stop sharing: disconnect the client in use and take the probe back.
     pub fn stop(self) -> Probe {
         self.stop.store(true, Ordering::Release);
         self.thread

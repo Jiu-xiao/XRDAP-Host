@@ -1,12 +1,24 @@
 //! USB/IP 服务端：把探针模拟成一个 USB CMSIS-DAP v2 设备。
 //!
-//! 虚拟设备：VID:PID 1D50:6199、bcdDevice 0x0200（与 S3 真 USB 设备的 0x0100 区分，Windows 按
-//! 这三项缓存描述符），一个厂商类接口（接口名 `CMSIS-DAP v2`），Bulk OUT 0x01、Bulk IN 0x81，
-//! 高速 512 字节；BOS 里带 MS OS 2.0 描述符，Windows 自动绑定 WinUSB。与固件
-//! `firmware/common/net/usbip_device.hpp` 是同一个设备模型。
+//! 虚拟设备：VID:PID 1D50:6199、bcdDevice 0x0200（与探针自身 USB 设备的 bcdDevice 不同；
+//! Windows 按 VID、PID、bcdDevice 缓存描述符），一个厂商类接口（接口名 `CMSIS-DAP v2`），
+//! Bulk OUT 0x01、Bulk IN 0x81，高速 512 字节；BOS 里带 MS OS 2.0 描述符，Windows 自动绑定
+//! WinUSB。设备模型与 XRDAP-ESP 的 USB/IP 设备相同。
 //!
 //! 协议：`OP_REQ_DEVLIST`、`OP_REQ_IMPORT` 之后是 `USBIP_CMD_SUBMIT`/`RET_SUBMIT`、
 //! `CMD_UNLINK`/`RET_UNLINK`，字段大端。见 Linux 内核文档 `usb/usbip_protocol.rst`。
+//!
+//! USB/IP server: emulates the probe as a USB CMSIS-DAP v2 device.
+//!
+//! The virtual device: VID:PID 1D50:6199 and bcdDevice 0x0200 (different from the bcdDevice of
+//! the probe's own USB device; Windows caches descriptors by VID, PID and bcdDevice), one
+//! vendor-class interface (interface name `CMSIS-DAP v2`), bulk OUT 0x01 and bulk IN 0x81, high
+//! speed with 512-byte packets; the BOS carries an MS OS 2.0 descriptor so that Windows binds
+//! WinUSB automatically. The device model is the same as the USB/IP device of XRDAP-ESP.
+//!
+//! Protocol: `OP_REQ_DEVLIST` and `OP_REQ_IMPORT`, followed by `USBIP_CMD_SUBMIT`/`RET_SUBMIT`
+//! and `CMD_UNLINK`/`RET_UNLINK`, with big-endian fields. See the Linux kernel document
+//! `usb/usbip_protocol.rst`.
 
 use std::collections::VecDeque;
 use std::io;
@@ -38,10 +50,18 @@ const MS_VENDOR_CODE: u8 = 0x20;
 const DAP_EP: u32 = 1;
 
 /// 虚拟设备的产品名和序列号。
+///
+/// Product name and serial number of the virtual device.
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
-    /// USB 产品名，例如 `XR-DAP-C3 CMSIS-DAP`（带 "CMSIS-DAP"，工具按它识别）
+    /// USB 产品名，例如 `XR-DAP-C3 CMSIS-DAP`（带 "CMSIS-DAP"，工具按它识别）。
+    ///
+    /// USB product name, e.g. `XR-DAP-C3 CMSIS-DAP` (it contains "CMSIS-DAP", by which tools
+    /// recognize the device).
     pub product: String,
+    /// USB 序列号。
+    ///
+    /// USB serial number.
     pub serial: String,
 }
 
@@ -239,7 +259,7 @@ impl Session<'_> {
     }
 
     /// 一个命令引起的回复（OUT 的回复和配上的 IN 响应）合成一次写。分两次写时第二段要等
-    /// 对方的延迟 ACK，每个来回多出约 40 ms。
+    /// 对方的延迟 ACK，每个来回都会多出这段等待。
     fn flush(&mut self, s: &mut Link) -> io::Result<()> {
         if self.tx.is_empty() {
             return Ok(());

@@ -1,4 +1,7 @@
 //! 小端整数读取。调用方先检查过长度，越界按切片索引的规则 panic。
+//!
+//! Little-endian integer reads. Callers check the length first; an out-of-range read panics as
+//! slice indexing does.
 
 pub(crate) fn le_u16(d: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([d[at], d[at + 1]])

@@ -1,4 +1,7 @@
 //! 表达式的词法和语法分析，产出语法树。语法见 [`super`] 模块文档。
+//!
+//! Lexing and parsing of expressions into a syntax tree. The grammar is in the documentation of
+//! the [`super`] module.
 
 use std::fmt;
 

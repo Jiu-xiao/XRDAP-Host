@@ -1,13 +1,13 @@
 //! 打开探针：按一个[探针说明](crate::addr)打开，或者自动选唯一的那一块。命令行和图形界面都
 //! 经这里打开探针。
 //!
-//! 自动选择和按序列号查找只看 USB、局域网和按描述符认出的乐鑫 USB 串口，不打开别的串口；
+//! 自动选择和按序列号查找只看 USB、局域网和按描述符认出的乐鑫 USB 串口；
 //! 接在 USB 转串口芯片上的探针要直接写串口名。
 //!
 //! Open a probe from a [probe spec](crate::addr), or pick the only one. Both the command line
-//! and the GUI open probes here. Automatic selection and serial-number lookup only look at USB,
-//! the LAN and Espressif USB ports recognised by descriptor; they never open other serial
-//! ports, so a probe behind a USB-serial chip is opened by naming its port.
+//! and the GUI open probes here. Automatic selection and serial-number lookup consider USB,
+//! the LAN and Espressif USB ports recognised by descriptor; a probe behind a USB-serial chip
+//! is opened by naming its port.
 //!
 //! ```no_run
 //! use xrdap::addr::Spec;
