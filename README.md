@@ -126,10 +126,11 @@ TCP 后端只在 OpenOCD 的 master 中，见“OpenOCD 版本”。
 xrdap wifi status
 xrdap wifi set -p COM3 lab 12345678
 xrdap wifi set -p COM3 lab
+xrdap wifi set -p COM3 lab --password-stdin < password.txt
 xrdap wifi clear -p COM3
 ```
 
-`status` 显示保存的热点、是否连上、IP 和信号强度，以及最近一次清除热点参数的来源（板上按键、串口命令行、0x86 清除命令或 NVS 修复）、本次启动的复位原因和 NVS 是否在本次启动时重建过。`set` 保存热点名和密码（开放网络省略密码），`clear` 清除热点参数（请求带确认字节）；两者之后探针约 0.5 秒后重启，连接随之断开。配置完成后 `xrdap list` 列出探针的局域网地址（`xrdap-xxxxxx.local`），之后可以用 `-p xrdap-xxxxxx.local` 无线连接。
+`status` 显示保存的热点、是否连上、IP 和信号强度，以及最近一次清除热点参数的来源（板上按键、串口命令行、0x86 清除命令或 NVS 修复）、本次启动的复位原因和 NVS 是否在本次启动时重建过。`set` 保存热点名和密码（开放网络省略密码），`clear` 清除热点参数（请求带确认字节）。`--password-stdin` 从标准输入读一行作为密码，密码不出现在 shell 历史和进程列表中；经 TCP（Wi-Fi）连接探针时，密码以明文经过局域网。`set` 和 `clear` 之后探针约 0.5 秒后重启，连接随之断开。配置完成后 `xrdap list` 列出探针的局域网地址（`xrdap-xxxxxx.local`），之后可以用 `-p xrdap-xxxxxx.local` 无线连接。
 
 图形界面中连上探针后展开连接区最下方的“Wi-Fi”，显示当前状态，填写热点名和密码后点“保存并重启”，或点“清除”。
 
@@ -162,7 +163,7 @@ xrdap reset --halt --clock 1M
 | `write 变量=值...` | 写变量并读回 | 探针选项、`--clock`、`--elf` |
 | `watch 变量[@分频[:相位]]...` | 探针端周期采样 | 探针选项、`--clock`、`--elf`、`--period`、`--csv`、`--duration`、`--no-overwrite`、`--all` |
 | `halt`、`run`、`reset` | 内核控制 | 探针选项、`--clock`；`reset` 另有 `--halt` |
-| `wifi status`、`wifi set 热点 [密码]`、`wifi clear` | 探针 Wi-Fi | 探针选项 |
+| `wifi status`、`wifi set 热点 [密码]`、`wifi clear` | 探针 Wi-Fi | 探针选项；`set` 另有 `--password-stdin` |
 | `share usbip`、`share openocd` | 把探针共享给其他调试工具 | 探针选项、`--listen` |
 
 探针选项：`-p` 探针、`--baud` 串口波特率（默认按串口芯片选择）、`--timeout-ms` 等待一个响应的超时（默认 2000）。

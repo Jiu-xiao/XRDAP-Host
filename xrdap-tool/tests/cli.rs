@@ -342,6 +342,16 @@ fn options_belong_to_their_commands() {
         parse(&["xrdap", "read", "-p", "COM3", "--clock", "1M", "--elf", "a.elf", "x"]).is_ok()
     );
     assert!(parse(&["xrdap", "wifi", "set", "-p", "COM3", "lab", "12345678"]).is_ok());
+    assert!(parse(&["xrdap", "wifi", "set", "lab", "--password-stdin"]).is_ok());
+    assert!(parse(&[
+        "xrdap",
+        "wifi",
+        "set",
+        "lab",
+        "12345678",
+        "--password-stdin"
+    ])
+    .is_err());
     assert!(parse(&[
         "xrdap",
         "share",

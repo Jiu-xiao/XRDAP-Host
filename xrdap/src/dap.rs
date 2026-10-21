@@ -622,10 +622,11 @@ impl Probe {
         wifi::parse_status(&self.xfer(&wifi::status_request())?)
     }
 
-    /// 0x86：保存热点参数。成功后探针重启并连接新热点，这个连接随之断开。
+    /// 0x86：保存热点参数。成功后探针重启并连接新热点，这个连接随之断开。经 TCP 连接时密码以明文经过网络（DAP 链路不加密）。
     ///
     /// 0x86: save credentials. On success the probe restarts and connects to the new hotspot,
-    /// and this connection is lost.
+    /// and this connection is lost. Over TCP the password crosses the network in plaintext
+    /// (the DAP link has no encryption).
     pub fn wifi_set(&mut self, ssid: &str, password: &str) -> Result<()> {
         wifi::parse_reply(&self.xfer(&wifi::set_request(ssid, password)?)?)
     }
