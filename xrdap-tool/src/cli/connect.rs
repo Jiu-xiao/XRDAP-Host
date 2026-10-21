@@ -25,10 +25,6 @@ pub struct ConnOpts {
     #[arg(long, global = true, value_name = "波特率")]
     pub baud: Option<u32>,
 
-    /// 打开串口后不改 DTR/RTS（默认置为 DTR=1、RTS=0）。乐鑫芯片自带的 USB 口自动这样处理
-    #[arg(long, global = true)]
-    pub keep_lines: bool,
-
     /// 目标程序的 ELF（带 -g 调试信息），用来按名字找变量和类型
     #[arg(long, global = true, value_name = "文件")]
     pub elf: Option<PathBuf>,
@@ -85,14 +81,8 @@ pub fn open_probe(conn: &ConnOpts, syms: &SymbolTable, err: &mut dyn Write) -> C
         ..OpenOptions::default()
     };
     match open::parse(conn.probe.as_deref()) {
-        Spec::Addr(Addr::Serial { port, keep_lines }) => {
-            if !keep_lines && !conn.keep_lines {
-                writeln!(err, "打开串口 {port}，等探针应答……")?;
-            }
-            let addr = Addr::Serial {
-                port,
-                keep_lines: keep_lines || conn.keep_lines,
-            };
+        Spec::Addr(addr @ Addr::Serial { .. }) => {
+            writeln!(err, "打开{addr}，等探针应答……")?;
             Ok(open::open_addr(&addr, &opts)?)
         }
         Spec::Addr(addr) => Ok(open::open_addr(&addr, &opts)?),

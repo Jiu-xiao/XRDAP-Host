@@ -10,7 +10,6 @@ license = "Apache-2.0"
 [workspace.dependencies]
 xrdap = { path = "xrdap", default-features = false }
 clap = { version = "4", features = ["derive"] }
-serial2 = "0.2.38"
 
 [profile.release]
 strip = true

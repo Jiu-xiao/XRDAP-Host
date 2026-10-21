@@ -107,8 +107,6 @@ const PID_WCH_SLOW: [u16; 2] = [0x7523, 0x5523];
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerialPortProfile {
     pub port: String,
-    /// 打开后不改 DTR/RTS：乐鑫芯片自带的 USB Serial/JTAG 按这两根线复位芯片
-    pub keep_lines: bool,
     /// 依次尝试的波特率。S3 板上的 CH343 跑 4 Mbaud；CP2102、CH340 到不了 4 Mbaud，
     /// 只试传统 ESP32 固件用的 921600
     pub bauds: &'static [u32],
@@ -130,30 +128,28 @@ pub fn serial_candidates() -> Vec<SerialPortProfile> {
             let serialport::SerialPortType::UsbPort(u) = p.port_type else {
                 return None;
             };
-            let (keep_lines, bauds) = match u.vid {
-                VID_ESPRESSIF => (true, BAUDS_ANY),
-                VID_SILABS => (false, BAUDS_SAFE),
-                VID_WCH if PID_WCH_SLOW.contains(&u.pid) => (false, BAUDS_SAFE),
-                VID_WCH | VID_FTDI => (false, BAUDS_FAST),
+            let bauds = match u.vid {
+                VID_ESPRESSIF => BAUDS_ANY,
+                VID_SILABS => BAUDS_SAFE,
+                VID_WCH if PID_WCH_SLOW.contains(&u.pid) => BAUDS_SAFE,
+                VID_WCH | VID_FTDI => BAUDS_FAST,
                 _ => return None,
             };
             Some(SerialPortProfile {
                 port: p.port_name,
-                keep_lines,
                 bauds,
             })
         })
         .collect()
 }
 
-/// 一个串口按芯片该怎么打开；不是已知的 USB 转串口芯片时先试 4 Mbaud 再试 921600，改 DTR/RTS。
+/// 一个串口按芯片该怎么打开；不是已知的 USB 转串口芯片时先试 4 Mbaud 再试 921600。
 pub fn serial_profile(port: &str) -> SerialPortProfile {
     serial_candidates()
         .into_iter()
         .find(|p| p.port.eq_ignore_ascii_case(port))
         .unwrap_or(SerialPortProfile {
             port: port.to_string(),
-            keep_lines: false,
             bauds: BAUDS_FAST,
         })
 }
@@ -161,7 +157,7 @@ pub fn serial_profile(port: &str) -> SerialPortProfile {
 /// 问一个串口是不是探针：按 `bauds` 依次试，每个波特率在 `wait` 内回答 DAP_Info 就是。
 pub fn probe_serial(profile: &SerialPortProfile, wait: Duration) -> Option<Found> {
     let mut probe = profile.bauds.iter().find_map(|&baud| {
-        let t = SerialTransport::open(&profile.port, baud, profile.keep_lines).ok()?;
+        let t = SerialTransport::open(&profile.port, baud).ok()?;
         let mut probe = Probe::new(Box::new(t), wait);
         probe.wait_ready(wait).ok()?;
         Some(probe)
@@ -172,7 +168,6 @@ pub fn probe_serial(profile: &SerialPortProfile, wait: Duration) -> Option<Found
         product: id.product,
         addr: Addr::Serial {
             port: profile.port.clone(),
-            keep_lines: profile.keep_lines,
         },
         note: None,
     })
@@ -347,7 +342,6 @@ mod tests {
     #[test]
     fn unknown_serial_port_tries_both_firmware_bauds() {
         let p = serial_profile("XRDAP-NO-SUCH-PORT");
-        assert!(!p.keep_lines);
         assert_eq!(p.bauds, &[DEFAULT_BAUD, SAFE_BAUD]);
     }
 
@@ -361,7 +355,6 @@ mod tests {
         };
         let ser = Addr::Serial {
             port: "COM9".into(),
-            keep_lines: true,
         };
         let g = group(vec![
             found("XRobot-XRDAP-AABBCC", tcp.clone()),

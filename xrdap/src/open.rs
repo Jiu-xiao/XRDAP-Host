@@ -31,8 +31,8 @@ use crate::{Error, Result};
 pub enum Addr {
     /// USB；`serial` 为 None 时用找到的第一块
     Usb { serial: Option<String> },
-    /// 串口；`keep_lines` 为 true 时打开后不改 DTR/RTS（芯片自带的 USB Serial/JTAG 要这样）
-    Serial { port: String, keep_lines: bool },
+    /// 串口
+    Serial { port: String },
     /// TCP，`host` 为 `主机[:端口]`，端口默认 3241
     Tcp { host: String },
 }
@@ -124,7 +124,6 @@ fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
 fn serial_addr(port: &str) -> Addr {
     Addr::Serial {
         port: port.to_string(),
-        keep_lines: false,
     }
 }
 
@@ -158,8 +157,8 @@ pub fn open_addr(addr: &Addr, opts: &OpenOptions) -> Result<Probe> {
         ),
         #[cfg(not(feature = "usb"))]
         Addr::Usb { .. } => return Err(Error::usage("这个版本没有编译 USB 支持")),
-        Addr::Serial { port, keep_lines } => {
-            let (keep, auto_bauds) = serial_profile(port);
+        Addr::Serial { port } => {
+            let auto_bauds = serial_bauds(port);
             let fixed;
             let bauds = match opts.baud {
                 Some(b) => {
@@ -168,7 +167,7 @@ pub fn open_addr(addr: &Addr, opts: &OpenOptions) -> Result<Probe> {
                 }
                 None => auto_bauds,
             };
-            open_serial(port, *keep_lines || keep, bauds, opts)?
+            open_serial(port, bauds, opts)?
         }
         Addr::Tcp { host } => Probe::new(
             Box::new(TcpTransport::connect(host, opts.timeout)?),
@@ -181,7 +180,7 @@ pub fn open_addr(addr: &Addr, opts: &OpenOptions) -> Result<Probe> {
 const FALLBACK_WAIT: Duration = Duration::from_secs(2);
 
 /// 按 `bauds` 依次打开串口、等探针应答；最后一个波特率等满 `serial_wait`。
-fn open_serial(port: &str, keep: bool, bauds: &[u32], opts: &OpenOptions) -> Result<Probe> {
+fn open_serial(port: &str, bauds: &[u32], opts: &OpenOptions) -> Result<Probe> {
     let mut last = Error::usage(format!("串口 {port} 没有可试的波特率"));
     for (i, &baud) in bauds.iter().enumerate() {
         let wait = if i + 1 == bauds.len() {
@@ -189,7 +188,7 @@ fn open_serial(port: &str, keep: bool, bauds: &[u32], opts: &OpenOptions) -> Res
         } else {
             FALLBACK_WAIT
         };
-        match SerialTransport::open(port, baud, keep).and_then(|t| {
+        match SerialTransport::open(port, baud).and_then(|t| {
             let mut probe = Probe::new(Box::new(t), opts.timeout);
             probe.wait_ready(wait)?;
             Ok(probe)
@@ -201,17 +200,16 @@ fn open_serial(port: &str, keep: bool, bauds: &[u32], opts: &OpenOptions) -> Res
     Err(last)
 }
 
-/// 串口芯片决定的 (keep_lines, 依次尝试的波特率)。
+/// 串口芯片决定的依次尝试的波特率。
 #[cfg(feature = "discover")]
-fn serial_profile(port: &str) -> (bool, &'static [u32]) {
-    let p = crate::discover::serial_profile(port);
-    (p.keep_lines, p.bauds)
+fn serial_bauds(port: &str) -> &'static [u32] {
+    crate::discover::serial_profile(port).bauds
 }
 
 #[cfg(not(feature = "discover"))]
-fn serial_profile(_port: &str) -> (bool, &'static [u32]) {
+fn serial_bauds(_port: &str) -> &'static [u32] {
     use crate::transport::serial::{DEFAULT_BAUD, SAFE_BAUD};
-    (false, &[DEFAULT_BAUD, SAFE_BAUD])
+    &[DEFAULT_BAUD, SAFE_BAUD]
 }
 
 /// 按说明打开探针（不连接目标）。`spec` 的写法见模块文档；None 表示自动选择。
