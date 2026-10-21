@@ -207,8 +207,21 @@ pub fn resume(probe: &mut Probe) -> Result<CoreStatus> {
 ///
 /// 写 AIRCR 时目标正在复位，这次写入和紧接着的几次读可能收不到正常应答，
 /// 所以不检查写入结果，之后在 500 ms 内反复读 DHCSR，直到看到 S_RESET_ST。
+/// 复位期间临时改 DEMCR.VC_CORERESET，结束时（成功或失败）都恢复 DEMCR 原值。
+///
+/// System reset (AIRCR.SYSRESETREQ), then run or halt at the reset vector. DEMCR.VC_CORERESET
+/// is changed for this reset only; DEMCR is restored on every exit, success or failure.
 pub fn reset(probe: &mut Probe, after: AfterReset) -> Result<CoreStatus> {
     let demcr = read_u32(probe, DEMCR)?;
+    let result = reset_with_catch(probe, after, demcr);
+    let restored = write_u32(probe, DEMCR, demcr);
+    let status = result?;
+    restored?;
+    Ok(status)
+}
+
+/// [`reset`] 的主体：按 `after` 设好 VC_CORERESET，复位并等它完成。不恢复 DEMCR。
+fn reset_with_catch(probe: &mut Probe, after: AfterReset, demcr: u32) -> Result<CoreStatus> {
     match after {
         AfterReset::Halt => {
             write_u32(probe, DHCSR, DBGKEY | C_DEBUGEN)?;
@@ -240,10 +253,6 @@ pub fn reset(probe: &mut Probe, after: AfterReset) -> Result<CoreStatus> {
             break;
         }
         std::thread::sleep(Duration::from_millis(2));
-    }
-    if after == AfterReset::Halt {
-        // 只拦这一次复位：恢复 DEMCR 原来的 VC_CORERESET
-        write_u32(probe, DEMCR, demcr)?;
     }
     let s = last.ok_or_else(|| Error::Io("复位后读不到 DHCSR".into()))?;
     if !seen {
