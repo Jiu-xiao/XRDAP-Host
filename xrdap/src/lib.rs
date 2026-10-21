@@ -36,8 +36,12 @@
 //! | [`share`] | 把探针共享成 USB/IP 设备或 OpenOCD TCP 后端 / Share a probe over USB/IP or as an OpenOCD TCP backend |
 //! | [`vendor`]、[`frame`]、[`transport`] | 厂商命令编码、串口/TCP 帧、三种传输 / Vendor encoding, serial/TCP framing, transports |
 //!
-//! 字节格式见 XRDAP-Core 仓库的 `docs/protocol.md`。完整示例在 `examples/`。
-//! Byte formats: `docs/protocol.md` in the XRDAP-Core repository. Full examples: `examples/`.
+//! 字节格式见协议文档：<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>。
+//! 完整示例在 `examples/`。
+//!
+//! Byte formats: the protocol document at
+//! <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>.
+//! Full examples: `examples/`.
 
 pub mod addr;
 mod bytes;

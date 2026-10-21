@@ -1,5 +1,9 @@
 //! 从 ELF 读全局变量的地址和 DWARF 类型，得到 [`SymbolTable`]。
 //! 只处理有固定地址（`DW_OP_addr`）的变量：全局变量和文件内的 static 变量。
+//!
+//! Read the addresses of global variables and the DWARF types from an ELF file into a
+//! [`SymbolTable`]. Only variables with a fixed address (`DW_OP_addr`) are handled: global
+//! variables and file-scope static variables.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -17,6 +21,8 @@ fn derr(e: gimli::Error) -> Error {
 }
 
 /// 读 ELF 文件。
+///
+/// Read an ELF file.
 pub fn load(path: &Path) -> Result<SymbolTable> {
     let data =
         std::fs::read(path).map_err(|e| Error::usage(format!("读不了 {}：{e}", path.display())))?;

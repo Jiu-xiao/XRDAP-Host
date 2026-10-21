@@ -1,6 +1,16 @@
 //! 探针端采样：SUB_SET、开始、循环 SUB_READ、解码、停止。
-//! 探针时间按 docs/protocol.md 3.5 节对到电脑时间：每次 SUB_READ 记下请求前后的本机时间，
+//!
+//! 探针时间按协议文档 3.5 节对到电脑时间：每次 SUB_READ 记下请求前后的本机时间，
 //! 取中点与响应里的探针时间配对；取最近若干次里往返最短的一次作为偏移量。
+//! 协议文档：<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>
+//!
+//! Probe-side sampling: SUB_SET, start, a SUB_READ loop, decoding, stop.
+//!
+//! Probe time is aligned to host time as in section 3.5 of the protocol document: each
+//! SUB_READ records the local time before and after the request and pairs the midpoint with
+//! the probe time in the response; the offset is taken from the round trip that was shortest
+//! among the most recent ones.
+//! Protocol document: <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -16,12 +26,10 @@ pub fn stop(probe: &mut Probe) -> Result<()> {
     probe.sub_ctrl(vendor::SUB_STOP)
 }
 
-/// 连接目标。探针还在采样时（之前的会话没有停，DAP_Connect 回 FF）先停掉采样再连。
+/// 连接目标。探针还在采样时（DAP_Connect 回 FF，返回 [`Error::Busy`]）先停掉采样再连。
 ///
-/// 会话归属定下来以后（采样只由开始它的会话停），这里改成只停自己的采样，别人的报占用。
-///
-/// Connect the target. When the probe is still sampling (an earlier session did not stop),
-/// stop sampling first and connect again.
+/// Connect the target. When the probe is still sampling (DAP_Connect answers FF, reported as
+/// [`Error::Busy`]), stop sampling first and connect again.
 pub fn connect(probe: &mut Probe, clock_hz: u32) -> Result<TargetInfo> {
     match probe.connect_swd(clock_hz) {
         Err(Error::Busy(_)) => {
@@ -33,6 +41,8 @@ pub fn connect(probe: &mut Probe, clock_hz: u32) -> Result<TargetInfo> {
 }
 
 /// 解析周期：`1000`（µs）、`500us`、`500µs`、`2ms`、`2.5ms`、`1s`。
+///
+/// Parse a period: `1000` (µs), `500us`, `500µs`, `2ms`, `2.5ms` or `1s`.
 pub fn parse_period(text: &str) -> Result<u32> {
     let t = text.trim().to_ascii_lowercase();
     let (num, scale) = if let Some(n) = t.strip_suffix("ms") {
@@ -56,6 +66,9 @@ pub fn parse_period(text: &str) -> Result<u32> {
 }
 
 /// 采样变量的写法 `expr[@div[:phase]]`，返回 (表达式, 分频, 相位)。
+///
+/// Parse the form of a sampled variable, `expr[@div[:phase]]`, and return (expression, divider,
+/// phase).
 pub fn parse_spec(text: &str) -> Result<(String, u16, Option<u16>)> {
     let Some((expr, rest)) = text.rsplit_once('@') else {
         return Ok((text.trim().to_string(), 1, None));
@@ -87,6 +100,9 @@ pub fn parse_spec(text: &str) -> Result<(String, u16, Option<u16>)> {
 }
 
 /// 电脑的时钟：单调时钟加开始时的系统时间，得到 Unix 微秒。
+///
+/// The host clock: a monotonic clock plus the system time at its start, giving Unix
+/// microseconds.
 #[derive(Debug, Clone)]
 pub struct HostClock {
     instant0: Instant,
@@ -100,6 +116,9 @@ impl Default for HostClock {
 }
 
 impl HostClock {
+    /// 以当前时刻为起点建立时钟。
+    ///
+    /// Create a clock that starts at the present moment.
     pub fn new() -> Self {
         let unix0_us = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -111,6 +130,9 @@ impl HostClock {
         }
     }
 
+    /// 单调时刻 `t` 对应的 Unix 微秒。
+    ///
+    /// The Unix microseconds that correspond to the monotonic instant `t`.
     pub fn unix_us(&self, t: Instant) -> i64 {
         let d = t.saturating_duration_since(self.instant0).as_micros() as i64;
         self.unix0_us + d
@@ -118,6 +140,8 @@ impl HostClock {
 }
 
 /// 探针时间到电脑时间的偏移量。
+///
+/// The offset from probe time to host time.
 #[derive(Debug, Clone)]
 pub struct ClockSync {
     clock: HostClock,
@@ -126,6 +150,9 @@ pub struct ClockSync {
 }
 
 impl ClockSync {
+    /// 用 `clock` 作电脑时钟，建立空的同步状态。
+    ///
+    /// Create an empty sync state using `clock` as the host clock.
     pub fn new(clock: HostClock) -> Self {
         Self {
             clock,
@@ -135,6 +162,9 @@ impl ClockSync {
     }
 
     /// 记一次测量：请求前后的本机时间和响应里的探针时间。
+    ///
+    /// Record one measurement: the local time before and after the request and the probe time
+    /// in the response.
     pub fn update(&mut self, before: Instant, after: Instant, probe_us: u64) {
         let b = self.clock.unix_us(before);
         let a = self.clock.unix_us(after);
@@ -146,6 +176,8 @@ impl ClockSync {
     }
 
     /// 当前的偏移量（电脑 Unix µs = 探针 µs + 偏移）和它的误差（半个往返）。
+    ///
+    /// The current offset (host Unix µs = probe µs + offset) and its error (half a round trip).
     pub fn offset(&self) -> Option<(i64, i64)> {
         self.recent
             .iter()
@@ -153,33 +185,63 @@ impl ClockSync {
             .map(|&(rtt, off)| (off, rtt / 2))
     }
 
+    /// 探针时间换算成电脑的 Unix 微秒；还没有测量时为 None。
+    ///
+    /// Convert a probe time to host Unix microseconds; None before the first measurement.
     pub fn to_host(&self, probe_us: u64) -> Option<i64> {
         self.offset().map(|(off, _)| probe_us as i64 + off)
     }
 }
 
 /// 一帧采样，带电脑时间。
+///
+/// One sampled frame with host time.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostFrame {
-    /// 节拍序号（展开成 64 位，不回绕）
+    /// 节拍序号（展开成 64 位，不回绕）。
+    ///
+    /// Tick number (widened to 64 bits, without wrap-around).
     pub tick: u64,
+    /// 探针时间，µs。
+    ///
+    /// Probe time in µs.
     pub probe_us: u64,
-    /// 对到电脑时钟的 Unix 微秒
+    /// 对到电脑时钟的 Unix 微秒。
+    ///
+    /// Unix microseconds aligned to the host clock.
     pub host_unix_us: i64,
-    /// 每个条目一个：None 表示这一拍没有到期；Some(None) 表示读取失败
+    /// 每个条目一个：None 表示这一拍没有到期；Some(None) 表示读取失败。
+    ///
+    /// One per item: None means the item was not due on this tick; Some(None) means the read
+    /// failed.
     pub values: Vec<Option<Option<Vec<u8>>>>,
 }
 
+/// 采样的累计统计。
+///
+/// Cumulative sampling statistics.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Stats {
+    /// 已收到的帧数。
+    ///
+    /// Number of frames received.
     pub frames: u64,
-    /// 探针报告的累计缓冲丢帧数
+    /// 探针报告的累计缓冲丢帧数。
+    ///
+    /// Cumulative number of frames dropped by the buffer, as reported by the probe.
     pub dropped: u32,
-    /// 探针报告的累计跳过节拍数
+    /// 探针报告的累计跳过节拍数。
+    ///
+    /// Cumulative number of skipped ticks, as reported by the probe.
     pub skipped: u32,
-    /// 电脑这边发现的帧序号缺口：应有帧（有条目到期）却没收到的节拍数
+    /// 电脑这边发现的帧序号缺口：应有帧（有条目到期）却没收到的节拍数。
+    ///
+    /// Gaps in frame numbers found on the host: ticks with at least one due item whose frame
+    /// was not received.
     pub missing: u64,
-    /// 读取失败的条目值个数
+    /// 读取失败的条目值个数。
+    ///
+    /// Number of item values whose read failed.
     pub failed_values: u64,
 }
 
@@ -188,16 +250,32 @@ pub struct Stats {
 /// One item to sample every `div` ticks; with `phase` None, [`Sampler::start`] staggers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Var {
+    /// 条目。
+    ///
+    /// The item.
     pub item: Item,
+    /// 分频。
+    ///
+    /// Divider.
     pub div: u16,
+    /// 相位；None 表示由 [`Sampler::start`] 分配。
+    ///
+    /// Phase; None lets [`Sampler::start`] assign it.
     pub phase: Option<u16>,
 }
 
 /// SUB_SET 没有成功。
+///
+/// SUB_SET did not succeed.
 #[derive(Debug)]
 pub enum StartError {
-    /// 0x03：估计的单帧耗时大于周期，或条目太多
+    /// 0x03：估计的单帧耗时大于周期，或条目太多。
+    ///
+    /// 0x03: the estimated frame duration exceeds the period, or there are too many items.
     Rejected(SubSetResult),
+    /// 其他错误。
+    ///
+    /// Any other error.
     Other(Error),
 }
 
@@ -208,15 +286,27 @@ impl From<Error> for StartError {
 }
 
 /// 根据 est_frame_us 建议一个周期：留 25% 余量，取整到 50 µs。
+///
+/// Suggest a period from `est_frame_us`: add a 25% margin and round up to a multiple of
+/// 50 µs.
 pub fn suggest_period(est_frame_us: u32) -> u32 {
     let p = est_frame_us as u64 * 5 / 4;
     (p.div_ceil(50) * 50).max(50) as u32
 }
 
+/// 一次进行中的探针端采样。丢弃时如果还在采样会停止采样。
+///
+/// A running probe-side sampling. Dropping it stops sampling if it is still running.
 pub struct Sampler<'a> {
     probe: &'a mut Probe,
     items: Vec<SubItem>,
+    /// 采样周期，µs。
+    ///
+    /// Sampling period in µs.
     pub period_us: u32,
+    /// SUB_SET 的结果。
+    ///
+    /// The result of SUB_SET.
     pub setup: SubSetResult,
     sync: ClockSync,
     last_tick: Option<u64>,
@@ -293,24 +383,38 @@ impl<'a> Sampler<'a> {
         Ok(s)
     }
 
+    /// 采样条目表，帧里的下标对应这张表。
+    ///
+    /// The item table; indices in frames refer to it.
     pub fn items(&self) -> &[SubItem] {
         &self.items
     }
 
     /// 采样期间探针仍接受厂商的 READ、WRITE 命令（例如在线改参数），用这个拿到探针。
+    ///
+    /// The probe still accepts the vendor READ and WRITE commands while sampling (for example to
+    /// change a parameter online); this gives access to the probe.
     pub fn probe_mut(&mut self) -> &mut Probe {
         self.probe
     }
 
+    /// 目前的统计。
+    ///
+    /// The statistics so far.
     pub fn stats(&self) -> Stats {
         self.stats
     }
 
+    /// 探针时间到电脑时间的偏移量和误差，见 [`ClockSync::offset`]。
+    ///
+    /// The offset from probe time to host time and its error; see [`ClockSync::offset`].
     pub fn clock_offset(&self) -> Option<(i64, i64)> {
         self.sync.offset()
     }
 
     /// 读一次 SUB_READ，返回解码好的帧和缓冲里剩余的字节数。
+    ///
+    /// Do one SUB_READ and return the decoded frames and the bytes left in the buffer.
     pub fn poll(&mut self) -> Result<(Vec<HostFrame>, u32)> {
         let (r, before, after) = self.probe.sub_read(self.max_read)?;
         self.sync.update(before, after, r.probe_time_us);
@@ -364,7 +468,10 @@ impl<'a> Sampler<'a> {
         }
     }
 
-    /// 两次 SUB_READ 之间建议等多久：缓冲能存的时间的 1/4，不超过 50 ms。
+    /// 两次 SUB_READ 之间建议等多久：缓冲能存的时间的 1/4，限制在 1 ms 到 50 ms 之间。
+    ///
+    /// Suggested wait between two SUB_READs: a quarter of the time the buffer can hold,
+    /// limited to the range 1 ms to 50 ms.
     pub fn poll_interval(&self) -> Duration {
         let per_tick = vendor::average_bytes_per_tick(&self.items).max(1.0);
         let fill_us = self.ring_bytes as f64 / per_tick * self.period_us as f64;
@@ -372,6 +479,8 @@ impl<'a> Sampler<'a> {
     }
 
     /// 停止采样，把缓冲里剩下的帧读完。
+    ///
+    /// Stop sampling and read the frames left in the buffer.
     pub fn stop(&mut self) -> Result<Vec<HostFrame>> {
         if !self.running {
             return Ok(Vec::new());

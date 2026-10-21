@@ -1,4 +1,6 @@
 //! USB 传输：CMSIS-DAP v2 的 Bulk 端点（Windows 上走 WinUSB，Linux 上走 usbfs）。
+//!
+//! USB transport: the CMSIS-DAP v2 bulk endpoints (WinUSB on Windows, usbfs on Linux).
 
 use std::time::Duration;
 
@@ -9,19 +11,42 @@ use nusb::{DeviceInfo, Endpoint, Interface, MaybeFuture};
 use super::Transport;
 use crate::{Error, Result};
 
+/// 探针的 USB 厂商 ID。
+///
+/// USB vendor ID of the probe.
 pub const VID: u16 = 0x1D50;
+/// 探针的 USB 产品 ID。
+///
+/// USB product ID of the probe.
 pub const PID: u16 = 0x6199;
 
 /// 发一个 OUT 包的最长时间：探针收不下时（端点一直 NAK）算链路出错
 const SEND_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 一个找到的探针。
+///
+/// A probe that was found.
 #[derive(Debug, Clone)]
 pub struct UsbProbeInfo {
+    /// USB 描述符里的序列号。
+    ///
+    /// Serial number from the USB descriptor.
     pub serial: Option<String>,
+    /// USB 描述符里的产品名。
+    ///
+    /// Product name from the USB descriptor.
     pub product: Option<String>,
+    /// USB 描述符里的厂商名。
+    ///
+    /// Manufacturer name from the USB descriptor.
     pub manufacturer: Option<String>,
+    /// 设备所在的总线。
+    ///
+    /// The bus the device is on.
     pub bus: String,
+    /// 设备在总线上的地址。
+    ///
+    /// The device address on the bus.
     pub address: u8,
 }
 
@@ -39,6 +64,8 @@ fn probes() -> Result<Vec<DeviceInfo>> {
 }
 
 /// 列出 VID:PID 为 1D50:6199 的设备。
+///
+/// List the devices with VID:PID 1D50:6199.
 pub fn list() -> Result<Vec<UsbProbeInfo>> {
     Ok(probes()?
         .iter()
@@ -52,6 +79,9 @@ pub fn list() -> Result<Vec<UsbProbeInfo>> {
         .collect())
 }
 
+/// 一个打开的 USB 探针（CMSIS-DAP v2 的 Bulk 端点）。
+///
+/// An open USB probe (the CMSIS-DAP v2 bulk endpoints).
 pub struct UsbTransport {
     _interface: Interface,
     ep_out: Endpoint<Bulk, Out>,
@@ -62,6 +92,8 @@ pub struct UsbTransport {
 
 impl UsbTransport {
     /// 打开探针。`serial` 为 None 时要求只插着一个探针。
+    ///
+    /// Open a probe. With `serial` None exactly one probe must be plugged in.
     pub fn open(serial: Option<&str>) -> Result<Self> {
         let found = probes()?;
         let info = match serial {

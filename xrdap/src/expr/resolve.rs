@@ -1,4 +1,6 @@
 //! 在类型表里给语法树求值，得到 [`Target`]。
+//!
+//! Evaluate the syntax tree against the type table to get a [`Target`].
 
 use crate::types::{Member, SymbolTable, Type, TypeId};
 use crate::vendor::MAX_DEPTH;
@@ -25,15 +27,28 @@ enum Val {
 }
 
 /// 表达式求值器。会往类型表里加指针类型和数组的子类型，所以要可变引用。
+///
+/// The expression resolver. It adds pointer types and array sub-types to the type table, so it
+/// holds a mutable reference.
 pub struct Resolver<'a> {
+    /// 用到的类型表。
+    ///
+    /// The type table in use.
     pub syms: &'a mut SymbolTable,
-    /// 求值过程中的提示（例如没有 DWARF 信息、位域被跳过）
+    /// 求值过程中的提示（例如没有 DWARF 信息、位域被跳过）。
+    ///
+    /// Notes collected while resolving (e.g. no DWARF information, a bit-field was skipped).
     pub notes: Vec<String>,
-    /// 结构体、数组展开成多个变量时最多展开多少个
+    /// 结构体、数组展开成多个变量时最多展开多少个。
+    ///
+    /// The most variables a struct or array may expand into.
     pub expand_limit: usize,
 }
 
 impl<'a> Resolver<'a> {
+    /// 在 `syms` 上建立求值器，`expand_limit` 为 256。
+    ///
+    /// Create a resolver over `syms`, with `expand_limit` set to 256.
     pub fn new(syms: &'a mut SymbolTable) -> Self {
         Self {
             syms,
@@ -43,12 +58,17 @@ impl<'a> Resolver<'a> {
     }
 
     /// 解析一个表达式，结果必须是标量。
+    ///
+    /// Resolve one expression; the result must be a scalar.
     pub fn resolve(&mut self, text: &str) -> Result<Target> {
         let mut out = self.resolve_inner(text, false)?;
         Ok(out.remove(0))
     }
 
     /// 解析一个表达式；结果是结构体或数组时展开成各个标量成员（位域跳过）。
+    ///
+    /// Resolve one expression; a struct or array result expands into its scalar members
+    /// (bit-fields are skipped).
     pub fn resolve_all(&mut self, text: &str) -> Result<Vec<Target>> {
         self.resolve_inner(text, true)
     }

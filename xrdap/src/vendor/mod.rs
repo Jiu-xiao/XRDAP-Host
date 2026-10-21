@@ -4,36 +4,84 @@
 //!
 //! Request encoding and response decoding of the XR vendor commands: 0x80 to 0x85 here,
 //! 0x86 (Wi-Fi configuration) in [`wifi`]. Byte formats: section 3 of the XRDAP-Core protocol
-//! document.
+//! document: <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>
 
 pub mod wifi;
 
 use crate::bytes::{le_u16, le_u32, le_u48, le_u64};
 use crate::{Error, Result};
 
+/// 命令字节：INFO。
+///
+/// Command byte: INFO.
 pub const CMD_INFO: u8 = 0x80;
+/// 命令字节：READ。
+///
+/// Command byte: READ.
 pub const CMD_READ: u8 = 0x81;
+/// 命令字节：WRITE。
+///
+/// Command byte: WRITE.
 pub const CMD_WRITE: u8 = 0x82;
+/// 命令字节：SUB_SET。
+///
+/// Command byte: SUB_SET.
 pub const CMD_SUB_SET: u8 = 0x83;
+/// 命令字节：SUB_CTRL。
+///
+/// Command byte: SUB_CTRL.
 pub const CMD_SUB_CTRL: u8 = 0x84;
+/// 命令字节：SUB_READ。
+///
+/// Command byte: SUB_READ.
 pub const CMD_SUB_READ: u8 = 0x85;
 
+/// 整体状态：成功。
+///
+/// Overall status: success.
 pub const STATUS_OK: u8 = 0x00;
+/// 整体状态：参数非法。
+///
+/// Overall status: invalid argument.
 pub const STATUS_ARG: u8 = 0x01;
+/// 整体状态：当前状态不允许该命令。
+///
+/// Overall status: the command is not allowed in the current state.
 pub const STATUS_STATE: u8 = 0x02;
+/// 整体状态：资源不足。
+///
+/// Overall status: insufficient resources.
 pub const STATUS_RESOURCE: u8 = 0x03;
+/// 整体状态：没有连接目标。
+///
+/// Overall status: no target connected.
 pub const STATUS_NO_TARGET: u8 = 0x04;
 
+/// SUB_CTRL 的 op：停止采样。
+///
+/// SUB_CTRL op: stop sampling.
 pub const SUB_STOP: u8 = 0;
+/// SUB_CTRL 的 op：开始采样。
+///
+/// SUB_CTRL op: start sampling.
 pub const SUB_START: u8 = 1;
 
 /// 一次请求、一个订阅最多的条目数（协议文档 3.4 节 INFO）。
+///
+/// Maximum number of items in one request or subscription (protocol document, section 3.4,
+/// INFO).
 pub const MAX_ITEMS: usize = 32;
 /// 一个条目最多经过的指针级数（协议文档 3.3 节）。
+///
+/// Maximum number of pointer levels one item may pass through (protocol document, section 3.3).
 pub const MAX_DEPTH: usize = 8;
 /// SUB_READ 响应头的字节数。
+///
+/// Size in bytes of the SUB_READ response header.
 pub const SUB_READ_HEADER: usize = 24;
 /// 帧头：节拍序号 4 字节 + 时间戳 6 字节。
+///
+/// Frame header: 4 bytes of tick number plus 6 bytes of timestamp.
 pub const FRAME_HEADER: usize = 10;
 
 /// 0x80 到 0x85 的整体状态的说明。
@@ -51,6 +99,9 @@ pub fn status_text(status: u8) -> &'static str {
 }
 
 /// 条目状态的说明。`chain` 是各级指针的表达式（第 k 个对应第 k 级），可以为空。
+///
+/// Meaning of an item status. `chain` holds the expression of each pointer level (the k-th
+/// entry belongs to level k) and may be empty.
 pub fn item_status_text(status: u8, chain: &[String]) -> String {
     let level = |k: u8| -> String {
         match chain.get(k as usize) {
@@ -73,17 +124,41 @@ pub fn item_status_text(status: u8, chain: &[String]) -> String {
 }
 
 /// 一个条目：变量的位置，最多经过 8 级指针。
+///
+/// One item: the location of a variable, passing through at most 8 pointer levels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
+    /// MEM-AP 编号。
+    ///
+    /// MEM-AP number.
     pub ap: u8,
+    /// 调用方自定的编号，响应里原样带回。
+    ///
+    /// Caller-defined identifier, returned unchanged in the response.
     pub id: u16,
+    /// 访问宽度，字节：1、2、4 或 8。
+    ///
+    /// Access width in bytes: 1, 2, 4 or 8.
     pub size: u8,
+    /// 起始地址。
+    ///
+    /// Start address.
     pub base: u32,
+    /// 每一级指针的偏移：读出该级地址上的指针，作为下一级的起点。
+    ///
+    /// Offset of each pointer level: the pointer read at that address is the start of the next
+    /// level.
     pub derefs: Vec<i16>,
+    /// 最后一级指针之后的偏移，得到变量地址。
+    ///
+    /// Offset applied after the last pointer level, giving the variable address.
     pub final_off: i16,
 }
 
 impl Item {
+    /// 不经过指针、直接访问 `addr` 的条目（AP 0）。
+    ///
+    /// An item that accesses `addr` directly, without pointers (AP 0).
     pub fn direct(id: u16, size: u8, addr: u32) -> Self {
         Self {
             ap: 0,
@@ -95,10 +170,16 @@ impl Item {
         }
     }
 
+    /// 条目编码后的字节数。
+    ///
+    /// Encoded length of the item in bytes.
     pub fn encoded_len(&self) -> usize {
         11 + 2 * self.derefs.len()
     }
 
+    /// 把条目按协议格式追加到 `out`。
+    ///
+    /// Append the item to `out` in the protocol format.
     pub fn encode(&self, out: &mut Vec<u8>) {
         out.push(self.ap);
         out.extend_from_slice(&self.id.to_le_bytes());
@@ -113,7 +194,8 @@ impl Item {
 
     /// 本地检查：size 和解引用次数（协议文档 3.3 节的取值范围）。
     ///
-    /// Local check of size and dereference count against the ranges of protocol 3.3.
+    /// Local check of size and dereference count against the ranges of the protocol document,
+    /// section 3.3.
     pub fn check(&self) -> Result<()> {
         if !matches!(self.size, 1 | 2 | 4 | 8) {
             return Err(Error::usage(format!("访问宽度 {} 不是 1/2/4/8", self.size)));
@@ -129,15 +211,28 @@ impl Item {
 }
 
 /// 采样条目：条目加分频和相位。
+///
+/// A sampled item: an item plus its divider and phase.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubItem {
+    /// 被采样的条目。
+    ///
+    /// The sampled item.
     pub item: Item,
+    /// 分频：每 `div` 拍采一次，1 表示每拍都采。
+    ///
+    /// Divider: sampled once every `div` ticks; 1 samples on every tick.
     pub div: u16,
+    /// 相位：第 k 拍满足 `(k + phase) % div == 0` 时采样。
+    ///
+    /// Phase: tick k is sampled when `(k + phase) % div == 0`.
     pub phase: u16,
 }
 
 impl SubItem {
     /// 第 k 拍是否采这个条目。
+    ///
+    /// Whether this item is sampled on tick k.
     pub fn due(&self, k: u64) -> bool {
         (k + self.phase as u64).is_multiple_of(self.div as u64)
     }
@@ -170,6 +265,9 @@ fn require_ok(resp: &[u8], cmd: u8) -> Result<()> {
     }
 }
 
+/// 把字节格式化成以空格分隔的大写十六进制，例如 `80 01`。
+///
+/// Format bytes as space-separated upper-case hexadecimal, e.g. `80 01`.
 pub fn hex(data: &[u8]) -> String {
     data.iter()
         .map(|b| format!("{b:02X}"))
@@ -179,18 +277,46 @@ pub fn hex(data: &[u8]) -> String {
 
 // ------------------------------------------------------------------ INFO
 
+/// 0x80 INFO 的响应：探针的厂商扩展能力。
+///
+/// The 0x80 INFO response: the probe's vendor-extension capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VendorInfo {
+    /// 厂商扩展的协议版本。
+    ///
+    /// Protocol version of the vendor extension.
     pub version: u8,
+    /// 功能位：bit0 READ，bit1 WRITE，bit2 采样，bit3 8 字节访问，bit4 Wi-Fi 配置。
+    ///
+    /// Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi
+    /// configuration.
     pub features: u32,
+    /// 一个请求或订阅最多的条目数。
+    ///
+    /// Maximum number of items in one request or subscription.
     pub max_items: u16,
+    /// 最大解引用深度。
+    ///
+    /// Maximum dereference depth.
     pub max_depth: u8,
+    /// 采样环形缓冲的字节数。
+    ///
+    /// Size of the sampling ring buffer in bytes.
     pub ring_bytes: u32,
+    /// 探针当前时间，µs。
+    ///
+    /// The probe's current time in µs.
     pub probe_time_us: u64,
+    /// 一次 SWD 访问（写 TAR 加读一个 AP 寄存器）的标定耗时，µs。
+    ///
+    /// Calibrated duration of one SWD access (a TAR write plus an AP register read), in µs.
     pub access_us: u32,
 }
 
 impl VendorInfo {
+    /// `features` 中已置位的功能名称（只列 bit0 到 bit3）。
+    ///
+    /// Names of the feature bits set in `features` (bit0 to bit3 only).
     pub fn feature_names(&self) -> Vec<&'static str> {
         let names = ["READ", "WRITE", "采样", "8 字节访问"];
         (0..4)
@@ -200,10 +326,16 @@ impl VendorInfo {
     }
 }
 
+/// INFO 请求包。
+///
+/// The INFO request packet.
 pub fn info_request() -> Vec<u8> {
     vec![CMD_INFO]
 }
 
+/// 解码 INFO 响应。
+///
+/// Decode an INFO response.
 pub fn parse_info(resp: &[u8]) -> Result<VendorInfo> {
     require_ok(resp, CMD_INFO)?;
     if resp.len() < 26 {
@@ -223,14 +355,27 @@ pub fn parse_info(resp: &[u8]) -> Result<VendorInfo> {
 // ------------------------------------------------------------------ READ / WRITE
 
 /// READ、WRITE 每个条目的结果。
+///
+/// The result of one item of READ or WRITE.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemResult {
+    /// 条目的 id。
+    ///
+    /// The item's id.
     pub id: u16,
+    /// 条目状态，0 为成功。
+    ///
+    /// Item status; 0 is success.
     pub status: u8,
     /// READ 读到的值（size 字节）；WRITE 为空。
+    ///
+    /// The value read by READ (`size` bytes); empty for WRITE.
     pub value: Vec<u8>,
 }
 
+/// READ 请求包。
+///
+/// The READ request packet.
 pub fn read_request(items: &[Item]) -> Vec<u8> {
     let mut out = vec![CMD_READ, items.len() as u8];
     for it in items {
@@ -240,10 +385,15 @@ pub fn read_request(items: &[Item]) -> Vec<u8> {
 }
 
 /// READ 响应的字节数。
+///
+/// Length of the READ response in bytes.
 pub fn read_response_len(items: &[Item]) -> usize {
     3 + items.iter().map(|i| 3 + i.size as usize).sum::<usize>()
 }
 
+/// 按请求的条目表解码 READ 响应。
+///
+/// Decode a READ response against the items of the request.
 pub fn parse_read(resp: &[u8], items: &[Item]) -> Result<Vec<ItemResult>> {
     require_ok(resp, CMD_READ)?;
     if resp.len() < 3 || resp[2] as usize != items.len() {
@@ -276,6 +426,9 @@ pub fn parse_read(resp: &[u8], items: &[Item]) -> Result<Vec<ItemResult>> {
     Ok(out)
 }
 
+/// WRITE 请求包，每个条目后面跟 size 字节的值。
+///
+/// The WRITE request packet; each item is followed by `size` bytes of value.
 pub fn write_request(items: &[(Item, Vec<u8>)]) -> Vec<u8> {
     let mut out = vec![CMD_WRITE, items.len() as u8];
     for (it, value) in items {
@@ -285,6 +438,9 @@ pub fn write_request(items: &[(Item, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+/// 按请求的条目表解码 WRITE 响应。
+///
+/// Decode a WRITE response against the items of the request.
 pub fn parse_write(resp: &[u8], items: &[(Item, Vec<u8>)]) -> Result<Vec<ItemResult>> {
     require_ok(resp, CMD_WRITE)?;
     if resp.len() != 3 + 3 * items.len() || resp[2] as usize != items.len() {
@@ -306,6 +462,9 @@ pub fn parse_write(resp: &[u8], items: &[(Item, Vec<u8>)]) -> Result<Vec<ItemRes
 
 // ------------------------------------------------------------------ 采样
 
+/// SUB_SET 请求包：采样周期、标志和采样条目。
+///
+/// The SUB_SET request packet: sampling period, flags and sampled items.
 pub fn sub_set_request(period_us: u32, flags: u8, items: &[SubItem]) -> Vec<u8> {
     let mut out = vec![CMD_SUB_SET];
     out.extend_from_slice(&period_us.to_le_bytes());
@@ -320,13 +479,29 @@ pub fn sub_set_request(period_us: u32, flags: u8, items: &[SubItem]) -> Vec<u8> 
 }
 
 /// SUB_SET 的结果。status 为 0x03 时 max_frame_bytes、est_frame_us 照样有效。
+///
+/// The result of SUB_SET. With status 0x03, `max_frame_bytes` and `est_frame_us` are still
+/// valid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SubSetResult {
+    /// 整体状态。
+    ///
+    /// Overall status.
     pub status: u8,
+    /// 所有条目都到期时一帧的字节数；响应不带这一项时为 None。
+    ///
+    /// Bytes of one frame when every item is due; None when the response carries no such field.
     pub max_frame_bytes: Option<u16>,
+    /// 探针估计的单帧耗时，µs；响应不带这一项时为 None。
+    ///
+    /// The probe's estimate of one frame's duration in µs; None when the response carries no
+    /// such field.
     pub est_frame_us: Option<u32>,
 }
 
+/// 解码 SUB_SET 响应。
+///
+/// Decode a SUB_SET response.
 pub fn parse_sub_set(resp: &[u8]) -> Result<SubSetResult> {
     let status = check_header(resp, CMD_SUB_SET)?;
     if resp.len() >= 8 {
@@ -344,31 +519,63 @@ pub fn parse_sub_set(resp: &[u8]) -> Result<SubSetResult> {
     }
 }
 
+/// SUB_CTRL 请求包，`op` 见 [`SUB_STOP`]、[`SUB_START`]。
+///
+/// The SUB_CTRL request packet; see [`SUB_STOP`] and [`SUB_START`] for `op`.
 pub fn sub_ctrl_request(op: u8) -> Vec<u8> {
     vec![CMD_SUB_CTRL, op]
 }
 
 /// SUB_CTRL 的响应：整体状态不为 0 时是错误。
+///
+/// The SUB_CTRL response: a non-zero overall status is an error.
 pub fn parse_sub_ctrl(resp: &[u8]) -> Result<()> {
     require_ok(resp, CMD_SUB_CTRL)
 }
 
+/// SUB_READ 请求包，`max_bytes` 是帧部分最多返回的字节数。
+///
+/// The SUB_READ request packet; `max_bytes` bounds the frame bytes returned.
 pub fn sub_read_request(max_bytes: u16) -> Vec<u8> {
     let mut out = vec![CMD_SUB_READ];
     out.extend_from_slice(&max_bytes.to_le_bytes());
     out
 }
 
+/// 0x85 SUB_READ 的响应。
+///
+/// The 0x85 SUB_READ response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubRead {
+    /// 探针当前时间，µs。
+    ///
+    /// The probe's current time in µs.
     pub probe_time_us: u64,
+    /// 缓冲里剩余未取的帧字节数。
+    ///
+    /// Frame bytes still left in the buffer.
     pub remaining: u32,
+    /// 累计缓冲丢帧数。
+    ///
+    /// Cumulative number of frames dropped by the buffer.
     pub dropped: u32,
+    /// 累计跳过的节拍数。
+    ///
+    /// Cumulative number of skipped ticks.
     pub skipped: u32,
+    /// 本次返回的帧数。
+    ///
+    /// Number of frames returned by this response.
     pub frame_count: u16,
+    /// 帧的原始字节，用 [`decode_frames`] 解码。
+    ///
+    /// Raw frame bytes; decode them with [`decode_frames`].
     pub frames: Vec<u8>,
 }
 
+/// 解码 SUB_READ 响应。
+///
+/// Decode a SUB_READ response.
 pub fn parse_sub_read(resp: &[u8]) -> Result<SubRead> {
     require_ok(resp, CMD_SUB_READ)?;
     if resp.len() < SUB_READ_HEADER {
@@ -385,17 +592,28 @@ pub fn parse_sub_read(resp: &[u8]) -> Result<SubRead> {
 }
 
 /// 一帧采样。
+///
+/// One sampled frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     /// 节拍序号（帧里的 32 位值）。
+    ///
+    /// Tick number (the 32-bit value in the frame).
     pub tick: u32,
     /// 探针时间，µs（48 位）。
+    ///
+    /// Probe time in µs (48 bits).
     pub timestamp_us: u64,
     /// 到期的条目：(在 SUB_SET 里的下标, 值)。失败时值为 None。
+    ///
+    /// The items that were due: (index in SUB_SET, value). The value is None on failure.
     pub values: Vec<(usize, Option<Vec<u8>>)>,
 }
 
 /// 按 SUB_SET 的条目表解码 SUB_READ 返回的帧。到期的条目由节拍序号和 div、phase 推算。
+///
+/// Decode the frames returned by SUB_READ against the item table of SUB_SET. The due items
+/// follow from the tick number and each item's div and phase.
 pub fn decode_frames(raw: &[u8], items: &[SubItem], count: u16) -> Result<Vec<Frame>> {
     let mut pos = 0;
     let mut frames = Vec::with_capacity(count as usize);
@@ -442,13 +660,19 @@ pub fn decode_frames(raw: &[u8], items: &[SubItem], count: u16) -> Result<Vec<Fr
 }
 
 /// 所有条目都到期时一帧的字节数（与探针 SUB_SET 返回的 max_frame_bytes 相同）。
+///
+/// Bytes of one frame when every item is due (the same as the `max_frame_bytes` the probe
+/// returns for SUB_SET).
 pub fn max_frame_bytes(items: &[SubItem]) -> usize {
     FRAME_HEADER
         + items.len().div_ceil(8)
         + items.iter().map(|s| s.item.size as usize).sum::<usize>()
 }
 
-/// 平均每拍写进环形缓冲的字节数（含每帧 2 字节长度），按 div 折算。
+/// 平均每拍写进环形缓冲的字节数（含每帧 2 字节长度），按各条目到期的概率估算。
+///
+/// Estimated average bytes written to the ring buffer per tick (including the 2-byte length
+/// of each frame), weighted by the probability that each item is due.
 pub fn average_bytes_per_tick(items: &[SubItem]) -> f64 {
     // 按 lcm 周期精确统计代价太高，这里按到期概率估算：位图和帧头按"至少一个条目到期"的概率算。
     let mut p_none = 1.0;
@@ -475,6 +699,12 @@ fn gcd(a: u64, b: u64) -> u64 {
 /// 条目 i、j 同时到期的拍占比为 `[phase_i ≡ phase_j (mod gcd)] / lcm(div_i, div_j)`，
 /// 依次给每个条目选使"与已放好的条目重叠的字节数"最小的相位。
 /// `fixed[i]` 为 true 的条目保持原相位。
+///
+/// Assign phases to divided items that have no phase chosen, so that slow items avoid the
+/// same ticks where possible. Items i and j are due together on a fraction
+/// `[phase_i ≡ phase_j (mod gcd)] / lcm(div_i, div_j)` of the ticks; each item in turn gets
+/// the phase with the smallest overlapping byte count against the items already placed.
+/// Items with `fixed[i]` true keep their phase.
 pub fn assign_phases(items: &mut [SubItem], fixed: &[bool]) {
     let mut placed: Vec<usize> = (0..items.len())
         .filter(|&i| fixed.get(i).copied().unwrap_or(false) || items[i].div <= 1)

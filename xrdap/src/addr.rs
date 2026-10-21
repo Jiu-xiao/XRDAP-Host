@@ -18,18 +18,33 @@ use std::fmt;
 /// How to reach one probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Addr {
-    /// USB；`serial` 为 None 时要求只插着一块
+    /// USB；`serial` 为 None 时要求只插着一块。
     ///
-    /// USB; with `serial` None exactly one probe must be plugged in
-    Usb { serial: Option<String> },
-    /// 串口
+    /// USB; with `serial` None exactly one probe must be plugged in.
+    Usb {
+        /// 探针序列号，None 表示不指定。
+        ///
+        /// Probe serial number; None leaves it unspecified.
+        serial: Option<String>,
+    },
+    /// 串口。
     ///
-    /// Serial port
-    Serial { port: String },
-    /// TCP，`host` 为 `主机[:端口]`，端口默认 3241
+    /// Serial port.
+    Serial {
+        /// 串口名，例如 `COM3` 或 `/dev/ttyUSB0`。
+        ///
+        /// Serial port name, e.g. `COM3` or `/dev/ttyUSB0`.
+        port: String,
+    },
+    /// TCP；端口缺省时为 3241。
     ///
-    /// TCP, `host` is `host[:port]`, port 3241 by default
-    Tcp { host: String },
+    /// TCP; the port defaults to 3241.
+    Tcp {
+        /// `主机[:端口]`，例如 `192.0.2.10:3241`。
+        ///
+        /// `host[:port]`, e.g. `192.0.2.10:3241`.
+        host: String,
+    },
 }
 
 impl Addr {

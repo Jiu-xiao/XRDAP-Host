@@ -10,7 +10,7 @@
 //! 同一块探针可能同时经 USB、串口、Wi-Fi 被找到，序列号相同；[`group`] 把它们合成一项。
 //!
 //! Find probes on USB (1D50:6199), serial ports and the LAN (mDNS). Serial ports are only
-//! listed with their USB descriptors and never opened by default, since opening a port can
+//! listed with their USB descriptors and are not opened by default, since opening a port can
 //! reset another board on it. Espressif's built-in USB Serial/JTAG (303A:1001) is recognised
 //! from its descriptor, whose serial number is the chip MAC. Other ports are opened and asked
 //! for DAP_Info only with [`Options::ask_serial`].
@@ -49,6 +49,9 @@ pub struct Found {
     ///
     /// Product name
     pub product: Option<String>,
+    /// 连接方式。
+    ///
+    /// How to reach the probe.
     pub addr: Addr,
     /// 补充说明，例如 mDNS 主机名
     ///
@@ -61,7 +64,13 @@ pub struct Found {
 /// One probe and every way to reach it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeEntry {
+    /// 探针序列号。
+    ///
+    /// Probe serial number.
     pub serial: Option<String>,
+    /// 产品名。
+    ///
+    /// Product name.
     pub product: Option<String>,
     /// 按 USB、串口、TCP 排好序
     ///
@@ -94,7 +103,13 @@ impl ProbeEntry {
 /// What to search and for how long.
 #[derive(Debug, Clone)]
 pub struct Options {
+    /// 是否找 USB 上的探针。
+    ///
+    /// Whether to look for probes on USB.
     pub usb: bool,
+    /// 是否浏览局域网里的 mDNS 广播。
+    ///
+    /// Whether to browse mDNS advertisements on the LAN.
     pub mdns: bool,
     /// 逐个打开可能接着探针的串口，发 DAP_Info 确认（会让打开时就复位的开发板复位）
     ///
@@ -151,7 +166,13 @@ pub enum Chip {
     ///
     /// WCH CH340/CH341, at most 2 Mbaud
     WchSlow,
+    /// Silicon Labs CP210x。
+    ///
+    /// Silicon Labs CP210x.
     SiliconLabs,
+    /// FTDI。
+    ///
+    /// FTDI.
     Ftdi,
     /// 不认识或不是 USB 串口
     ///
@@ -204,7 +225,13 @@ impl Chip {
 /// One serial port as listed by the system, with its USB descriptor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerialPortInfo {
+    /// 串口名，例如 `COM3`。
+    ///
+    /// Serial port name, e.g. `COM3`.
     pub port: String,
+    /// 串口背后的 USB 转串口芯片。
+    ///
+    /// The USB-serial chip behind the port.
     pub chip: Chip,
     /// USB 描述符里的序列号
     ///
@@ -457,7 +484,7 @@ mod tests {
         assert_eq!(p.chip.bauds(), &[DEFAULT_BAUD, SAFE_BAUD]);
     }
 
-    /// 用户决定（B11）：乐鑫自带 USB 口按描述符认，探针序列号是 MAC 的大写十六进制
+    /// 乐鑫自带 USB 口按描述符认，探针序列号是 MAC 的大写十六进制
     /// （协议文档 4.1 节）。
     #[test]
     fn espressif_usb_port_recognised_by_descriptor() {
@@ -485,7 +512,7 @@ mod tests {
         );
     }
 
-    /// 用户决定（B11）：默认只列出串口，不打开；要求询问时才打开，乐鑫 USB 口不用问。
+    /// 默认只列出串口，不打开；要求询问时才打开，乐鑫 USB 口不用问。
     #[test]
     fn serial_ports_opened_only_when_asked() {
         use std::sync::atomic::{AtomicUsize, Ordering};

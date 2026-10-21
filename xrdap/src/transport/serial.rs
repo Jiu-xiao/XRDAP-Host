@@ -1,14 +1,14 @@
 //! 串口传输：libxr Topic 帧，请求 topic `dap_req`，响应 topic `dap_resp`。
 //!
 //! 打开串口时 DTR、RTS 都不置位，和乐鑫 idf_monitor 一样：ESP32 开发板的自动下载电路用这两根线
-//! 控制 EN 和 GPIO0，置位任何一根都可能让芯片复位或进入下载模式。只有一个端口句柄，没有后台
-//! 读线程，传输丢掉时端口立即关闭。
+//! 控制 EN 和 GPIO0，置位任何一根都可能让芯片复位或进入下载模式。只有一个端口句柄，读在调用
+//! 线程里进行，传输丢掉时端口立即关闭。
 //!
 //! Serial transport: libxr topic frames, request topic `dap_req`, response topic `dap_resp`.
 //! The port is opened with DTR and RTS both deasserted, as Espressif's idf_monitor does: the
 //! auto-download circuit of ESP32 boards drives EN and GPIO0 from these lines, and asserting
-//! either can reset the chip or enter the bootloader. There is a single port handle and no
-//! reader thread, so dropping the transport closes the port at once.
+//! either can reset the chip or enter the bootloader. There is a single port handle and reads
+//! happen on the calling thread, so dropping the transport closes the port at once.
 
 use std::collections::VecDeque;
 use std::io::{ErrorKind, Read, Write};
@@ -246,7 +246,7 @@ mod tests {
         (t, lines)
     }
 
-    /// 用户决定（A4）：和 idf_monitor 一样，DTR、RTS 都不置位，从不写成 1。
+    /// 和 idf_monitor 一样，DTR、RTS 都保持不置位。
     #[test]
     fn lines_stay_deasserted() {
         let (mut t, lines) = transport();

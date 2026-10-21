@@ -10,6 +10,19 @@
 //! primary := 名字 | 整数 ':' 类型 | '(' expr ')'
 //! 类型    := [struct|union|enum] 名字 {名字} {'*'}      例如 u32、float、struct motor *、unsigned int
 //! ```
+//!
+//! Variable expressions: forms such as `counter`, `state.speed`, `motor[1].pid->out`, `*ptr`,
+//! `p->q->x`, `0x20000010:u32` and `(uint32_t***)chain_p1` are resolved into vendor items
+//! (base, offset of each dereference level, final offset, access width).
+//!
+//! Grammar (`type` is a type name, `name` an identifier, `integer` an integer literal):
+//!
+//! ```text
+//! expr    := '*' expr | '(' type ')' expr | postfix
+//! postfix := primary { '.' name | '->' name | '[' integer ']' }
+//! primary := name | integer ':' type | '(' expr ')'
+//! type    := [struct|union|enum] name {name} {'*'}      e.g. u32, float, struct motor *, unsigned int
+//! ```
 
 mod resolve;
 mod syntax;

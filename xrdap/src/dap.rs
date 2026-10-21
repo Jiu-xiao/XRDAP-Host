@@ -1,4 +1,6 @@
 //! CMSIS-DAP 标准命令、SWD/ADIv5 的最小初始化，以及厂商命令的封装。
+//!
+//! CMSIS-DAP standard commands, minimal SWD/ADIv5 setup, and wrappers for the vendor commands.
 
 use std::time::{Duration, Instant};
 
@@ -8,12 +10,33 @@ use crate::vendor::wifi::{self, WifiStatus};
 use crate::vendor::{self, Item, ItemResult, SubItem, SubRead, SubSetResult, VendorInfo};
 use crate::{Error, Result};
 
+/// DAP_Info 项：厂商名。
+///
+/// DAP_Info item: vendor name.
 pub const ID_VENDOR: u8 = 0x01;
+/// DAP_Info 项：产品名。
+///
+/// DAP_Info item: product name.
 pub const ID_PRODUCT: u8 = 0x02;
+/// DAP_Info 项：序列号。
+///
+/// DAP_Info item: serial number.
 pub const ID_SERIAL: u8 = 0x03;
+/// DAP_Info 项：CMSIS-DAP 协议版本。
+///
+/// DAP_Info item: CMSIS-DAP protocol version.
 pub const ID_PROTOCOL: u8 = 0x04;
+/// DAP_Info 项：探针固件版本。
+///
+/// DAP_Info item: probe firmware version.
 pub const ID_FIRMWARE: u8 = 0x09;
+/// DAP_Info 项：探针可缓存的 DAP 包个数。
+///
+/// DAP_Info item: number of DAP packets the probe can buffer.
 pub const ID_PACKET_COUNT: u8 = 0xFE;
+/// DAP_Info 项：DAP 包长。
+///
+/// DAP_Info item: DAP packet size.
 pub const ID_PACKET_SIZE: u8 = 0xFF;
 
 /// DAP_Transfer 请求字节里的 DP 寄存器（APnDP=0）。
@@ -33,6 +56,8 @@ const JTAG_TO_SWD: [u8; 16] = [
 ];
 
 /// 解析 SWD 时钟：`4000000`、`4M`、`500k`、`1.5MHz`。范围 1 Hz 到 100 MHz。
+///
+/// Parse an SWD clock: `4000000`, `4M`, `500k` or `1.5MHz`. The range is 1 Hz to 100 MHz.
 pub fn parse_clock(s: &str) -> Result<u32> {
     let t = s.trim().to_ascii_lowercase();
     let t = t.strip_suffix("hz").unwrap_or(&t);
@@ -57,13 +82,20 @@ pub fn parse_clock(s: &str) -> Result<u32> {
 }
 
 /// 连接目标后得到的信息。
+///
+/// Information obtained after connecting to the target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TargetInfo {
+    /// 目标 DP 的 DPIDR 寄存器值。
+    ///
+    /// The DPIDR register value of the target's DP.
     pub dpidr: u32,
 }
 
 impl TargetInfo {
     /// DPIDR 的可读说明：设计者、DP 版本、部件号。
+    ///
+    /// A readable description of the DPIDR: designer, DP version and part number.
     pub fn describe(&self) -> String {
         let d = self.dpidr;
         let designer = (d >> 1) & 0x7FF;
@@ -81,15 +113,30 @@ impl TargetInfo {
 }
 
 /// 探针在 DAP_Info 里报的身份；探针没有报的项为 None。
+///
+/// The identity a probe reports through DAP_Info; items the probe does not report are None.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Identity {
+    /// 厂商名。
+    ///
+    /// Vendor name.
     pub vendor: Option<String>,
+    /// 产品名。
+    ///
+    /// Product name.
     pub product: Option<String>,
-    /// 序列号，例如 `XRobot-XRDAP-E8069093EF1C`；同一块探针在 USB、串口、TCP 上相同
+    /// 序列号，例如 `XRobot-XRDAP-AABBCCDDEEFF`；同一块探针在 USB、串口、TCP 上相同。
+    ///
+    /// Serial number, e.g. `XRobot-XRDAP-AABBCCDDEEFF`; the same probe reports the same value
+    /// over USB, serial and TCP.
     pub serial: Option<String>,
-    /// 探针固件版本
+    /// 探针固件版本。
+    ///
+    /// Probe firmware version.
     pub firmware: Option<String>,
-    /// CMSIS-DAP 协议版本
+    /// CMSIS-DAP 协议版本。
+    ///
+    /// CMSIS-DAP protocol version.
     pub protocol: Option<String>,
 }
 
@@ -225,6 +272,8 @@ impl Probe {
     // -------------------------------------------------------------- DAP_Info
 
     /// DAP_Info 原始数据（去掉命令字节和长度）。
+    ///
+    /// Raw DAP_Info data, without the command byte and the length byte.
     pub fn dap_info(&mut self, id: u8) -> Result<Vec<u8>> {
         let resp = self.xfer(&[0x00, id])?;
         if resp.len() < 2 || resp[0] != 0x00 {
@@ -244,6 +293,8 @@ impl Probe {
     }
 
     /// DAP_Info 的字符串项；探针没有这一项时返回 None。
+    ///
+    /// A DAP_Info string item; None when the probe has no such item.
     pub fn dap_info_string(&mut self, id: u8) -> Result<Option<String>> {
         let data = self.dap_info(id)?;
         if data.is_empty() {
@@ -254,6 +305,8 @@ impl Probe {
     }
 
     /// 读 DAP_Info 里的厂商、产品、序列号和版本。
+    ///
+    /// Read vendor, product, serial number and versions from DAP_Info.
     pub fn identity(&mut self) -> Result<Identity> {
         Ok(Identity {
             vendor: self.dap_info_string(ID_VENDOR)?,
@@ -265,6 +318,8 @@ impl Probe {
     }
 
     /// 查询 DAP 包长，并告诉传输层（USB 的 IN 传输长度依赖它）。
+    ///
+    /// Query the DAP packet size and pass it to the transport (USB IN transfers depend on it).
     pub fn query_packet_size(&mut self) -> Result<usize> {
         let data = self.dap_info(ID_PACKET_SIZE)?;
         if data.len() < 2 {
@@ -405,7 +460,9 @@ impl Probe {
 
     // -------------------------------------------------------------- 厂商命令
 
-    /// 0x80 INFO。
+    /// 0x80 INFO：读探针的厂商命令能力。
+    ///
+    /// 0x80 INFO: read the probe's vendor command capabilities.
     pub fn vendor_info(&mut self) -> Result<VendorInfo> {
         let resp = self.xfer(&vendor::info_request())?;
         vendor::parse_info(&resp)
@@ -515,7 +572,9 @@ impl Probe {
         }
     }
 
-    /// 0x83 SUB_SET。
+    /// 0x83 SUB_SET：设置采样周期、标志和采样条目。
+    ///
+    /// 0x83 SUB_SET: set the sampling period, flags and sampled items.
     pub fn sub_set(
         &mut self,
         period_us: u32,
@@ -526,13 +585,18 @@ impl Probe {
         vendor::parse_sub_set(&resp)
     }
 
-    /// 0x84 SUB_CTRL；整体状态不为 0 时是错误。
+    /// 0x84 SUB_CTRL：控制采样；整体状态不为 0 时返回错误。
+    ///
+    /// 0x84 SUB_CTRL: control sampling; a non-zero overall status is an error.
     pub fn sub_ctrl(&mut self, op: u8) -> Result<()> {
         let resp = self.xfer(&vendor::sub_ctrl_request(op))?;
         vendor::parse_sub_ctrl(&resp)
     }
 
-    /// 0x85 SUB_READ，同时返回请求前后的本机时间。
+    /// 0x85 SUB_READ：取走已采样的帧，同时返回请求前后的本机时间。
+    ///
+    /// 0x85 SUB_READ: fetch sampled frames, together with the local time before and after the
+    /// request.
     pub fn sub_read(&mut self, max_bytes: u16) -> Result<(SubRead, Instant, Instant)> {
         let (resp, before, after) = self.xfer_timed(&vendor::sub_read_request(max_bytes))?;
         Ok((vendor::parse_sub_read(&resp)?, before, after))
@@ -545,17 +609,17 @@ impl Probe {
         wifi::parse_status(&self.xfer(&wifi::status_request())?)
     }
 
-    /// 0x86：保存热点参数。成功后探针约 0.5 秒后重启并连接新热点，这个连接随之断开。
+    /// 0x86：保存热点参数。成功后探针重启并连接新热点，这个连接随之断开。
     ///
-    /// 0x86: save credentials. On success the probe restarts after about 0.5 s and this
-    /// connection is lost.
+    /// 0x86: save credentials. On success the probe restarts and connects to the new hotspot,
+    /// and this connection is lost.
     pub fn wifi_set(&mut self, ssid: &str, password: &str) -> Result<()> {
         wifi::parse_reply(&self.xfer(&wifi::set_request(ssid, password)?)?)
     }
 
-    /// 0x86：清除热点参数。成功后探针约 0.5 秒后重启，不再连 Wi-Fi。
+    /// 0x86：清除热点参数。成功后探针重启，不再连接 Wi-Fi。
     ///
-    /// 0x86: clear credentials. On success the probe restarts after about 0.5 s.
+    /// 0x86: clear credentials. On success the probe restarts and no longer joins a Wi-Fi network.
     pub fn wifi_clear(&mut self) -> Result<()> {
         wifi::parse_reply(&self.xfer(&wifi::clear_request())?)
     }

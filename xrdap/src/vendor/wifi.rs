@@ -10,11 +10,29 @@ use std::net::Ipv4Addr;
 use super::{hex, STATUS_ARG, STATUS_OK, STATUS_RESOURCE};
 use crate::{Error, Result};
 
+/// 命令字节：Wi-Fi 配置。
+///
+/// Command byte: Wi-Fi configuration.
 pub const CMD_WIFI: u8 = 0x86;
+/// op：查询状态。
+///
+/// op: query the state.
 pub const OP_STATUS: u8 = 0x00;
+/// op：保存热点参数。
+///
+/// op: save the credentials.
 pub const OP_SET: u8 = 0x01;
+/// op：清除热点参数。
+///
+/// op: clear the credentials.
 pub const OP_CLEAR: u8 = 0x02;
+/// 状态标志 bit0：Wi-Fi 已启动。
+///
+/// Status flag bit 0: Wi-Fi is running.
 pub const FLAG_STARTED: u8 = 0x01;
+/// 状态标志 bit1：已连上热点并拿到 IP。
+///
+/// Status flag bit 1: connected to the hotspot with an IP address.
 pub const FLAG_CONNECTED: u8 = 0x02;
 
 /// 0x86 的状态说明。
@@ -46,6 +64,9 @@ pub struct WifiStatus {
     ///
     /// Connected and has an IP address
     pub connected: bool,
+    /// 探针的 IPv4 地址；没连上时为 0.0.0.0
+    ///
+    /// The probe's IPv4 address; 0.0.0.0 when not connected
     pub ip: Ipv4Addr,
     /// 信号强度，dBm；没连上时为 0
     ///
@@ -56,7 +77,7 @@ pub struct WifiStatus {
 impl WifiStatus {
     /// 一行说明，例如 `热点 lab，已连接，IP 192.0.2.10，信号 -40 dBm`。
     ///
-    /// One-line description.
+    /// One-line description, e.g. `热点 lab，已连接，IP 192.0.2.10，信号 -40 dBm`.
     pub fn describe(&self) -> String {
         if self.ssid.is_empty() {
             return "没有保存热点参数".into();
@@ -77,6 +98,9 @@ impl WifiStatus {
     }
 }
 
+/// 查询请求包。
+///
+/// The query request packet.
 pub fn status_request() -> Vec<u8> {
     vec![CMD_WIFI, OP_STATUS]
 }
@@ -99,10 +123,16 @@ pub fn set_request(ssid: &str, password: &str) -> Result<Vec<u8>> {
     Ok(req)
 }
 
+/// 清除请求包。
+///
+/// The clear request packet.
 pub fn clear_request() -> Vec<u8> {
     vec![CMD_WIFI, OP_CLEAR]
 }
 
+/// 解码查询响应。
+///
+/// Decode a query response.
 pub fn parse_status(resp: &[u8]) -> Result<WifiStatus> {
     parse_reply(resp)?;
     if resp.len() < 9 || resp.len() < 9 + resp[8] as usize {

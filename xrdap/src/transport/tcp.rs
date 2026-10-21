@@ -19,10 +19,10 @@ use crate::{Error, Result};
 /// The probe's TCP DAP port.
 pub const DEFAULT_PORT: u16 = 3241;
 
-/// 连到探针或转发程序的 TCP 连接。超时时收到一半的帧留在缓冲里，下次接着收，不会错位。
+/// 连到探针或转发程序的 TCP 连接。超时时收到一半的帧留在缓冲里，下次接着收，帧边界保持对齐。
 ///
 /// A TCP connection to a probe or relay. A frame half received when a wait times out stays
-/// buffered and is completed by the next receive, so framing never slips.
+/// buffered and is completed by the next receive, so frame boundaries stay aligned.
 pub struct TcpTransport {
     stream: TcpStream,
     peer: String,
