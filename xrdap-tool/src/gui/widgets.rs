@@ -18,7 +18,7 @@ pub(super) fn color_for(id: u64) -> Color32 {
     egui::ecolor::Hsva::new(h, 0.75, 0.85, 1.0).into()
 }
 
-/// 序列号的末尾 6 位，例如 …93EF1C；短的原样返回。
+/// 序列号的末尾 6 位，例如 …DDEEFF；短的原样返回。
 pub(super) fn short_serial(sn: &str) -> String {
     let n = sn.chars().count();
     if n > 8 {

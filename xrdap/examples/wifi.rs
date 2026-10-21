@@ -5,7 +5,7 @@
 //! cargo run -p xrdap --example wifi -- 热点 密码       # 保存，探针随后重启
 //! ```
 //!
-//! 探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap --probe`），不设时自动选唯一的那块。
+//! 探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap -p`），不设时自动选唯一的那块。
 
 use xrdap::addr::Spec;
 use xrdap::open::{open, OpenOptions};
