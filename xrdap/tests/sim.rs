@@ -385,3 +385,22 @@ fn wifi_status_set_clear() {
     xrdap::wifi::clear(&mut probe).unwrap();
     assert!(sim.wifi_ssid().is_empty());
 }
+
+/// 复位只临时改 DEMCR.VC_CORERESET：复位成功、失败，复位后运行还是停住，DEMCR 都恢复原值。
+#[test]
+fn reset_always_restores_demcr() {
+    use xrdap::cortex::{self, AfterReset, DEMCR, DHCSR};
+    let (sim, mut probe, _) = setup();
+    probe.connect_swd(4_000_000).unwrap();
+    // TRCENA 和 VC_CORERESET 都是调试器之前设好的
+    let original = (1 << 24) | 1;
+    cortex::write_u32(&mut probe, DEMCR, original).unwrap();
+
+    cortex::reset(&mut probe, AfterReset::Run).unwrap();
+    assert_eq!(sim.demcr(), original, "复位后运行");
+
+    cortex::write_u32(&mut probe, DEMCR, 1 << 24).unwrap();
+    sim.fail_reads(DHCSR, u32::MAX);
+    assert!(cortex::reset(&mut probe, AfterReset::Halt).is_err());
+    assert_eq!(sim.demcr(), 1 << 24, "复位失败");
+}
