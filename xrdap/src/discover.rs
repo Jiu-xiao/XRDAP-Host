@@ -384,10 +384,13 @@ pub(crate) fn mdns(time: Duration) -> Result<Vec<Found>> {
     Ok(out)
 }
 
+/// mDNS TXT `chip` 对应的产品名（协议文档第 4 节）；不认识的值原样返回。
 fn product_from_chip(chip: &str) -> &str {
     match chip {
         "esp32s3" => "XR-DAP-S3",
+        "esp32s2" => "XR-DAP-S2",
         "esp32c3" => "XR-DAP-C3",
+        "esp32" => "XR-DAP-ESP32",
         other => other,
     }
 }
@@ -544,6 +547,20 @@ mod tests {
         opts.ask_serial = true;
         collect(&opts, &ports, ask);
         assert_eq!(OPENED.load(Ordering::SeqCst), 1, "只问 CH34x 那个口");
+    }
+
+    /// 协议文档第 4 节：mDNS TXT `chip` 和 DAP_Info 产品名的对应。
+    #[test]
+    fn mdns_chip_names_product() {
+        for (chip, product) in [
+            ("esp32s3", "XR-DAP-S3"),
+            ("esp32s2", "XR-DAP-S2"),
+            ("esp32c3", "XR-DAP-C3"),
+            ("esp32", "XR-DAP-ESP32"),
+            ("other", "other"),
+        ] {
+            assert_eq!(product_from_chip(chip), product);
+        }
     }
 
     #[test]
