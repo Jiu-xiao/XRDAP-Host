@@ -287,6 +287,27 @@ mod tests {
         );
     }
 
+    /// 协议文档第 1 节：64 字节的响应帧后面补的 0x00 被跳过，两个响应都收到。
+    #[test]
+    fn pad_after_64_byte_frame_is_skipped() {
+        let (mut t, lines) = transport();
+        let long: Vec<u8> = std::iter::once(0x81).chain(1..45).collect();
+        {
+            let mut l = lines.lock().unwrap();
+            let mut first = build_frame(crc32(RESP_TOPIC), &serial_payload(&long), 0);
+            assert_eq!(first.len(), 64);
+            first.push(0x00);
+            l.rx.push_back(first);
+            l.rx.push_back(build_frame(
+                crc32(RESP_TOPIC),
+                &serial_payload(&[0x80, 0x00]),
+                0,
+            ));
+        }
+        assert_eq!(t.recv(Duration::from_secs(1)).unwrap(), long);
+        assert_eq!(t.recv(Duration::from_secs(1)).unwrap(), [0x80, 0x00]);
+    }
+
     /// 协议文档第 1 节：请求是 dap_req 帧；响应帧拆成几次读到也能拼起来。
     #[test]
     fn frames_requests_and_reassembles_responses() {
