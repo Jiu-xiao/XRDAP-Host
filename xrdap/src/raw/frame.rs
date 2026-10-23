@@ -117,11 +117,24 @@ pub fn serial_payload(request: &[u8]) -> Vec<u8> {
     payload
 }
 
-/// 一个完整的串口请求帧（topic `dap_req`）。
+/// USB 转串口的 Bulk 包长。整包的数据要等下一个短包才到达对方程序，所以帧长正好是它的
+/// 整数倍时在帧后补一个 0x00（协议文档第 1 节）；接收方跳过 0x5A 之前的字节。
 ///
-/// A complete serial request frame (topic `dap_req`).
+/// Bulk packet size of USB-serial bridges. Data that fills whole packets reaches the other
+/// program only with the next short packet, so a frame whose length is a multiple of it is
+/// followed by one 0x00 (protocol section 1); receivers skip bytes before 0x5A.
+const PAD_EVERY: usize = 64;
+
+/// 一个完整的串口请求帧（topic `dap_req`），长度是 64 的整数倍时后面补一个 0x00。
+///
+/// A complete serial request frame (topic `dap_req`), followed by one 0x00 when its length is
+/// a multiple of 64.
 pub fn serial_request_frame(request: &[u8]) -> Vec<u8> {
-    build_frame(crc32(REQ_TOPIC), &serial_payload(request), 0)
+    let mut frame = build_frame(crc32(REQ_TOPIC), &serial_payload(request), 0);
+    if frame.len().is_multiple_of(PAD_EVERY) {
+        frame.push(0x00);
+    }
+    frame
 }
 
 /// 从 Topic 载荷里取出 DAP 包；长度字段不合理时返回 None。
@@ -268,6 +281,24 @@ mod tests {
             0x00, 0x00, 0xFF, 0x32,
         ];
         assert_eq!(frame, expect);
+    }
+
+    /// 协议文档第 1 节：帧长是 64 的整数倍时补一个 0x00。响应帧是 19 + n 字节，n = 45 时
+    /// 正好 64；接收方跳过补的字节，后面的帧照常解析。
+    #[test]
+    fn frames_of_64_bytes_are_padded() {
+        assert_eq!(serial_request_frame(&[0x81; 45]).len(), 65);
+        assert_eq!(serial_request_frame(&[0x81; 45])[64], 0x00);
+        assert_eq!(serial_request_frame(&[0x81; 44]).len(), 63);
+        let topic = crc32(RESP_TOPIC);
+        let full = serial_payload(&[0x81; 45]);
+        let mut stream = build_frame(topic, &full, 1);
+        assert_eq!(stream.len(), 64);
+        stream.push(0x00);
+        let short = serial_payload(&[0x00, 0x01, 0x02]);
+        stream.extend(build_frame(topic, &short, 2));
+        let mut parser = FrameParser::new(topic);
+        assert_eq!(parser.feed(&stream), vec![full, short]);
     }
 
     #[test]
