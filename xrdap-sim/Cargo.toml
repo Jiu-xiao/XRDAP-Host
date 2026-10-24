@@ -9,3 +9,6 @@ publish = false
 [dependencies]
 xrdap = { path = "../xrdap", default-features = false }
 object = { version = "0.40", default-features = false, features = ["read_core", "elf", "std"] }
+
+[dev-dependencies]
+xrdap = { path = "../xrdap" }
