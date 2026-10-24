@@ -293,8 +293,13 @@ impl Sim {
     /// 在 `127.0.0.1` 的一个空闲端口上提供探针的 TCP DAP 服务（协议文档第 2 节），返回地址。
     /// 服务线程在后台一直运行。
     pub fn serve_tcp(&self) -> SocketAddr {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("监听");
-        let addr = listener.local_addr().expect("地址");
+        self.serve_tcp_on("127.0.0.1:0").expect("监听本机端口")
+    }
+
+    /// 在 `listen` 上提供 TCP DAP 服务，返回实际监听的地址。服务线程在后台一直运行。
+    pub fn serve_tcp_on(&self, listen: &str) -> std::io::Result<SocketAddr> {
+        let listener = TcpListener::bind(listen)?;
+        let addr = listener.local_addr()?;
         let sim = self.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
@@ -304,7 +309,7 @@ impl Sim {
                 sim.st().end_session(transport);
             }
         });
-        addr
+        Ok(addr)
     }
 }
 

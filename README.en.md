@@ -60,7 +60,13 @@ Serial ports are opened with DTR and RTS both deasserted, as Espressif's idf_mon
 4. Enter `1ms` as the period and click 开始采样 (start sampling); the plot starts scrolling.
 5. Type a value into a watch row and press Enter to change the variable; click 录制 CSV… (record CSV) to start recording.
 
-The probe times the sampling, so the period is not limited by USB or Wi-Fi round trips. The probe does not estimate timing; keeping up is judged from run-time counters: skipped ticks mean SWD cannot keep up, dropped frames or a nearly full buffer mean reading cannot keep up, and the GUI then shows advice below the statistics (longer period, larger divider or fewer variables). Plots can be split across 1 to 4 charts with linked time axes; hovering shows values, and click and Shift+click place cursors A and B. The probe, ELF, watch table and other settings are saved on exit. The ELF cannot be reloaded while sampling.
+The probe times the sampling, so the period is not limited by USB or Wi-Fi round trips. The probe does not estimate timing; keeping up is judged from run-time counters: skipped ticks mean SWD cannot keep up, dropped frames or a nearly full buffer mean reading cannot keep up, and the GUI then shows advice below the statistics (longer period, larger divider or fewer variables). Plots can be split across 1 to 4 charts with linked time axes; hovering shows values, and click and Shift+click place cursors A and B. The probe, ELF, watch table and other settings are saved on exit. The ELF cannot be reloaded while sampling. The GUI follows XRobot Style; the top bar switches between following the system, light and dark.
+
+![xrdap GUI, light](docs/images/xrdap-gui.png)
+
+![xrdap GUI, dark](docs/images/xrdap-gui-dark.png)
+
+The screenshots are connected to the simulated probe served by `cargo run -p xrdap-sim --example serve -- app.elf counter state.pair.lo s8`.
 
 ### Reading and writing variables, CSV export on the command line
 
