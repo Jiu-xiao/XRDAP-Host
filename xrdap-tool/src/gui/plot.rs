@@ -132,6 +132,8 @@ impl PlotView {
             / charts.len() as f32)
             .max(80.0);
         let shift = ui.input(|i| i.modifiers.shift);
+        let palette = super::theme::Palette::current(ui);
+        let (ink, ink_muted) = (palette.ink, palette.ink_muted);
         let mut hover_x = None;
         let mut clicked_x = None;
         let link = egui::Id::new("xrdap_plot_x");
@@ -182,11 +184,12 @@ impl PlotView {
                     }
                     p.line(Line::new(c.name, PlotPoints::from(pts)).color(c.color));
                 }
+                // 游标是界面，不是数据：A 用墨色实线，B 用次要墨色
                 if let Some(a) = cursor_a {
-                    p.vline(VLine::new("", a).color(Color32::from_rgb(255, 200, 80)));
+                    p.vline(VLine::new("A", a).color(ink));
                 }
                 if let Some(b) = cursor_b {
-                    p.vline(VLine::new("", b).color(Color32::from_rgb(120, 200, 255)));
+                    p.vline(VLine::new("B", b).color(ink_muted));
                 }
                 if let Some(pos) = p.pointer_coordinate() {
                     if p.response().hovered() {

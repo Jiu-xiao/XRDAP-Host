@@ -1,8 +1,9 @@
 //! 探针的 Wi-Fi：当前状态，保存或清除热点参数（经 DAP 的 0x86 命令，不用另开串口终端）。
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 use super::super::app::App;
+use super::super::theme;
 use super::super::worker::{Cmd, WifiChange};
 
 impl App {
@@ -23,17 +24,12 @@ impl App {
             .show(ui, |ui| {
                 match &self.wifi {
                     None => ui.label(RichText::new("读取中").weak()),
-                    Some(Err(e)) => ui.label(
-                        RichText::new(format!("读不到（固件不支持或读取失败）：{e}"))
-                            .color(ui.visuals().error_fg_color),
-                    ),
+                    Some(Err(e)) => {
+                        theme::fail(ui, format!("读不到（固件不支持或读取失败）：{e}"));
+                        ui.label("")
+                    }
                     Some(Ok(st)) => {
-                        let color = if st.connected {
-                            Color32::from_rgb(90, 200, 120)
-                        } else {
-                            ui.visuals().warn_fg_color
-                        };
-                        ui.label(RichText::new(format!("● {}", st.describe())).color(color));
+                        ui.label(st.describe());
                         ui.label(RichText::new(st.history()).weak().small())
                     }
                 };

@@ -11,7 +11,8 @@ use crate::gui::app::App;
 use crate::gui::model::{is_system_var, VarRow, Watch, KEEP_S, MAX_POINTS};
 use crate::gui::plot::MAX_CHARTS;
 use crate::gui::series::Series;
-use crate::gui::widgets::{color_for, fill_width, right_to_left_row};
+use crate::gui::theme;
+use crate::gui::widgets::{fill_width, right_to_left_row};
 
 /// 后台读完的 ELF：路径，和符号表加变量表，或读失败的原因。
 pub(crate) type ElfLoaded = (PathBuf, Result<(SymbolTable, Vec<VarRow>), String>);
@@ -158,7 +159,7 @@ impl App {
                         write_text: String::new(),
                         note: String::new(),
                         series: Series::new(KEEP_S, MAX_POINTS),
-                        color: color_for(id),
+                        channel: id as usize,
                         chart: chart.clamp(1, MAX_CHARTS),
                         changed_at: None,
                     });
@@ -173,7 +174,7 @@ impl App {
     }
 
     pub(crate) fn ui_elf(&mut self, ui: &mut egui::Ui) {
-        ui.heading("ELF");
+        theme::section(ui, "XRDAP / ELF", "ELF");
         let mut load = false;
         // 从右往左排：先放按钮，输入框占剩下的宽度，不会把面板越撑越宽
         // 采样时不能换 ELF，读的过程中也不能再读
@@ -217,7 +218,7 @@ impl App {
     }
 
     pub(crate) fn ui_vars(&mut self, ui: &mut egui::Ui) {
-        ui.heading("添加变量");
+        theme::section(ui, "XRDAP / ELF / VARS", "添加变量");
         let editable = !self.sampling && !self.starting;
         let mut add: Option<String> = None;
         ui.add_enabled_ui(editable, |ui| {
@@ -258,7 +259,7 @@ impl App {
                     for &i in &hits[range] {
                         let v = &self.vars[i];
                         ui.horizontal(|ui| {
-                            if ui.small_button("+").clicked() {
+                            if ui.small_button("添加").clicked() {
                                 add = Some(v.name.clone());
                             }
                             let size = v

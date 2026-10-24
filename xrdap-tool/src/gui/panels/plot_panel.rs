@@ -5,16 +5,18 @@ use xrdap::types::ScalarKind;
 
 use crate::gui::app::App;
 use crate::gui::plot::Curve;
+use crate::gui::theme::Palette;
 
 impl App {
     pub(crate) fn ui_plot(&mut self, ui: &mut egui::Ui) {
+        let p = Palette::current(ui);
         let curves: Vec<Curve> = self
             .watches
             .iter()
             .filter(|w| w.show)
             .map(|w| Curve {
                 name: &w.target.name,
-                color: w.color,
+                color: p.channel(w.channel),
                 chart: w.chart,
                 series: &w.series,
                 float: matches!(w.target.ty.kind, ScalarKind::Float),

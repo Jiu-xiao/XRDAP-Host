@@ -17,6 +17,7 @@ use xrdap::WifiStatus;
 use super::model::{Csv, Found, ShareState, VarRow, Watch};
 use super::panels::{ElfLoaded, SavedWatch};
 use super::plot::PlotView;
+use super::theme::{self, Choice};
 use super::worker::{self, Cmd, CoreCmd, Event, Op};
 
 const LOG_LINES: usize = 300;
@@ -84,18 +85,18 @@ pub struct App {
     pub(super) csv: Option<Csv>,
 
     pub(super) log: VecDeque<String>,
+    /// 亮暗主题的选择
+    pub(super) theme: Choice,
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let font = super::fonts::install(&cc.egui_ctx);
+        let fonts = super::fonts::install(&cc.egui_ctx);
         let mut app = Self::with_settings(cc.egui_ctx.clone(), worker::SHARE_LISTEN, |k| {
             cc.storage.and_then(|s| s.get_string(k))
         });
-        match font {
-            Some(p) => app.log(format!("中文字体：{p}")),
-            None => app.log("没有找到中文字体，中文会显示成方框".into()),
-        }
+        theme::install(&cc.egui_ctx, &fonts.families, app.theme);
+        app.log(fonts.summary);
         app.start_finding();
         app
     }
@@ -178,6 +179,7 @@ impl App {
             },
             csv: None,
             log: VecDeque::new(),
+            theme: Choice::from_key(&get("xrdap.theme").unwrap_or_default()),
         };
         let saved: Vec<SavedWatch> = get("xrdap.watches")
             .unwrap_or_default()
@@ -441,15 +443,51 @@ impl App {
     }
 }
 
+impl App {
+    /// 顶栏：产品名和主题选择。
+    fn ui_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                theme::path_label(ui, "XRDAP / HOST");
+                ui.label(RichText::new("XR-DAP").text_style(egui::TextStyle::Heading));
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                for c in Choice::ALL.iter().rev() {
+                    if ui.selectable_label(self.theme == *c, c.label()).clicked() {
+                        self.theme = *c;
+                        theme::choose(ui.ctx(), *c);
+                    }
+                }
+                theme::path_label(ui, "主题");
+            });
+        });
+    }
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(ev) = self.rx.try_recv() {
             self.handle(ev);
         }
         self.poll_elf();
+        let p = theme::Palette::of(ctx.theme());
+        // 导航栏：paper-raised 加底部一条 line
+        egui::TopBottomPanel::top("bar")
+            .frame(
+                egui::Frame::new()
+                    .fill(p.raised)
+                    .inner_margin(egui::Margin::symmetric(16, 8)),
+            )
+            .show(ctx, |ui| self.ui_bar(ui));
+        // 页脚的位置放日志：paper-sunken 加顶部一条 line
         egui::TopBottomPanel::bottom("log")
             .resizable(true)
             .default_height(110.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.sunken)
+                    .inner_margin(egui::Margin::symmetric(16, 8)),
+            )
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
@@ -465,11 +503,12 @@ impl eframe::App for App {
             .default_width(320.0)
             .width_range(260.0..=520.0)
             .show(ctx, |ui| {
-                self.ui_connection(ui);
-                ui.separator();
-                self.ui_elf(ui);
-                ui.separator();
-                self.ui_vars(ui);
+                ui.add_space(8.0);
+                theme::card(ui, |ui| self.ui_connection(ui));
+                ui.add_space(8.0);
+                theme::card(ui, |ui| self.ui_elf(ui));
+                ui.add_space(8.0);
+                theme::card(ui, |ui| self.ui_vars(ui));
             });
         egui::CentralPanel::default().show(ctx, |ui| {
             self.ui_controls(ui);
@@ -498,6 +537,7 @@ impl eframe::App for App {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // eframe 自己用 "window"、"egui" 这些键，这里的键都加 xrdap. 前缀
+        storage.set_string("xrdap.theme", self.theme.key().into());
         storage.set_string("xrdap.probe", self.probe_spec.clone());
         storage.set_string("xrdap.serial_baud", self.baud.clone());
         storage.set_string("xrdap.clock", self.clock.clone());

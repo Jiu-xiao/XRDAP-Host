@@ -8,7 +8,6 @@ use std::sync::mpsc::{channel, Sender};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use eframe::egui::Color32;
 use xrdap::discover::{ProbeEntry, SerialPortInfo};
 use xrdap::expr::Target;
 
@@ -35,7 +34,8 @@ pub(super) struct Watch {
     pub(super) write_text: String,
     pub(super) note: String,
     pub(super) series: Series,
-    pub(super) color: Color32,
+    /// 曲线的数据通道（ch0–ch3 依次循环），颜色随主题取
+    pub(super) channel: usize,
     /// 画在第几张图（1 起）
     pub(super) chart: u8,
     /// 当前值最近一次变化的时刻，用来高亮
