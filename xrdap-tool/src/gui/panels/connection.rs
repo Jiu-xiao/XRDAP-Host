@@ -2,12 +2,13 @@
 
 use std::sync::mpsc::channel;
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use xrdap::cortex::{AfterReset, CoreState};
 use xrdap::discover::{self, Chip};
 
 use crate::gui::app::App;
 use crate::gui::model::Found;
+use crate::gui::theme;
 use crate::gui::widgets::{fill_width, short_serial};
 use crate::gui::worker::{Cmd, Conn, CoreCmd};
 
@@ -122,7 +123,7 @@ impl App {
     }
 
     pub(crate) fn ui_connection(&mut self, ui: &mut egui::Ui) {
-        ui.heading("连接");
+        theme::section(ui, "XRDAP / PROBE", "连接");
         if !self.connected && !self.connecting {
             self.ui_found(ui);
             ui.separator();
@@ -163,7 +164,8 @@ impl App {
             } else if self.connecting {
                 ui.add(egui::Spinner::new());
                 ui.label("连接中……");
-            } else if ui.button("连接").clicked() {
+            } else if theme::primary_button(ui, "连接").clicked() {
+                // 没连上时，“连接”是这个窗口唯一的主按钮
                 self.connect();
             }
         });
@@ -218,47 +220,44 @@ impl App {
             ui.ctx().copy_text(st.attach.clone());
         }
         match st.client {
-            Some(peer) => ui.label(
-                RichText::new(format!("● 正被 {peer} 使用")).color(Color32::from_rgb(90, 200, 120)),
-            ),
-            None => ui.label(RichText::new("等待挂载（Linux 用 sudo 执行上面的命令）").weak()),
-        };
+            Some(peer) => {
+                ui.horizontal(|ui| {
+                    theme::tag(ui, "IN USE", true);
+                    ui.label(format!("正被 {peer} 使用"));
+                });
+            }
+            None => {
+                ui.label(RichText::new("等待挂载（Linux 用 sudo 执行上面的命令）").weak());
+            }
+        }
     }
 
     /// 内核型号、运行状态和停住、继续、复位按钮。
     fn ui_core(&mut self, ui: &mut egui::Ui) {
-        let (text, color) = match &self.core {
-            None => ("读取中".to_string(), ui.visuals().weak_text_color()),
-            Some(Err(e)) => (format!("读不到状态：{e}"), ui.visuals().error_fg_color),
-            Some(Ok(s)) => {
-                let c = match s.state {
-                    CoreState::Running | CoreState::Sleeping => Color32::from_rgb(90, 200, 120),
-                    CoreState::Halted => ui.visuals().warn_fg_color,
-                    CoreState::Lockup => ui.visuals().error_fg_color,
-                };
-                (s.state.text().to_string(), c)
+        ui.label(format!("内核：{}", self.core_info));
+        match &self.core {
+            None => {
+                ui.label(RichText::new("读取中").weak());
             }
-        };
-        ui.horizontal(|ui| {
-            ui.label(format!("内核：{}", self.core_info));
-            ui.label(RichText::new(format!("● {text}")).color(color));
-        });
+            Some(Err(e)) => theme::fail(ui, format!("读不到状态：{e}")),
+            // 锁死是一个结论，用状态色；其余状态用墨色记号，停住时反相强调
+            Some(Ok(s)) if s.state == CoreState::Lockup => theme::fail(ui, s.state.text()),
+            Some(Ok(s)) => {
+                theme::tag(ui, s.state.text(), s.state == CoreState::Halted);
+            }
+        }
         let halted = matches!(&self.core, Some(Ok(s)) if s.state == CoreState::Halted);
         let mut cmd = None;
         ui.add_enabled_ui(!self.core_busy, |ui| {
             ui.horizontal(|ui| {
                 if halted {
-                    if ui.button("▶ 继续").clicked() {
+                    if ui.button("继续").clicked() {
                         cmd = Some(CoreCmd::Resume);
                     }
-                } else if ui.button("⏸ 停住").clicked() {
+                } else if ui.button("停住").clicked() {
                     cmd = Some(CoreCmd::Halt);
                 }
-                if ui
-                    .button("↻ 复位")
-                    .on_hover_text("系统复位后运行")
-                    .clicked()
-                {
+                if ui.button("复位").on_hover_text("系统复位后运行").clicked() {
                     cmd = Some(CoreCmd::Reset(AfterReset::Run));
                 }
                 if ui

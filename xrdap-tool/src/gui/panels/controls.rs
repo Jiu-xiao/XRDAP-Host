@@ -5,6 +5,7 @@ use xrdap::cortex::CoreState;
 
 use crate::gui::app::App;
 use crate::gui::model::Csv;
+use crate::gui::theme;
 use crate::gui::widgets::unix_us_now;
 use crate::gui::worker::Cmd;
 
@@ -77,7 +78,23 @@ impl App {
         }
     }
 
+    /// 现在不能开始采样的原因（按钮保持可点，点了说明原因）。
+    fn why_not_start(&self) -> &'static str {
+        if !self.connected {
+            "还没有连接探针"
+        } else if self.share.is_some() {
+            "探针正在共享给别的调试工具，先停止共享"
+        } else if self.elf_loading.is_some() {
+            "ELF 还在读取"
+        } else if self.watches.is_empty() {
+            "监视表是空的，先添加变量"
+        } else {
+            "正在开始采样"
+        }
+    }
+
     pub(crate) fn ui_controls(&mut self, ui: &mut egui::Ui) {
+        theme::path_label(ui, "XRDAP / WATCH");
         let mut start = false;
         let mut read = false;
         let mut csv_on = false;
@@ -91,7 +108,7 @@ impl App {
             )
             .on_hover_text("例如 1000（µs）、500us、2ms");
             if self.sampling {
-                if ui.button("■ 停止").clicked() {
+                if ui.button("停止采样").clicked() {
                     self.send(Cmd::Stop);
                 }
             } else {
@@ -100,9 +117,16 @@ impl App {
                     && !self.starting
                     && !self.watches.is_empty()
                     && self.elf_loading.is_none();
-                start = ui
-                    .add_enabled(can, egui::Button::new("▶ 开始采样"))
-                    .clicked();
+                // 连上探针以后，“开始采样”是窗口里唯一的主按钮；还不能开始时点了说明原因
+                start = if self.usable() {
+                    theme::primary_button(ui, "开始采样").clicked()
+                } else {
+                    ui.button("开始采样").clicked()
+                };
+                if start && !can {
+                    start = false;
+                    self.log(self.why_not_start().into());
+                }
             }
             if self.starting {
                 ui.add(egui::Spinner::new());
@@ -160,7 +184,6 @@ impl App {
         }
         if self.sampling {
             let s = self.stats;
-            let warn = s.dropped > 0 || s.skipped > 0 || s.missing > 0 || s.failed_values > 0;
             let text = format!(
                 "{:.0} 帧/s，共 {} 帧，缓冲 {}/{} 字节；探针丢帧 {}，跳拍 {}，缺帧 {}，失败值 {}",
                 self.rate,
@@ -172,21 +195,15 @@ impl App {
                 s.missing,
                 s.failed_values
             );
-            let text = if warn {
-                RichText::new(text).color(ui.visuals().warn_fg_color)
-            } else {
-                RichText::new(text)
-            };
-            ui.label(text);
-            // 跟不上时的建议（协议文档 3.5 节）
+            ui.label(RichText::new(text).weak());
+            // 跟不上是一个结论（协议文档 3.5 节），和建议一起出现
             if let Some(lag) = s.lag() {
-                ui.label(RichText::new(lag.advice()).color(ui.visuals().warn_fg_color));
+                theme::fail(ui, lag.advice());
             }
             if let Some(Ok(c)) = &self.core {
                 if matches!(c.state, CoreState::Halted | CoreState::Lockup) {
                     ui.label(
-                        RichText::new(format!("目标内核{}，变量不会变化", c.state.text()))
-                            .color(ui.visuals().warn_fg_color),
+                        RichText::new(format!("目标内核{}，变量不会变化", c.state.text())).strong(),
                     );
                 }
             }

@@ -7,6 +7,7 @@ mod model;
 mod panels;
 mod plot;
 mod series;
+mod theme;
 mod widgets;
 mod worker;
 
