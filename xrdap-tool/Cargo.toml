@@ -12,6 +12,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "xrdap"
 path = "src/main.rs"
+# 和库 xrdap 的文档同名；程序本身不需要 rustdoc
+doc = false
 
 [dependencies]
 xrdap = { path = "../xrdap" }
