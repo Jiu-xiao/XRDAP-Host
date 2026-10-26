@@ -20,6 +20,15 @@ fn derr(e: gimli::Error) -> Error {
     Error::usage(format!("解析 DWARF 失败：{e}"))
 }
 
+/// 数组一维的元素个数：上界减下界加一；结果是负数或超出 u64 时不知道（损坏的 DWARF 不能让
+/// 解析溢出）。
+///
+/// Element count of one array dimension: upper bound minus lower bound plus one; unknown when
+/// the result is negative or does not fit in u64 (broken DWARF must not overflow the parser).
+fn subrange_len(lb: i64, ub: i64) -> Option<u64> {
+    u64::try_from(i128::from(ub) - i128::from(lb) + 1).ok()
+}
+
 /// 读 ELF 文件。
 ///
 /// Read an ELF file.
@@ -366,10 +375,7 @@ impl<'a, 'd> Loader<'a, 'd> {
                     }
                     let n = match (s.count, s.upper_bound) {
                         (Some(n), _) => Some(n),
-                        (None, Some(ub)) => {
-                            let lb = s.lower_bound.unwrap_or(0);
-                            (ub >= lb - 1).then(|| (ub - lb + 1) as u64)
-                        }
+                        (None, Some(ub)) => subrange_len(s.lower_bound.unwrap_or(0), ub),
                         _ => None,
                     };
                     dims.push(n);
@@ -479,5 +485,22 @@ impl<'a, 'd> Loader<'a, 'd> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subrange_lengths() {
+        assert_eq!(subrange_len(0, 3), Some(4));
+        assert_eq!(subrange_len(1, 0), Some(0));
+        assert_eq!(subrange_len(0, -1), Some(0));
+        assert_eq!(subrange_len(5, 3), None);
+        // 损坏的 DWARF：极端的上下界不能让解析溢出
+        assert_eq!(subrange_len(i64::MIN, 0), Some((1 << 63) + 1));
+        assert_eq!(subrange_len(i64::MIN, i64::MAX), None);
+        assert_eq!(subrange_len(0, i64::MAX), Some(1 << 63));
     }
 }
