@@ -130,9 +130,9 @@ The TCP backend is only in OpenOCD master, see "OpenOCD version".
 
 ```
 xrdap wifi status
-xrdap wifi set -p COM3 lab 12345678
-xrdap wifi set -p COM3 lab
-xrdap wifi set -p COM3 lab --password-stdin < password.txt
+xrdap wifi set -p COM3 SSID PASSWORD
+xrdap wifi set -p COM3 SSID
+xrdap wifi set -p COM3 SSID --password-stdin < password.txt
 xrdap wifi clear -p COM3
 ```
 

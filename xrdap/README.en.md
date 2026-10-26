@@ -119,7 +119,7 @@ println!("{}", cortex::status(probe)?.state.text());
 
 let wifi = probe.wifi_status()?;
 println!("{}\n{}", wifi.describe(), wifi.history());
-probe.wifi_set("lab", "12345678")?; // the probe restarts afterwards
+probe.wifi_set("SSID", "PASSWORD")?; // the probe restarts afterwards
 ```
 
 `cortex::reset` changes DEMCR.VC_CORERESET for the reset only and restores DEMCR at the end, on success or failure. `wifi_status` also reports what last cleared the credentials, the reset reason of this boot and whether NVS was rebuilt; `wifi_clear` sends the clear request with its confirm byte, `86 02 A5`. Full example: `wifi`.
