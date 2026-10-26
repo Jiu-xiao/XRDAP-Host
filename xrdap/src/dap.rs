@@ -71,7 +71,9 @@ pub fn parse_clock(s: &str) -> Result<u32> {
     let v: f64 = num
         .trim()
         .parse()
-        .map_err(|_| Error::usage(format!("时钟 {s} 写得不对，例如 4M、500k")))?;
+        .ok()
+        .filter(|v: &f64| v.is_finite())
+        .ok_or_else(|| Error::usage(format!("时钟 {s} 写得不对，例如 4M、500k")))?;
     let hz = (v * scale).round();
     if !(1.0..=100e6).contains(&hz) {
         return Err(Error::usage(format!(
@@ -700,5 +702,10 @@ mod tests {
         assert_eq!(parse_clock(" 1000000 ").unwrap(), 1_000_000);
         assert!(parse_clock("fast").is_err());
         assert!(parse_clock("200M").is_err());
+        // inf、nan 是写法不对，不是超出范围
+        for bad in ["inf", "infM", "NaN"] {
+            let e = parse_clock(bad).unwrap_err().to_string();
+            assert!(e.contains("写得不对"), "{bad}: {e}");
+        }
     }
 }
