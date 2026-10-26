@@ -119,7 +119,7 @@ println!("{}", cortex::status(probe)?.state.text());
 
 let wifi = probe.wifi_status()?;
 println!("{}\n{}", wifi.describe(), wifi.history());
-probe.wifi_set("lab", "12345678")?; // 探针随后重启
+probe.wifi_set("热点名", "密码")?; // 探针随后重启
 ```
 
 `cortex::reset` 在复位期间临时修改 DEMCR.VC_CORERESET，结束时（成功或失败）恢复原值。`wifi_status` 还报告最近一次清除热点参数的来源、本次启动的复位原因和 NVS 是否重建过；`wifi_clear` 发送带确认字节的清除请求 `86 02 A5`。完整示例：`wifi`。

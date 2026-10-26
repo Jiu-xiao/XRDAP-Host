@@ -130,9 +130,9 @@ TCP 后端只在 OpenOCD 的 master 中，见“OpenOCD 版本”。
 
 ```
 xrdap wifi status
-xrdap wifi set -p COM3 lab 12345678
-xrdap wifi set -p COM3 lab
-xrdap wifi set -p COM3 lab --password-stdin < password.txt
+xrdap wifi set -p COM3 热点名 密码
+xrdap wifi set -p COM3 热点名
+xrdap wifi set -p COM3 热点名 --password-stdin < password.txt
 xrdap wifi clear -p COM3
 ```
 
