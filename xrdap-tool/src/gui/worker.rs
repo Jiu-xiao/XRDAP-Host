@@ -528,6 +528,19 @@ mod tests {
         worker.join().unwrap();
     }
 
+    /// 共享期间断开：先停掉共享，再照常断开（命令落到后面的处理里，不会丢）。
+    #[test]
+    fn disconnect_while_sharing_stops_share_then_disconnects() {
+        let (cmd_tx, ev_rx, worker) = start();
+        cmd_tx.send(Cmd::Share(true)).unwrap();
+        next(&ev_rx, |e| matches!(e, Event::Sharing { .. }));
+        cmd_tx.send(Cmd::Disconnect).unwrap();
+        next(&ev_rx, |e| matches!(e, Event::ShareStopped));
+        next(&ev_rx, |e| matches!(e, Event::Disconnected));
+        drop(cmd_tx);
+        worker.join().unwrap();
+    }
+
     /// 失败事件标明是哪一类操作：Wi-Fi 保存失败只结束 Wi-Fi 的操作，连接还在。
     #[test]
     fn failed_wifi_set_is_reported_as_wifi_and_keeps_connection() {
