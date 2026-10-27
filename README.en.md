@@ -89,7 +89,7 @@ Variable syntax: `counter`, `state.speed`, `motor[1].pid->out`, `*ptr`, `p->q->x
 |---|---|
 | ESP32-S3 on USB | The probe is a USB CMSIS-DAP probe; use it directly |
 | Probe on a serial port (ESP32-C3, classic ESP32 and others) | `xrdap share usbip`, then attach over USB/IP, see below |
-| Wi-Fi | OpenOCD connects to the probe's own IP (`cmsis-dap tcp host <probe IP>`, port 3241) without `xrdap share`; Keil, pyOCD and others use `xrdap -p <probe IP or host name> share usbip` to make it a USB probe and attach that. The probe carries no USB device model and no longer serves USB/IP itself, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
+| Wi-Fi | OpenOCD connects to the probe's own IP (`cmsis-dap tcp host <probe IP>`, port 3241) without `xrdap share`; Keil, pyOCD and others use `xrdap share usbip -p <probe IP or host name>` to make it a USB probe and attach that. The probe carries no USB device model and no longer serves USB/IP itself, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
 
 Share a probe on a serial port as a USB probe:
 
