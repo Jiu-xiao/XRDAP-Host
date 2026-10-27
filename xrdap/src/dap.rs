@@ -146,6 +146,10 @@ pub struct Identity {
 ///
 /// DAP_TransferAbort: the CMSIS-DAP specification defines no response for it.
 pub(crate) const CMD_TRANSFER_ABORT: u8 = 0x07;
+/// DAP_Disconnect。
+///
+/// DAP_Disconnect.
+pub(crate) const CMD_DISCONNECT: u8 = 0x03;
 /// 探针不认识的命令回一个字节 `0xFF`（CMSIS-DAP 的 DAP_Invalid）。
 ///
 /// A probe answers a command it does not know with the single byte `0xFF` (DAP_Invalid).
@@ -173,6 +177,8 @@ pub struct Probe {
     timeout: Duration,
     /// 上一个请求超时了，链路上可能还有它迟到的响应
     stale: bool,
+    /// 这条连接做过 DAP_Connect，还没有 DAP_Disconnect：探针把它当会话主人
+    session: bool,
 }
 
 impl Probe {
@@ -185,7 +191,36 @@ impl Probe {
             packet_size: 64,
             timeout,
             stale: false,
+            session: false,
         }
+    }
+
+    /// 结束这条连接在探针上的会话（DAP_Disconnect），让别的传输可以接着用探针。
+    /// 只有这条连接做过 [`Probe::connect`] 才会发；出错（探针已断开、已重启）被忽略。
+    /// 连接被丢弃时会自动调用。
+    ///
+    /// End this connection's session on the probe (DAP_Disconnect) so another transport can use
+    /// the probe. Sent only if this connection ran [`Probe::connect`]; errors (the probe is gone
+    /// or restarted) are ignored. Called automatically when the connection is dropped.
+    pub fn disconnect(&mut self) {
+        if std::mem::take(&mut self.session) {
+            self.end_session();
+        }
+    }
+
+    /// 不论这条连接有没有连接过，都发 DAP_Disconnect。共享给别的工具时，客户端自己连接的
+    /// 会话在客户端离开后要结束。
+    ///
+    /// Send DAP_Disconnect whether or not this connection connected. When sharing the probe, the
+    /// session a client opened must end when the client leaves.
+    pub(crate) fn end_session(&mut self) {
+        /// 离开时不值得等久：探针可能已经没了
+        const LEAVE_TIMEOUT: Duration = Duration::from_millis(300);
+        let normal = self.timeout;
+        self.timeout = normal.min(LEAVE_TIMEOUT);
+        let _ = self.xfer(&[CMD_DISCONNECT]);
+        self.timeout = normal;
+        self.session = false;
     }
 
     /// 连接描述，例如 `USB XRobot-XRDAP-xxxx`。
@@ -438,6 +473,7 @@ impl Probe {
                 vendor::hex(&resp)
             )));
         }
+        self.session = true;
         let mut req = vec![0x11];
         req.extend_from_slice(&clock_hz.to_le_bytes());
         self.expect_ok(&req, "DAP_SWJ_Clock")?;
@@ -652,6 +688,12 @@ fn item_error(item: &Item, status: u8) -> Error {
     }
 }
 
+impl Drop for Probe {
+    fn drop(&mut self) {
+        self.disconnect();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -692,6 +734,52 @@ mod tests {
         link.delay_next(Late::NextSend);
         assert!(matches!(p.xfer(&[0x00, 0xFF]), Err(Error::Timeout(_))));
         assert_eq!(p.xfer(&[0x80]).unwrap(), vec![0x80, 1, 1]);
+    }
+
+    /// 连接过目标的连接被丢弃时发 DAP_Disconnect，探针的会话主人才会放手（协议文档 3.1 节）。
+    #[test]
+    fn dropping_a_connected_probe_sends_disconnect() {
+        let link = Script::default();
+        {
+            let mut p = probe(&link);
+            p.session = true; // connect_swd 成功之后的状态
+        }
+        assert_eq!(link.sent(), vec![vec![CMD_DISCONNECT]]);
+    }
+
+    /// 没有连接过的连接（例如只查 DAP_Info）不发 DAP_Disconnect：它不是会话主人。
+    #[test]
+    fn dropping_an_unconnected_probe_sends_nothing() {
+        let link = Script::default();
+        {
+            let mut p = probe(&link);
+            p.dap_info(ID_PACKET_SIZE).unwrap();
+        }
+        assert_eq!(link.sent(), vec![vec![0x00, ID_PACKET_SIZE]]);
+    }
+
+    /// 显式 disconnect 之后再丢弃，只发一次。
+    #[test]
+    fn disconnect_is_sent_once() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        p.session = true;
+        p.disconnect();
+        p.disconnect();
+        drop(p);
+        assert_eq!(link.sent(), vec![vec![CMD_DISCONNECT]]);
+    }
+
+    /// 探针已经没了（没有应答）时离开不卡住，也不报错。
+    #[test]
+    fn disconnect_without_answer_returns_quickly() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        p.session = true;
+        link.delay_next(Late::NextRecv);
+        let t0 = Instant::now();
+        p.disconnect();
+        assert!(t0.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
