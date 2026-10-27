@@ -89,7 +89,7 @@ xrdap watch -p COM3 --elf app.elf motor.speed@5:2 --period 500us --no-overwrite 
 |---|---|
 | ESP32-S3 插 USB | 探针本身就是 USB CMSIS-DAP 探针，直接使用 |
 | 经串口连接的探针（ESP32-C3、传统 ESP32 等） | `xrdap share usbip` 后用 USB/IP 挂载，见下 |
-| Wi-Fi | 探针自己提供 USB/IP，直接挂载，见 [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP#23-走-wi-fi用-keilpyocdprobe-rsopenocd) |
+| Wi-Fi | 不用 `xrdap share`。OpenOCD 直接连探针的 IP（`cmsis-dap tcp host <探针 IP>`，端口 3241）；Keil、pyOCD 等用探针自己的 USB/IP 挂载，见 [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP#23-走-wi-fi用-keilpyocdprobe-rsopenocd) |
 
 把串口上的探针共享为 USB 探针：
 
@@ -118,7 +118,7 @@ xrdap share openocd -p COM3
 xrdap share openocd -p COM3 --listen 0.0.0.0:3241
 ```
 
-`xrdap` 在 127.0.0.1:3241（或 `--listen` 指定的地址）提供 OpenOCD 的 CMSIS-DAP TCP 后端，并打印 OpenOCD 使用的配置：
+`xrdap` 在 127.0.0.1:3241（或 `--listen` 指定的地址）提供 OpenOCD 的 CMSIS-DAP TCP 后端，并打印 OpenOCD 使用的配置。这个命令只给串口连接的探针用；Wi-Fi 探针自己就监听 3241，OpenOCD 直接连探针的 IP，不需要 `share`。打印出来的 127.0.0.1 是本机共享地址，不是探针的地址：
 
 ```
 openocd -c "adapter driver cmsis-dap; cmsis-dap backend tcp; cmsis-dap tcp host 127.0.0.1; cmsis-dap tcp port 3241; transport select swd" -f target/stm32f4x.cfg
@@ -136,7 +136,7 @@ xrdap wifi set -p COM3 热点名 --password-stdin < password.txt
 xrdap wifi clear -p COM3
 ```
 
-`status` 显示保存的热点、是否连上、IP 和信号强度，以及最近一次清除热点参数的来源（板上按键、串口命令行、0x86 清除命令或 NVS 修复）、本次启动的复位原因和 NVS 是否在本次启动时重建过。`set` 保存热点名和密码（开放网络省略密码），`clear` 清除热点参数（请求带确认字节）。`--password-stdin` 从标准输入读一行作为密码，密码不出现在 shell 历史和进程列表中；经 TCP（Wi-Fi）连接探针时，密码以明文经过局域网。`set` 和 `clear` 之后探针约 0.5 秒后重启，连接随之断开。配置完成后 `xrdap list` 列出探针的局域网地址（`xrdap-xxxxxx.local`），之后可以用 `-p xrdap-xxxxxx.local` 无线连接。
+探针是连接已有的热点（Wi-Fi 客户端），不会自己开热点。`status` 显示保存的热点、是否连上、IP 和信号强度，以及最近一次清除热点参数的来源（板上按键、串口命令行、0x86 清除命令或 NVS 修复）、本次启动的复位原因和 NVS 是否在本次启动时重建过。`set` 保存热点名和密码（开放网络省略密码），`clear` 清除热点参数（请求带确认字节）。`--password-stdin` 从标准输入读一行作为密码，密码不出现在 shell 历史和进程列表中；经 TCP（Wi-Fi）连接探针时，密码以明文经过局域网。`set` 和 `clear` 之后探针约 0.5 秒后重启，连接随之断开。配置完成后 `xrdap list` 列出探针的局域网地址（`xrdap-xxxxxx.local`），之后可以用 `-p xrdap-xxxxxx.local` 无线连接。
 
 图形界面中连上探针后展开连接区最下方的“Wi-Fi”，显示当前状态，填写热点名和密码后点“保存并重启”，或点“清除”。
 
