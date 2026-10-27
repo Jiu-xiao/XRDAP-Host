@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use clap::Parser;
-use xrdap_tool::cli::{self, Cli, Cmd};
+use xrdap_tool::cli::{self, Cli};
 
 fn main() {
     let cli = Cli::parse();
@@ -17,13 +17,13 @@ fn main() {
         return;
     }
 
-    // watch 和 share 的第一次 Ctrl-C 让它们正常结束（停止采样、断开客户端）；第二次直接退出。
-    // 其他命令直接退出。
+    // 第一次 Ctrl-C 让命令正常结束：watch 和 share 停止采样、断开客户端，其他命令跑完手上
+    // 的请求（都有超时），所有命令的探针连接被丢弃时发 DAP_Disconnect，探针的会话主人才
+    // 会放手；第二次直接退出。
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
-    let graceful = matches!(cli.cmd, Some(Cmd::Watch { .. } | Cmd::Share { .. }));
     let _ = ctrlc::set_handler(move || {
-        if !graceful || flag.swap(true, Ordering::SeqCst) {
+        if flag.swap(true, Ordering::SeqCst) {
             std::process::exit(130);
         }
     });

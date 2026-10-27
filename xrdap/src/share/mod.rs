@@ -261,6 +261,8 @@ fn run(
         };
         // 客户端开过采样的话替它停掉，否则探针会一直占着 SWD
         let _ = crate::watch::stop(&mut probe);
+        // 客户端自己连接的会话也结束，别的传输才能接着用探针
+        probe.end_session();
         notify(Event::Idle(
             result
                 .err()
@@ -337,6 +339,22 @@ mod tests {
         };
         assert!(e.to_string().contains("共享线程"), "{e}");
         assert!(probe.identity().is_ok());
+    }
+
+    /// 客户端离开后探针收到 DAP_Disconnect：客户端自己连接的会话结束，别的传输才能接着用探针。
+    #[test]
+    fn client_leaving_ends_the_probe_session() {
+        let link = Script::default();
+        let (share, events) = share(&link);
+        let mut c = client(&share);
+        c.write_all(&tcp_frame(&[0x00, 0xFF], TCP_TYPE_REQUEST))
+            .unwrap();
+        let _ = read_frame(&mut c);
+        drop(c);
+        // Event::Idle 在会话结束之后发出
+        assert!(events.iter().any(|e| matches!(e, Event::Idle(_))));
+        assert_eq!(link.sent().last(), Some(&vec![0x03]));
+        share.stop();
     }
 
     /// 探针不应答时断开这个客户端，并报告原因；不回假的 0xFF。
