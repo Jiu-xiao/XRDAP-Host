@@ -89,7 +89,7 @@ xrdap watch -p COM3 --elf app.elf motor.speed@5:2 --period 500us --no-overwrite 
 |---|---|
 | ESP32-S3 插 USB | 探针本身就是 USB CMSIS-DAP 探针，直接使用 |
 | 经串口连接的探针（ESP32-C3、传统 ESP32 等） | `xrdap share usbip` 后用 USB/IP 挂载，见下 |
-| Wi-Fi | 不用 `xrdap share`。OpenOCD 直接连探针的 IP（`cmsis-dap tcp host <探针 IP>`，端口 3241）；Keil、pyOCD 等用探针自己的 USB/IP 挂载，见 [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP#23-走-wi-fi用-keilpyocdprobe-rsopenocd) |
+| Wi-Fi | OpenOCD 直接连探针的 IP（`cmsis-dap tcp host <探针 IP>`，端口 3241），不用 `xrdap share`；Keil、pyOCD 等用 `xrdap -p <探针 IP 或主机名> share usbip` 变成 USB 探针后再挂载。探针本身不带 USB 设备模型，不再自己提供 USB/IP，见 [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP#23-走-wi-fi用-keilpyocdprobe-rsopenocd) |
 
 把串口上的探针共享为 USB 探针：
 
@@ -118,7 +118,7 @@ xrdap share openocd -p COM3
 xrdap share openocd -p COM3 --listen 0.0.0.0:3241
 ```
 
-`xrdap` 在 127.0.0.1:3241（或 `--listen` 指定的地址）提供 OpenOCD 的 CMSIS-DAP TCP 后端，并打印 OpenOCD 使用的配置。这个命令只给串口连接的探针用；Wi-Fi 探针自己就监听 3241，OpenOCD 直接连探针的 IP，不需要 `share`。打印出来的 127.0.0.1 是本机共享地址，不是探针的地址：
+`xrdap` 在 127.0.0.1:3241（或 `--listen` 指定的地址）提供 OpenOCD 的 CMSIS-DAP TCP 后端，并打印 OpenOCD 使用的配置。这个命令主要给串口连接的探针用；Wi-Fi 探针自己就监听 3241，OpenOCD 直接连探针的 IP，不需要 `share`。打印出来的 127.0.0.1 是本机共享地址，不是探针的地址：
 
 ```
 openocd -c "adapter driver cmsis-dap; cmsis-dap backend tcp; cmsis-dap tcp host 127.0.0.1; cmsis-dap tcp port 3241; transport select swd" -f target/stm32f4x.cfg
