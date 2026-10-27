@@ -89,7 +89,7 @@ Variable syntax: `counter`, `state.speed`, `motor[1].pid->out`, `*ptr`, `p->q->x
 |---|---|
 | ESP32-S3 on USB | The probe is a USB CMSIS-DAP probe; use it directly |
 | Probe on a serial port (ESP32-C3, classic ESP32 and others) | `xrdap share usbip`, then attach over USB/IP, see below |
-| Wi-Fi | No `xrdap share` needed. OpenOCD connects to the probe's own IP (`cmsis-dap tcp host <probe IP>`, port 3241); Keil, pyOCD and others attach the probe's own USB/IP, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
+| Wi-Fi | OpenOCD connects to the probe's own IP (`cmsis-dap tcp host <probe IP>`, port 3241) without `xrdap share`; Keil, pyOCD and others use `xrdap -p <probe IP or host name> share usbip` to make it a USB probe and attach that. The probe carries no USB device model and no longer serves USB/IP itself, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
 
 Share a probe on a serial port as a USB probe:
 
@@ -118,7 +118,7 @@ xrdap share openocd -p COM3
 xrdap share openocd -p COM3 --listen 0.0.0.0:3241
 ```
 
-`xrdap` serves OpenOCD's CMSIS-DAP TCP backend on 127.0.0.1:3241 (or the `--listen` address) and prints the OpenOCD configuration. This command is for probes on a serial link; a Wi-Fi probe listens on 3241 itself, and OpenOCD connects straight to the probe's IP without `share`. The 127.0.0.1 in the printed line is the local sharing address, not the probe's:
+`xrdap` serves OpenOCD's CMSIS-DAP TCP backend on 127.0.0.1:3241 (or the `--listen` address) and prints the OpenOCD configuration. This command is mainly for probes on a serial link; a Wi-Fi probe listens on 3241 itself, and OpenOCD connects straight to the probe's IP without `share`. The 127.0.0.1 in the printed line is the local sharing address, not the probe's:
 
 ```
 openocd -c "adapter driver cmsis-dap; cmsis-dap backend tcp; cmsis-dap tcp host 127.0.0.1; cmsis-dap tcp port 3241; transport select swd" -f target/stm32f4x.cfg
