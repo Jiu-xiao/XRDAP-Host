@@ -89,7 +89,7 @@ xrdap watch -p COM3 --elf app.elf motor.speed@5:2 --period 500us --no-overwrite 
 |---|---|
 | ESP32-S3 插 USB | 探针本身就是 USB CMSIS-DAP 探针，直接使用 |
 | 经串口连接的探针（ESP32-C3、传统 ESP32 等） | `xrdap share usbip` 后用 USB/IP 挂载，见下 |
-| Wi-Fi | OpenOCD 直接连探针的 IP（`cmsis-dap tcp host <探针 IP>`，端口 3241），不用 `xrdap share`；Keil、pyOCD 等用 `xrdap -p <探针 IP 或主机名> share usbip` 变成 USB 探针后再挂载。探针本身不带 USB 设备模型，不再自己提供 USB/IP，见 [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP#23-走-wi-fi用-keilpyocdprobe-rsopenocd) |
+| Wi-Fi | OpenOCD 直接连探针的 IP（`cmsis-dap tcp host <探针 IP>`，端口 3241），不用 `xrdap share`；Keil、pyOCD 等用 `xrdap share usbip -p <探针 IP 或主机名>` 变成 USB 探针后再挂载。探针本身不带 USB 设备模型，不再自己提供 USB/IP，见 [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP#23-走-wi-fi用-keilpyocdprobe-rsopenocd) |
 
 把串口上的探针共享为 USB 探针：
 
