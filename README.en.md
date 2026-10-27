@@ -89,7 +89,7 @@ Variable syntax: `counter`, `state.speed`, `motor[1].pid->out`, `*ptr`, `p->q->x
 |---|---|
 | ESP32-S3 on USB | The probe is a USB CMSIS-DAP probe; use it directly |
 | Probe on a serial port (ESP32-C3, classic ESP32 and others) | `xrdap share usbip`, then attach over USB/IP, see below |
-| Wi-Fi | The probe serves USB/IP itself; attach directly, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
+| Wi-Fi | No `xrdap share` needed. OpenOCD connects to the probe's own IP (`cmsis-dap tcp host <probe IP>`, port 3241); Keil, pyOCD and others attach the probe's own USB/IP, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
 
 Share a probe on a serial port as a USB probe:
 
@@ -118,7 +118,7 @@ xrdap share openocd -p COM3
 xrdap share openocd -p COM3 --listen 0.0.0.0:3241
 ```
 
-`xrdap` serves OpenOCD's CMSIS-DAP TCP backend on 127.0.0.1:3241 (or the `--listen` address) and prints the OpenOCD configuration:
+`xrdap` serves OpenOCD's CMSIS-DAP TCP backend on 127.0.0.1:3241 (or the `--listen` address) and prints the OpenOCD configuration. This command is for probes on a serial link; a Wi-Fi probe listens on 3241 itself, and OpenOCD connects straight to the probe's IP without `share`. The 127.0.0.1 in the printed line is the local sharing address, not the probe's:
 
 ```
 openocd -c "adapter driver cmsis-dap; cmsis-dap backend tcp; cmsis-dap tcp host 127.0.0.1; cmsis-dap tcp port 3241; transport select swd" -f target/stm32f4x.cfg
@@ -136,7 +136,7 @@ xrdap wifi set -p COM3 SSID --password-stdin < password.txt
 xrdap wifi clear -p COM3
 ```
 
-`status` shows the saved access point, whether it is connected, the IP address and the signal strength, plus what last cleared the credentials (board button, serial console, 0x86 clear or NVS repair), the reset reason of this boot and whether NVS was rebuilt at this boot. `set` saves the SSID and password (omit the password for an open network) and `clear` removes them (the request carries a confirm byte). `--password-stdin` reads one line from standard input as the password, keeping it out of the shell history and the process list; over TCP (Wi-Fi) the password crosses the LAN in plaintext. After `set` or `clear` the probe restarts in about 0.5 s and the connection is lost. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
+The probe joins an existing hotspot as a Wi-Fi client; it does not open one. `status` shows the saved access point, whether it is connected, the IP address and the signal strength, plus what last cleared the credentials (board button, serial console, 0x86 clear or NVS repair), the reset reason of this boot and whether NVS was rebuilt at this boot. `set` saves the SSID and password (omit the password for an open network) and `clear` removes them (the request carries a confirm byte). `--password-stdin` reads one line from standard input as the password, keeping it out of the shell history and the process list; over TCP (Wi-Fi) the password crosses the LAN in plaintext. After `set` or `clear` the probe restarts in about 0.5 s and the connection is lost. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
 
 In the GUI, after connecting, expand Wi-Fi at the bottom of the connection area: it shows the current state, and 保存并重启 (save and restart) or 清除 (clear) apply the SSID and password entered.
 
