@@ -40,4 +40,14 @@ pub trait Transport: Send {
     ///
     /// The DAP packet size reported by the probe (USB IN transfers depend on it).
     fn set_packet_size(&mut self, _size: usize) {}
+
+    /// 经控制口发一个请求（`op + 载荷`），返回应答（`op + 状态 + 载荷`）。不支持控制口的链路
+    /// 返回 `Ok(None)`，调用方改用 DAP 命令。
+    ///
+    /// Send a request (`op + payload`) through the control port and return the answer (`op +
+    /// status + payload`). A link without a control port returns `Ok(None)` and the caller
+    /// falls back to the DAP command.
+    fn control(&mut self, _request: &[u8]) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
 }
