@@ -7,6 +7,11 @@ use std::time::{Duration, Instant};
 use crate::bytes::le_u32;
 use crate::raw::transport::Transport;
 use crate::raw::vendor::wifi::{self, WifiStatus};
+
+/// INFO 功能位 5:探针有控制口。
+///
+/// INFO feature bit 5: the probe has a control port.
+const FEATURE_CONTROL: u32 = 1 << 5;
 use crate::raw::vendor::{self, Item, ItemResult, SubItem, SubRead, VendorInfo};
 use crate::{Error, Result};
 
@@ -245,11 +250,20 @@ impl Probe {
     /// same content; the control port's answer starts with the op, rewritten to 0x86 here so
     /// parsing is shared.
     fn wifi_xfer(&mut self, dap_request: &[u8]) -> Result<Vec<u8>> {
-        if let Some(mut answer) = self.t.control(&dap_request[1..])? {
-            if let Some(first) = answer.first_mut() {
-                *first = wifi::CMD_WIFI;
+        // 只有 INFO 报了控制口(功能位 5)的固件才试:旧固件收到控制帧可能关连接或不应答 /
+        // Only a firmware whose INFO reports the control port (feature bit 5) is tried: an older
+        // one may close the connection or stay silent on a control frame.
+        let has_control = self
+            .vendor_info()
+            .map(|info| info.features & FEATURE_CONTROL != 0)
+            .unwrap_or(false);
+        if has_control {
+            if let Some(mut answer) = self.t.control(&dap_request[1..])? {
+                if let Some(first) = answer.first_mut() {
+                    *first = wifi::CMD_WIFI;
+                }
+                return Ok(answer);
             }
-            return Ok(answer);
         }
         self.xfer(dap_request)
     }

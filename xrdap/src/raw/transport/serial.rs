@@ -17,7 +17,10 @@ use std::time::{Duration, Instant};
 use serialport::{ClearBuffer, FlowControl, SerialPort};
 
 use super::Transport;
-use crate::raw::frame::{dap_from_payload, serial_request_frame, FrameParser};
+use crate::raw::frame::{
+    crc32, dap_from_payload, serial_control_frame, serial_request_frame, FrameParser,
+    CTRL_RESP_TOPIC,
+};
 use crate::{Error, Result};
 
 /// 串口探针固件的波特率。
@@ -120,6 +123,42 @@ impl Transport for SerialTransport {
 
     fn describe(&self) -> String {
         format!("串口 {}", self.name)
+    }
+
+    // 控制口:ctrl_req 帧,等 ctrl_resp 帧。一次只有一个请求在途,所以用一个只认 ctrl_resp 的
+    // 解析器读到应答为止,其间的 DAP 帧被丢掉。
+    // The control port: a ctrl_req frame, then a ctrl_resp frame. One request is in flight, so
+    // a parser that accepts only ctrl_resp reads until the answer; any DAP frames in between
+    // are dropped.
+    fn control(&mut self, request: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.ready.clear();
+        self.port
+            .write_all(&serial_control_frame(request))
+            .and_then(|()| self.port.flush())
+            .map_err(|e| Error::Io(format!("串口写失败：{e}")))?;
+        let mut parser = FrameParser::new(crc32(CTRL_RESP_TOPIC));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut chunk = [0u8; 1024];
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(Error::Timeout("等待串口控制口应答超时".into()));
+            }
+            self.port
+                .set_timeout(left)
+                .map_err(|e| Error::Io(format!("设置串口超时失败：{e}")))?;
+            match self.port.read(&mut chunk) {
+                Ok(n) => {
+                    for payload in parser.feed(&chunk[..n]) {
+                        if let Some(answer) = dap_from_payload(&payload) {
+                            return Ok(Some(answer.to_vec()));
+                        }
+                    }
+                }
+                Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::Interrupted) => {}
+                Err(e) => return Err(Error::Io(format!("串口读失败：{e}"))),
+            }
+        }
     }
 }
 
