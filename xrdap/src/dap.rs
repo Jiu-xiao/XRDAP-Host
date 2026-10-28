@@ -237,6 +237,23 @@ impl Probe {
         self.packet_size
     }
 
+    /// Wi-Fi 请求：链路有控制口（USB，固件 0.6 起）就走控制口，否则（串口、TCP、旧固件）走 DAP 命令
+    /// 0x86。两条路的应答内容相同，只是控制口的应答以 op 开头，这里改回 0x86 让解析统一。
+    ///
+    /// A Wi-Fi request: through the control port when the link has one (USB, firmware 0.6 on),
+    /// otherwise (serial, TCP, older firmware) through DAP command 0x86. Both answers carry the
+    /// same content; the control port's answer starts with the op, rewritten to 0x86 here so
+    /// parsing is shared.
+    fn wifi_xfer(&mut self, dap_request: &[u8]) -> Result<Vec<u8>> {
+        if let Some(mut answer) = self.t.control(&dap_request[1..])? {
+            if let Some(first) = answer.first_mut() {
+                *first = wifi::CMD_WIFI;
+            }
+            return Ok(answer);
+        }
+        self.xfer(dap_request)
+    }
+
     /// 发一个原始 DAP 包，返回它的响应。没有响应的命令（DAP_TransferAbort）发出后立即
     /// 返回空包，不等待。
     ///
@@ -657,7 +674,7 @@ impl Probe {
     ///
     /// 0x86: query the Wi-Fi state.
     pub fn wifi_status(&mut self) -> Result<WifiStatus> {
-        wifi::parse_status(&self.xfer(&wifi::status_request())?)
+        wifi::parse_status(&self.wifi_xfer(&wifi::status_request())?)
     }
 
     /// 0x86：保存热点参数。成功后探针重启并连接新热点，这个连接随之断开。经 TCP 连接时密码以明文经过网络（DAP 链路不加密）。
@@ -666,14 +683,14 @@ impl Probe {
     /// and this connection is lost. Over TCP the password crosses the network in plaintext
     /// (the DAP link has no encryption).
     pub fn wifi_set(&mut self, ssid: &str, password: &str) -> Result<()> {
-        wifi::parse_reply(&self.xfer(&wifi::set_request(ssid, password)?)?)
+        wifi::parse_reply(&self.wifi_xfer(&wifi::set_request(ssid, password)?)?)
     }
 
     /// 0x86：清除热点参数。成功后探针重启，不再连接 Wi-Fi。
     ///
     /// 0x86: clear credentials. On success the probe restarts and no longer joins a Wi-Fi network.
     pub fn wifi_clear(&mut self) -> Result<()> {
-        wifi::parse_reply(&self.xfer(&wifi::clear_request())?)
+        wifi::parse_reply(&self.wifi_xfer(&wifi::clear_request())?)
     }
 }
 

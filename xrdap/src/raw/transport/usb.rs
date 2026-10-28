@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use nusb::descriptors::TransferType;
-use nusb::transfer::{Buffer, Bulk, Direction, In, Out};
+use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, Direction, In, Out, Recipient};
 use nusb::{DeviceInfo, Endpoint, Interface, MaybeFuture};
 
 use super::Transport;
@@ -88,6 +88,7 @@ pub struct UsbTransport {
     ep_in: Endpoint<Bulk, In>,
     in_len: usize,
     serial: String,
+    interface_number: u8,
 }
 
 impl UsbTransport {
@@ -187,6 +188,7 @@ impl UsbTransport {
             ep_in,
             in_len: 0,
             serial: serial_text,
+            interface_number: number,
         };
         t.set_packet_size(1024);
         Ok(t)
@@ -240,6 +242,49 @@ impl Transport for UsbTransport {
 
     /// IN 传输的请求长度要是端点最大包长的整数倍；取不小于 DAP 包长的最小倍数，
     /// 这样响应正好等于包长时传输也能结束。
+    // 控制口：EP0 厂商请求，发给 DAP 接口。SEND（0x01，OUT）送请求，RECV（0x02，IN）取应答；
+    // 应答没好时 RECV 返回 0 字节，稍后重试。固件没有控制口时请求被 STALL，返回 Ok(None)。
+    // The control port: EP0 vendor requests to the DAP interface. SEND (0x01, OUT) carries the
+    // request, RECV (0x02, IN) the answer; while it is not ready RECV returns 0 bytes and is
+    // retried. A firmware without a control port STALLs the request: Ok(None).
+    fn control(&mut self, request: &[u8]) -> Result<Option<Vec<u8>>> {
+        const TIMEOUT: Duration = Duration::from_millis(500);
+        let out = ControlOut {
+            control_type: ControlType::Vendor,
+            recipient: Recipient::Interface,
+            request: 0x01,
+            value: 0,
+            index: u16::from(self.interface_number),
+            data: request,
+        };
+        if self._interface.control_out(out, TIMEOUT).wait().is_err() {
+            return Ok(None);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let recv = ControlIn {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Interface,
+                request: 0x02,
+                value: 0,
+                index: u16::from(self.interface_number),
+                length: 96,
+            };
+            let answer = self
+                ._interface
+                .control_in(recv, TIMEOUT)
+                .wait()
+                .map_err(|e| usb_err("读控制口应答失败", e))?;
+            if !answer.is_empty() {
+                return Ok(Some(answer));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(Error::Timeout("控制口没有应答".into()));
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     fn set_packet_size(&mut self, size: usize) {
         let mps = self.ep_in.max_packet_size().max(1);
         self.in_len = size.max(1).div_ceil(mps) * mps;
