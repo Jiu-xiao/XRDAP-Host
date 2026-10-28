@@ -10,7 +10,8 @@ use std::time::{Duration, Instant};
 
 use super::Transport;
 use crate::raw::frame::{
-    parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
+    parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_CONTROL_REQUEST,
+    TCP_TYPE_CONTROL_RESPONSE, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
 };
 use crate::{Error, Result};
 
@@ -109,6 +110,42 @@ impl Transport for TcpTransport {
 
     fn describe(&self) -> String {
         format!("TCP {}", self.peer)
+    }
+
+    // 控制口:同一条连接上帧类型 3 的请求、类型 4 的应答。
+    // The control port: a type 3 request and a type 4 answer on the same connection.
+    fn control(&mut self, request: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.buf.clear();
+        self.stream
+            .write_all(&tcp_frame(request, TCP_TYPE_CONTROL_REQUEST))
+            .map_err(|e| Error::Io(format!("TCP 发送失败：{e}")))?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut chunk = [0u8; 2048];
+        loop {
+            if let Some(header) = self.buf.get(..TCP_HEADER_LEN) {
+                let header: &[u8; TCP_HEADER_LEN] = header.try_into().expect("长度已检查");
+                let len = parse_tcp_header(header, TCP_TYPE_CONTROL_RESPONSE).ok_or_else(|| {
+                    Error::protocol(format!("TCP 控制应答帧头无效：{header:02X?}"))
+                })?;
+                if self.buf.len() >= TCP_HEADER_LEN + len {
+                    let answer = self.buf[TCP_HEADER_LEN..TCP_HEADER_LEN + len].to_vec();
+                    self.buf.drain(..TCP_HEADER_LEN + len);
+                    return Ok(Some(answer));
+                }
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(Error::Timeout("等待 TCP 控制口应答超时".into()));
+            }
+            self.stream.set_read_timeout(Some(left))?;
+            match self.stream.read(&mut chunk) {
+                Ok(0) => return Err(Error::Io("TCP 连接被对方关闭".into())),
+                Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
+                Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {}
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) => return Err(Error::Io(format!("TCP 接收失败：{e}"))),
+            }
+        }
     }
 }
 

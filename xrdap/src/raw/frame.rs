@@ -23,6 +23,14 @@ pub const TCP_TYPE_REQUEST: u8 = 1;
 ///
 /// TCP frame type: response.
 pub const TCP_TYPE_RESPONSE: u8 = 2;
+/// TCP 帧类型:控制请求。
+///
+/// TCP frame type: control request.
+pub const TCP_TYPE_CONTROL_REQUEST: u8 = 3;
+/// TCP 帧类型:控制应答。
+///
+/// TCP frame type: control answer.
+pub const TCP_TYPE_CONTROL_RESPONSE: u8 = 4;
 
 /// 请求帧的 topic 名。
 ///
@@ -32,6 +40,14 @@ pub const REQ_TOPIC: &[u8] = b"dap_req";
 ///
 /// Topic name of response frames.
 pub const RESP_TOPIC: &[u8] = b"dap_resp";
+/// 控制请求的 topic 名(探针自己的设置,不是 DAP 命令)。
+///
+/// Name of the control request topic (the probe's own settings, not a DAP command).
+pub const CTRL_REQ_TOPIC: &[u8] = b"ctrl_req";
+/// 控制响应的 topic 名。
+///
+/// Name of the control response topic.
+pub const CTRL_RESP_TOPIC: &[u8] = b"ctrl_resp";
 
 /// Topic 帧的起始字节。
 ///
@@ -131,6 +147,18 @@ const PAD_EVERY: usize = 64;
 /// a multiple of 64.
 pub fn serial_request_frame(request: &[u8]) -> Vec<u8> {
     let mut frame = build_frame(crc32(REQ_TOPIC), &serial_payload(request), 0);
+    if frame.len().is_multiple_of(PAD_EVERY) {
+        frame.push(0x00);
+    }
+    frame
+}
+
+/// 一个完整的串口控制请求帧(topic `ctrl_req`),补字节的规则同 [`serial_request_frame`]。
+///
+/// A complete serial control request frame (topic `ctrl_req`), padded as
+/// [`serial_request_frame`] is.
+pub fn serial_control_frame(request: &[u8]) -> Vec<u8> {
+    let mut frame = build_frame(crc32(CTRL_REQ_TOPIC), &serial_payload(request), 0);
     if frame.len().is_multiple_of(PAD_EVERY) {
         frame.push(0x00);
     }
@@ -270,6 +298,8 @@ mod tests {
         assert_eq!(crc32(b"123456789"), 0x340B_C6D9);
         assert_eq!(crc32(REQ_TOPIC), 0xDC83_09C5);
         assert_eq!(crc32(RESP_TOPIC), 0x89E1_A688);
+        assert_eq!(crc32(CTRL_REQ_TOPIC), 0x3D25_38F2);
+        assert_eq!(crc32(CTRL_RESP_TOPIC), 0x31BD_A5B6);
     }
 
     #[test]
