@@ -43,6 +43,15 @@ pub const FLAG_NVS_REBUILT: u8 = 0x04;
 /// Confirm byte of the clear request (protocol section 3.7); the probe clears nothing without it.
 pub const CLEAR_CONFIRM: u8 = 0xA5;
 
+/// 控制口自己的状态:请求格式不对(0xF1)、没有这个操作(0xF2)。
+///
+/// The control port's own statuses: malformed request (0xF1), no such operation (0xF2).
+pub const CONTROL_BAD_REQUEST: u8 = 0xF1;
+/// 控制口自己的状态:没有这个操作。
+///
+/// The control port's own status: no such operation.
+pub const CONTROL_UNSUPPORTED: u8 = 0xF2;
+
 /// 0x86 的状态说明。
 ///
 /// Meaning of a 0x86 status.
@@ -51,6 +60,8 @@ pub fn status_text(status: u8) -> &'static str {
         STATUS_OK => "成功",
         STATUS_ARG => "参数非法（热点名或密码长度不对）",
         STATUS_RESOURCE => "探针保存设置失败",
+        CONTROL_BAD_REQUEST => "控制口请求格式不对",
+        CONTROL_UNSUPPORTED => "探针没有这个设置操作",
         _ => "未定义的状态",
     }
 }
