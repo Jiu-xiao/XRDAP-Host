@@ -324,6 +324,8 @@ pub struct Sampler<'a> {
     /// 最近一次 SUB_READ 时探针还在采样
     on_probe: bool,
     max_read: u16,
+    /// 探针支持紧凑帧，SUB_START 要了紧凑帧（协议文档 3.5 节）
+    compact: bool,
 }
 
 impl<'a> Sampler<'a> {
@@ -359,7 +361,10 @@ impl<'a> Sampler<'a> {
             })
             .collect();
         vendor::assign_phases(&mut items, &fixed);
-        probe.sub_start(period_us, u8::from(stop_on_full), &items)?;
+        // 探针支持紧凑帧就用：帧头从 11 字节降到通常 3 字节，同样的链路能读更多帧
+        let compact = info.features & vendor::FEATURE_COMPACT_FRAMES != 0;
+        let flags = u8::from(stop_on_full) | if compact { vendor::SUB_FLAG_COMPACT } else { 0 };
+        probe.sub_start(period_us, flags, &items)?;
         let max_read = (probe.packet_size().min(1024) - vendor::SUB_READ_HEADER) as u16;
         Ok(Sampler {
             probe,
@@ -374,6 +379,7 @@ impl<'a> Sampler<'a> {
             running: true,
             on_probe: true,
             max_read,
+            compact,
         })
     }
 
@@ -427,7 +433,7 @@ impl<'a> Sampler<'a> {
         self.stats.dropped = r.dropped;
         self.stats.skipped = r.skipped;
         self.stats.backlog = r.remaining;
-        let frames = vendor::decode_frames(&r.frames, &self.items, r.frame_count)?;
+        let frames = vendor::decode_frames(&r.frames, &self.items, r.frame_count, self.compact)?;
         let mut out = Vec::with_capacity(frames.len());
         for f in frames {
             let tick = self.unwrap_tick(f.tick);

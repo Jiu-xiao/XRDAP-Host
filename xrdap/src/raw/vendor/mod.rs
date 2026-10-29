@@ -94,6 +94,14 @@ pub const SUB_READ_HEADER: usize = 24;
 ///
 /// Frame header: 4 bytes of tick number plus 6 bytes of timestamp.
 pub const FRAME_HEADER: usize = 10;
+/// INFO 功能位 bit6：探针支持紧凑帧（协议文档 3.5 节）。
+///
+/// INFO feature bit 6: the probe supports compact frames (protocol section 3.5).
+pub const FEATURE_COMPACT_FRAMES: u32 = 1 << 6;
+/// SUB_START 的 flags bit1：SUB_READ 用紧凑帧。
+///
+/// SUB_START flags bit 1: SUB_READ uses compact frames.
+pub const SUB_FLAG_COMPACT: u8 = 0x02;
 
 /// 0x80 到 0x85 的整体状态的说明。
 ///
@@ -308,10 +316,11 @@ pub struct VendorInfo {
     ///
     /// Protocol version of the vendor extension.
     pub version: u8,
-    /// 功能位：bit0 READ，bit1 WRITE，bit2 采样，bit3 8 字节访问，bit4 Wi-Fi 配置。
+    /// 功能位：bit0 READ，bit1 WRITE，bit2 采样，bit3 8 字节访问，bit4 Wi-Fi 配置，bit5 控制口，
+    /// bit6 紧凑帧。
     ///
     /// Feature bits: bit0 READ, bit1 WRITE, bit2 sampling, bit3 8-byte access, bit4 Wi-Fi
-    /// configuration.
+    /// configuration, bit5 control port, bit6 compact frames.
     pub features: u32,
     /// 一个请求或订阅最多的条目数。
     ///
@@ -616,31 +625,78 @@ pub struct Frame {
     pub values: Vec<(usize, Option<Vec<u8>>)>,
 }
 
+/// 读一个无符号 LEB128（紧凑帧的变长字段）。
+///
+/// Read one unsigned LEB128 (a variable-length field of compact frames).
+fn varint(raw: &[u8], pos: &mut usize) -> Option<u64> {
+    let mut v = 0u64;
+    for shift in (0..64).step_by(7) {
+        let b = *raw.get(*pos)?;
+        *pos += 1;
+        v |= u64::from(b & 0x7F) << shift;
+        if b & 0x80 == 0 {
+            return Some(v);
+        }
+    }
+    None
+}
+
 /// 按 SUB_START 的条目表解码 SUB_READ 返回的帧。到期的条目由节拍序号和 div、phase 推算。
+/// compact 为 true 时按紧凑帧解码（SUB_START 带了 [`SUB_FLAG_COMPACT`]，协议文档 3.5 节）：
+/// 第 1 帧完整，之后每帧是相对上一帧的节拍差和时间差，有失败才带位图。
 ///
 /// Decode the frames returned by SUB_READ against the item table of SUB_START. The due items
-/// follow from the tick number and each item's div and phase.
-pub fn decode_frames(raw: &[u8], items: &[SubItem], count: u16) -> Result<Vec<Frame>> {
+/// follow from the tick number and each item's div and phase. With `compact` the frames are
+/// compact frames (SUB_START carried [`SUB_FLAG_COMPACT`], protocol section 3.5): the first
+/// frame whole, every later one as tick and time deltas to the previous frame, with a bitmap
+/// only when an item failed.
+pub fn decode_frames(
+    raw: &[u8],
+    items: &[SubItem],
+    count: u16,
+    compact: bool,
+) -> Result<Vec<Frame>> {
     let mut pos = 0;
-    let mut frames = Vec::with_capacity(count as usize);
+    let mut frames: Vec<Frame> = Vec::with_capacity(count as usize);
     for n in 0..count {
-        if raw.len() < pos + FRAME_HEADER {
-            return Err(Error::protocol(format!("第 {n} 帧不完整")));
-        }
-        let tick = le_u32(raw, pos);
-        let timestamp_us = le_u48(raw, pos + 4);
-        pos += FRAME_HEADER;
+        let short = || Error::protocol(format!("第 {n} 帧不完整"));
+        let (tick, timestamp_us, has_bitmap) = match frames.last() {
+            Some(prev) if compact => {
+                let h = varint(raw, &mut pos).ok_or_else(short)?;
+                let dt = varint(raw, &mut pos).ok_or_else(short)?;
+                (
+                    prev.tick.wrapping_add((h >> 1) as u32),
+                    (prev.timestamp_us + dt) & ((1 << 48) - 1),
+                    h & 1 != 0,
+                )
+            }
+            _ => {
+                if raw.len() < pos + FRAME_HEADER {
+                    return Err(short());
+                }
+                let header = (le_u32(raw, pos), le_u48(raw, pos + 4), true);
+                pos += FRAME_HEADER;
+                header
+            }
+        };
         let due: Vec<usize> = (0..items.len())
             .filter(|&i| items[i].due(tick as u64))
             .collect();
-        let bitmap_len = due.len().div_ceil(8);
+        let bitmap_len = if has_bitmap { due.len().div_ceil(8) } else { 0 };
         let values_len: usize = due.iter().map(|&i| items[i].item.size as usize).sum();
         if due.is_empty() || raw.len() < pos + bitmap_len + values_len {
             return Err(Error::protocol(format!(
                 "第 {n} 帧（k={tick}）长度与条目表对不上"
             )));
         }
-        let bitmap = &raw[pos..pos + bitmap_len];
+        // 紧凑帧没有位图时到期条目全部成功 / A compact frame without a bitmap had every due
+        // item succeed.
+        let none = vec![0u8; due.len().div_ceil(8)];
+        let bitmap = if has_bitmap {
+            &raw[pos..pos + bitmap_len]
+        } else {
+            &none[..]
+        };
         pos += bitmap_len;
         let mut values = Vec::with_capacity(due.len());
         for (j, &i) in due.iter().enumerate() {
@@ -921,7 +977,7 @@ mod tests {
         assert_eq!(r.probe_time_us, 1_008_000);
         assert_eq!(r.frame_count, 2);
         let items = doc_sub_items();
-        let frames = decode_frames(&r.frames, &items, r.frame_count).unwrap();
+        let frames = decode_frames(&r.frames, &items, r.frame_count, false).unwrap();
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].tick, 6);
         assert_eq!(frames[0].timestamp_us, 1_006_000);
@@ -952,13 +1008,59 @@ mod tests {
             .collect();
         let mut raw = vec![5, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0b0000_0001, 0b0000_0010];
         raw.extend(0u8..10);
-        let f = &decode_frames(&raw, &items, 1).unwrap()[0];
+        let f = &decode_frames(&raw, &items, 1, false).unwrap()[0];
         assert_eq!(f.values[0], (0, None));
         assert_eq!(f.values[9], (9, None));
         assert_eq!(f.values[1], (1, Some(vec![1])));
         // 多一个字节要报错
         raw.push(0);
-        assert!(decode_frames(&raw, &items, 1).is_err());
+        assert!(decode_frames(&raw, &items, 1, false).is_err());
+    }
+
+    #[test]
+    fn compact_example_decodes() {
+        // 协议文档 3.8 节的两帧，第 2 帧用紧凑帧：h 02、Δt E8 07、两个值。
+        let raw = unhex("06000000 B0590F000000 00 07000000 02 E807 08000000 3412");
+        let frames = decode_frames(&raw, &doc_sub_items(), 2, true).unwrap();
+        assert_eq!((frames[0].tick, frames[0].timestamp_us), (6, 1_006_000));
+        assert_eq!((frames[1].tick, frames[1].timestamp_us), (7, 1_007_000));
+        assert_eq!(
+            frames[1].values,
+            vec![
+                (0, Some(8u32.to_le_bytes().to_vec())),
+                (1, Some(0x1234u16.to_le_bytes().to_vec()))
+            ]
+        );
+    }
+
+    #[test]
+    fn compact_gap_failure_and_wrap() {
+        let item = |i: u16| SubItem {
+            item: Item::direct(i, 1, 0x2000_0000 + u32::from(i)),
+            div: 1,
+            phase: 0,
+        };
+        let items = vec![item(0), item(1)];
+        // 第 1 帧完整（k=1，时间戳 2^48 - 5）；第 2 帧 Δk 4、有失败（h 09）、Δt 8（回绕到 3）、
+        // 位图 02；第 3 帧 Δk 1、Δt 20000（A0 9C 01）、无位图。
+        let raw = unhex(
+            "01000000 FBFFFFFFFFFF 00 0A 0B
+             09 08 02 0C 00
+             02 A09C01 0D 0E",
+        );
+        let f = decode_frames(&raw, &items, 3, true).unwrap();
+        assert_eq!((f[1].tick, f[1].timestamp_us), (5, 3));
+        assert_eq!(f[1].values, vec![(0, Some(vec![0x0C])), (1, None)]);
+        assert_eq!((f[2].tick, f[2].timestamp_us), (6, 20_003));
+        assert_eq!(
+            f[2].values,
+            vec![(0, Some(vec![0x0D])), (1, Some(vec![0x0E]))]
+        );
+        // 截断的变长字段和多余的字节都要报错
+        assert!(decode_frames(&raw[..raw.len() - 4], &items, 3, true).is_err());
+        let mut longer = raw.clone();
+        longer.push(0);
+        assert!(decode_frames(&longer, &items, 3, true).is_err());
     }
 
     #[test]
