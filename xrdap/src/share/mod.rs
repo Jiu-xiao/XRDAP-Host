@@ -56,8 +56,9 @@ use crate::dap::Probe;
 use crate::{Error, Result};
 use link::{is_normal_end, Link};
 
-/// 执行一个 DAP 请求，返回探针的响应；没有响应的命令（DAP_TransferAbort）返回空包。
-type Exec<'a> = dyn FnMut(&[u8]) -> io::Result<Vec<u8>> + 'a;
+/// 转发一个 DAP 请求，返回这时到期的全部响应，按顺序（[`Probe::forward`]）：通常一个；
+/// DAP_QueueCommands 和 DAP_TransferAbort 没有；排队之后的第一个有应答的命令带回多个。
+type Exec<'a> = dyn FnMut(&[u8]) -> io::Result<Vec<Vec<u8>>> + 'a;
 
 /// 等客户端时多久看一次停止标志
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
@@ -252,7 +253,7 @@ fn run(
         // 探针读写出错（超时、断开）时结束这个客户端，原因经 Event::Idle 报告
         let mut exec = |req: &[u8]| {
             probe
-                .xfer(req)
+                .forward(req)
                 .map_err(|e| io::Error::other(format!("探针：{e}")))
         };
         let result = match protocol {

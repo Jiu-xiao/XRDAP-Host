@@ -155,6 +155,16 @@ pub(crate) const CMD_TRANSFER_ABORT: u8 = 0x07;
 ///
 /// DAP_Disconnect.
 pub(crate) const CMD_DISCONNECT: u8 = 0x03;
+/// DAP_QueueCommands：探针先不应答，等下一个有应答的命令时按 DAP_ExecuteCommands 的格式
+/// 依次应答排队的包。
+///
+/// DAP_QueueCommands: the probe holds the answer and, once a command with a response
+/// follows, answers the queued packets in turn in the DAP_ExecuteCommands format.
+pub(crate) const CMD_QUEUE_COMMANDS: u8 = 0x7E;
+/// DAP_ExecuteCommands，也是排队的包的应答格式。
+///
+/// DAP_ExecuteCommands, also the answer format of queued packets.
+pub(crate) const CMD_EXECUTE_COMMANDS: u8 = 0x7F;
 /// 探针不认识的命令回一个字节 `0xFF`（CMSIS-DAP 的 DAP_Invalid）。
 ///
 /// A probe answers a command it does not know with the single byte `0xFF` (DAP_Invalid).
@@ -184,6 +194,8 @@ pub struct Probe {
     stale: bool,
     /// 这条连接做过 DAP_Connect，还没有 DAP_Disconnect：探针把它当会话主人
     session: bool,
+    /// [`Probe::forward`] 发出、探针还没应答的 DAP_QueueCommands 包数
+    queued: usize,
 }
 
 impl Probe {
@@ -197,6 +209,7 @@ impl Probe {
             timeout,
             stale: false,
             session: false,
+            queued: 0,
         }
     }
 
@@ -284,6 +297,56 @@ impl Probe {
         if !expects_response(request) {
             return Ok(Vec::new());
         }
+        // 排队的包这时随它一起应答；它们的应答命令号对不上，在等待里丢掉
+        self.queued = 0;
+        self.recv_answer(cmd)
+    }
+
+    /// 转发一个客户端发来的原始 DAP 包（共享给别的工具时），返回这时到期的全部应答，按顺序。
+    /// DAP_QueueCommands 只发出不等应答；之后第一个有应答的命令带回排队的包的应答
+    /// （DAP_ExecuteCommands 格式）和它自己的应答。没有应答的命令（DAP_TransferAbort）
+    /// 不让排队的包执行。
+    ///
+    /// Forward one raw DAP packet from a client (when sharing the probe) and return every
+    /// answer now due, in order. DAP_QueueCommands is sent without waiting; the first later
+    /// command with a response brings back the queued packets' answers (DAP_ExecuteCommands
+    /// format) and its own. A command without a response (DAP_TransferAbort) does not make the
+    /// queued packets run.
+    pub(crate) fn forward(&mut self, request: &[u8]) -> Result<Vec<Vec<u8>>> {
+        let Some(&cmd) = request.first() else {
+            return Err(Error::usage("DAP 请求不能是空的"));
+        };
+        if self.queued == 0 && cmd != CMD_QUEUE_COMMANDS {
+            let resp = self.xfer(request)?;
+            return Ok(if resp.is_empty() {
+                Vec::new()
+            } else {
+                vec![resp]
+            });
+        }
+        if self.stale && self.queued == 0 {
+            self.drain();
+        }
+        self.t.send(request)?;
+        if cmd == CMD_QUEUE_COMMANDS {
+            self.queued += 1;
+            return Ok(Vec::new());
+        }
+        if !expects_response(request) {
+            return Ok(Vec::new());
+        }
+        let queued = std::mem::take(&mut self.queued);
+        let mut answers = Vec::with_capacity(queued + 1);
+        for _ in 0..queued {
+            answers.push(self.recv_answer(CMD_EXECUTE_COMMANDS)?);
+        }
+        answers.push(self.recv_answer(cmd)?);
+        Ok(answers)
+    }
+
+    /// 等命令号为 `cmd` 的应答（或 DAP_Invalid），最多 `self.timeout`；命令号对不上的包是
+    /// 之前超时的请求迟到的响应，丢掉。
+    fn recv_answer(&mut self, cmd: u8) -> Result<Vec<u8>> {
         let deadline = Instant::now() + self.timeout;
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -745,6 +808,47 @@ mod tests {
         assert_eq!(link.sent(), vec![vec![CMD_TRANSFER_ABORT]]);
         // 之后的请求照常配对
         assert_eq!(p.xfer(&[0x00, 0xFF]).unwrap(), vec![0x00, 1, 1]);
+    }
+
+    /// 共享时转发：DAP_QueueCommands 不等应答，之后的命令一次带回排队的包的应答
+    /// （0x7F 格式）和自己的应答，按顺序。
+    #[test]
+    fn forward_returns_queued_answers_with_the_next_command() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        let t0 = Instant::now();
+        assert!(p
+            .forward(&[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF])
+            .unwrap()
+            .is_empty());
+        assert!(p
+            .forward(&[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF])
+            .unwrap()
+            .is_empty());
+        assert!(t0.elapsed() < Duration::from_millis(500));
+        let answers = p.forward(&[CMD_EXECUTE_COMMANDS, 1, 0x00, 0xFF]).unwrap();
+        assert_eq!(
+            answers,
+            vec![vec![0x7F, 1, 0], vec![0x7F, 1, 1], vec![0x7F, 1, 2]]
+        );
+        // 之后照常一问一答
+        assert_eq!(p.forward(&[0x00, 0xFF]).unwrap(), vec![vec![0x00, 1, 3]]);
+    }
+
+    /// DAP_TransferAbort 不让排队的包执行，也不占应答。
+    #[test]
+    fn forward_transfer_abort_keeps_the_queue() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        assert!(p
+            .forward(&[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF])
+            .unwrap()
+            .is_empty());
+        assert!(p.forward(&[CMD_TRANSFER_ABORT]).unwrap().is_empty());
+        assert_eq!(
+            p.forward(&[0x00, 0xFF]).unwrap(),
+            vec![vec![0x7F, 1, 0], vec![0x00, 1, 2]]
+        );
     }
 
     /// 超时的请求的响应在之后才到：下一个同样的请求拿到的是它自己的响应。
