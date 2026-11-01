@@ -5,7 +5,9 @@
 use std::time::Duration;
 
 use nusb::descriptors::TransferType;
-use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, Direction, In, Out, Recipient};
+use nusb::transfer::{
+    Buffer, Bulk, ControlIn, ControlOut, ControlType, Direction, In, Out, Recipient,
+};
 use nusb::{DeviceInfo, Endpoint, Interface, MaybeFuture};
 
 use super::Transport;

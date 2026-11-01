@@ -1,9 +1,11 @@
 //! 测试用的链路：按 CMSIS-DAP 的规则应答——每个响应的第一个字节回显命令号，
-//! DAP_TransferAbort（0x07）没有响应；可以让某个响应迟到，模拟超时后才到的响应。
+//! DAP_TransferAbort（0x07）没有响应，DAP_QueueCommands（0x7E）的应答按 DAP_ExecuteCommands
+//! 的格式（0x7F）等到下一个有应答的命令时才发；可以让某个响应迟到，模拟超时后才到的响应。
 //!
 //! Test link following the CMSIS-DAP rules: every response echoes the command ID in its first
-//! byte and DAP_TransferAbort (0x07) gets none. A response can be made late, to model one that
-//! arrives after its request timed out.
+//! byte, DAP_TransferAbort (0x07) gets none, and a DAP_QueueCommands (0x7E) packet is answered
+//! in the DAP_ExecuteCommands format (0x7F) only once a command with a response follows. A
+//! response can be made late, to model one that arrives after its request timed out.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -27,6 +29,8 @@ struct State {
     ready: VecDeque<Vec<u8>>,
     late: Option<(Late, Vec<u8>)>,
     make_late: Option<Late>,
+    /// DAP_QueueCommands 的应答，等下一个不排队的命令才发
+    queued: Vec<Vec<u8>>,
 }
 
 /// 响应是 `命令号 01 序号`：序号是第几个请求（从 0 起），用来分辨是哪个请求的响应；
@@ -57,6 +61,13 @@ impl Transport for Script {
         if request.first() == Some(&0x07) {
             return Ok(());
         }
+        if request.first() == Some(&0x7E) {
+            // DAP_QueueCommands：应答是 DAP_ExecuteCommands 的格式，留到下一个不排队的命令
+            st.queued.push(vec![0x7F, 1, seq]);
+            return Ok(());
+        }
+        let queued = std::mem::take(&mut st.queued);
+        st.ready.extend(queued);
         let resp = vec![request[0], 1, seq];
         match st.make_late.take() {
             Some(when) => st.late = Some((when, resp)),

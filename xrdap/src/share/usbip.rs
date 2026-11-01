@@ -294,13 +294,12 @@ impl Session<'_> {
                 self.pair();
             }
             (DAP_EP, _) => {
-                let resp = exec(&out_data)?;
+                let responses = exec(&out_data)?;
                 // OUT 的回复只带写入的字节数，不带数据
                 self.reply(RET_SUBMIT, seq, 0, out_data.len(), &[]);
-                // 没有应答的命令（DAP_TransferAbort）不占 IN
-                if !resp.is_empty() {
-                    self.responses.push_back(resp);
-                }
+                // 没有应答的命令（DAP_TransferAbort、排队的包）不占 IN；排队之后的命令带回
+                // 多个应答，按顺序给后面的 IN
+                self.responses.extend(responses);
                 self.pair();
             }
             _ => self.reply(RET_SUBMIT, seq, EPIPE, 0, &[]),
@@ -431,7 +430,7 @@ mod tests {
                 serve(&mut link, &info, &mut |req| {
                     let mut r = req.to_vec();
                     r.push(0xAA);
-                    Ok(r)
+                    Ok(vec![r])
                 })
                 .unwrap();
             }

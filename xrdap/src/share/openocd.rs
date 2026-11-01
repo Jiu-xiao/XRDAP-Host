@@ -23,8 +23,7 @@ pub(super) fn serve(s: &mut Link, exec: &mut super::Exec) -> io::Result<()> {
             .ok_or_else(|| bad(format!("OpenOCD TCP：帧头无效 {header:02X?}")))?;
         let mut request = vec![0u8; len];
         s.read_full(&mut request)?;
-        let response = exec(&request)?;
-        if !response.is_empty() {
+        for response in exec(&request)? {
             s.write_all(&tcp_frame(&response, TCP_TYPE_RESPONSE))?;
         }
     }
