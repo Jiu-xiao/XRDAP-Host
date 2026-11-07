@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-[XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP) 调试探针的电脑端工具 `xrdap`，支持 Windows 和 Linux。工具是一个可执行文件：双击或不带参数运行时打开图形界面，带命令运行时作为命令行工具。
+XR-DAP 系列调试探针（[XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP)、[XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8)、[XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3)）的电脑端工具 `xrdap`，支持 Windows 和 Linux。工具是一个可执行文件：双击或不带参数运行时打开图形界面，带命令运行时作为命令行工具。
 
 它提供以下功能：
 
@@ -46,7 +46,7 @@ xrdap list --ask-serial
 | `192.0.2.10`、`192.0.2.10:3241`、`xrdap-aabbcc.local`、`tcp:<主机>` | TCP（探针的 Wi-Fi，或 `xrdap share openocd`） |
 | `XRobot-XRDAP-AABBCCDDEEFF`、`DDEEFF` | 序列号全称或末尾几位 |
 
-同一时间只有一条连接（USB、串口、TCP 之一）使用探针；另一条连接的命令得到“忙”的回复，`xrdap` 显示“探针正被另一条连接使用”，DAP_Info 照常回答。`xrdap` 只停止自己开始的采样。探针固件的厂商扩展要是协议版本 2（见协议文档），版本 1 的探针需要先升级固件。
+探针一次只使用一条连接（USB、串口、TCP 之一），由使用者保证：探针不仲裁，两条连接同时发命令时 SWD 状态可能被弄乱。另一条连接正在采样时，连接目标的命令得到 `FF`，`xrdap` 显示探针正在采样；开始采样的那条连接重新连接目标时，探针结束这次采样。探针固件的厂商扩展要是协议版本 2（见协议文档），版本 1 的探针需要先升级固件。
 
 打开串口时 DTR 和 RTS 都保持无效，与乐鑫 idf_monitor 相同；ESP32 开发板的自动下载电路用这两根线控制 EN 和 GPIO0。接在 USB 转串口芯片上的探针要用串口名指定。
 
@@ -87,7 +87,7 @@ xrdap watch -p COM3 --elf app.elf motor.speed@5:2 --period 500us --no-overwrite 
 
 | 探针的连接 | 方法 |
 |---|---|
-| ESP32-S3 插 USB | 探针本身就是 USB CMSIS-DAP 探针，直接使用 |
+| 插 USB 的 ESP32-S3、ESP32-S2、STM32F103、CH32V307、CH32V305 探针 | 探针本身就是 USB CMSIS-DAP 探针，直接使用 |
 | 经串口连接的探针（ESP32-C3、传统 ESP32 等） | `xrdap share usbip` 后用 USB/IP 挂载，见下 |
 | Wi-Fi | OpenOCD 直接连探针的 IP（`cmsis-dap tcp host <探针 IP>`，端口 3241），不用 `xrdap share`；Keil、pyOCD 等用 `xrdap share usbip -p <探针 IP 或主机名>` 变成 USB 探针后再挂载。探针本身不带 USB 设备模型，不再自己提供 USB/IP，见 [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP#23-走-wi-fi用-keilpyocdprobe-rsopenocd) |
 
@@ -136,7 +136,7 @@ xrdap wifi set -p COM3 热点名 --password-stdin < password.txt
 xrdap wifi clear -p COM3
 ```
 
-探针是连接已有的热点（Wi-Fi 客户端），不会自己开热点。`status` 显示保存的热点、是否连上、IP 和信号强度，以及最近一次清除热点参数的来源（板上按键、串口命令行、0x86 清除命令或 NVS 修复）、本次启动的复位原因和 NVS 是否在本次启动时重建过。`set` 保存热点名和密码（开放网络省略密码），`clear` 清除热点参数（请求带确认字节）。`--password-stdin` 从标准输入读一行作为密码，密码不出现在 shell 历史和进程列表中；经 TCP（Wi-Fi）连接探针时，密码以明文经过局域网。`set` 和 `clear` 之后探针约 0.5 秒后重启，连接随之断开。配置完成后 `xrdap list` 列出探针的局域网地址（`xrdap-xxxxxx.local`），之后可以用 `-p xrdap-xxxxxx.local` 无线连接。
+Wi-Fi 是 XRDAP-ESP 的功能。探针连接已有的热点（Wi-Fi 客户端），不会自己开热点。`status` 显示保存的热点、是否连上、IP 和信号强度，以及最近一次清除热点参数的来源（板上按键、串口命令行、0x86 清除命令或 NVS 修复）、本次启动的复位原因和 NVS 是否在本次启动时重建过。`set` 保存热点名和密码（开放网络省略密码），`clear` 清除热点参数（请求带确认字节）。`--password-stdin` 从标准输入读一行作为密码，密码不出现在 shell 历史和进程列表中；经 TCP（Wi-Fi）连接探针时，密码以明文经过局域网。`set` 和 `clear` 之后探针约 0.5 秒后重启，连接随之断开。配置完成后 `xrdap list` 列出探针的局域网地址（`xrdap-xxxxxx.local`），之后可以用 `-p xrdap-xxxxxx.local` 无线连接。
 
 图形界面中连上探针后展开连接区最下方的“Wi-Fi”，显示当前状态，填写热点名和密码后点“保存并重启”，或点“清除”。
 
@@ -207,7 +207,7 @@ cargo build --release -p xrdap-tool
 cargo test --workspace
 ```
 
-测试不需要硬件。`xrdap-sim` 依据 CMSIS-DAP 规范和协议文档模拟探针与目标，经 TCP 提供和探针相同的帧格式；测试覆盖帧编解码、厂商命令、采样、DWARF 解析、各个命令和共享。CI 还检查 `cargo fmt` 和 `cargo clippy`。
+测试不需要硬件。`xrdap-sim` 依据 CMSIS-DAP 规范和协议文档模拟探针与目标，经 TCP 提供和探针相同的帧格式；测试覆盖帧编解码、厂商命令、控制口、采样和紧凑帧、DWARF 解析、各个命令和共享。CI 还检查 `cargo fmt` 和 `cargo clippy`。
 
 ## 许可证
 
