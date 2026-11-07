@@ -262,7 +262,7 @@ fn run(
         };
         // 客户端开过采样的话替它停掉，否则探针会一直占着 SWD
         let _ = crate::watch::stop(&mut probe);
-        // 客户端自己连接的会话也结束，别的传输才能接着用探针
+        // 客户端做的连接也结束：探针只能靠这条命令知道（协议文档 3.1 节）
         probe.end_session();
         notify(Event::Idle(
             result
@@ -342,7 +342,7 @@ mod tests {
         assert!(probe.identity().is_ok());
     }
 
-    /// 客户端离开后探针收到 DAP_Disconnect：客户端自己连接的会话结束，别的传输才能接着用探针。
+    /// 客户端离开后探针收到 DAP_Disconnect，客户端做的连接结束。
     #[test]
     fn client_leaving_ends_the_probe_session() {
         let link = Script::default();
@@ -352,7 +352,7 @@ mod tests {
             .unwrap();
         let _ = read_frame(&mut c);
         drop(c);
-        // Event::Idle 在会话结束之后发出
+        // Event::Idle 在连接结束之后发出
         assert!(events.iter().any(|e| matches!(e, Event::Idle(_))));
         assert_eq!(link.sent().last(), Some(&vec![0x03]));
         share.stop();

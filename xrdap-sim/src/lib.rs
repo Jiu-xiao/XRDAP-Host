@@ -4,11 +4,12 @@
 //! - CMSIS-DAP 规范：DAP_Info、DAP_Connect、DAP_Transfer 等标准命令，响应回显命令号，
 //!   DAP_TransferAbort 没有响应，不认识的命令回 `FF`；
 //! - XRDAP-Core 的协议文档（版本 2）<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>：
-//!   TCP 帧（第 2 节）、会话主人和采样归属（第 3.1 节）、厂商命令 0x80 到 0x86（第 3 节）、
-//!   探针身份（第 4.1 节）。
+//!   TCP 帧（第 2 节）、一次只使用一条链路的规则和采样（第 3.1 节）、厂商命令 0x80 到 0x86
+//!   （第 3 节）、探针身份（第 4.1 节）。
 //!
-//! 每条链路（[`Sim::link`] 的每一个、TCP 的每个客户端）是一个传输。同一时间只有一个传输是会话
-//! 主人；别的传输的命令按协议文档 3.1 节回“忙”。
+//! 每条链路（[`Sim::link`] 的每一个、TCP 的每个客户端）是一个传输。探针不仲裁，所有命令谁发都
+//! 执行。DAP_Connect 记下它来自哪个传输，这个连接随 DAP_Disconnect（任何传输发的）或那个传输
+//! 断开而作废，采样随之停止（协议文档 3.1 节）。
 //!
 //! 目标是一个 Cortex-M：Flash 0x08000000 起 128 KiB（只读），RAM 0x20000000 起 64 KiB，
 //! 别的地址访问出错（SWD FAULT）；DHCSR、DEMCR、AIRCR、CPUID 按 ARMv7-M 架构手册 C1.6 的
@@ -108,10 +109,10 @@ struct State {
     /// 地址 -> 还要失败几次读
     failing_reads: Vec<(u32, u32)>,
     t0: Instant,
-    /// 会话主人（传输编号）；None 时没有会话
-    owner: Option<u32>,
-    /// 这个会话里有过 DAP_Connect
-    connected: bool,
+    /// 连接所在的传输；None 时没有连接，厂商命令回 0x04
+    connected: Option<u32>,
+    /// 开始这次采样的传输
+    sampling_link: u32,
     ctrl_stat: u32,
     next_transport: u32,
     sub: Option<Subscription>,
@@ -162,8 +163,8 @@ impl Sim {
             core: Core::default(),
             failing_reads: Vec::new(),
             t0: Instant::now(),
-            owner: None,
-            connected: false,
+            connected: None,
+            sampling_link: 0,
             ctrl_stat: 0,
             next_transport: 0,
             sub: None,
@@ -305,8 +306,8 @@ impl Sim {
             for stream in listener.incoming().flatten() {
                 let transport = sim.st().new_transport();
                 let _ = serve_client(&sim, transport, stream);
-                // 客户端断开，这个传输的会话结束（协议文档 3.1 节）
-                sim.st().end_session(transport);
+                // 客户端断开，这个传输丢了（协议文档 3.1 节）
+                sim.st().link_lost(transport);
             }
         });
         Ok(addr)
@@ -339,9 +340,9 @@ pub struct Link {
 }
 
 impl Drop for Link {
-    /// 链路断开，这个传输的会话结束。
+    /// 链路断开，这个传输丢了。
     fn drop(&mut self) {
-        self.sim.st().end_session(self.transport);
+        self.sim.st().link_lost(self.transport);
     }
 }
 
@@ -403,7 +404,6 @@ const ARG: u8 = 0x01;
 const STATE: u8 = 0x02;
 const RESOURCE: u8 = 0x03;
 const NO_TARGET: u8 = 0x04;
-const BUSY: u8 = 0x05;
 
 impl State {
     fn new_transport(&mut self) -> u32 {
@@ -411,12 +411,16 @@ impl State {
         self.next_transport
     }
 
-    /// 传输 `transport` 的会话结束：它开始的采样停下，DAP_Connect 失效（协议文档 3.1 节）。
-    fn end_session(&mut self, transport: u32) {
-        if self.owner == Some(transport) {
-            self.stop_sampling();
-            self.owner = None;
-            self.connected = false;
+    /// 连接作废：扩展命令要求重新 DAP_Connect，正在进行的采样停止（协议文档 3.1 节）。
+    fn drop_connection(&mut self) {
+        self.stop_sampling();
+        self.connected = None;
+    }
+
+    /// 传输 `transport` 丢了：连接在它上面才作废，否则什么也不发生（协议文档 3.1 节）。
+    fn link_lost(&mut self, transport: u32) {
+        if self.connected == Some(transport) {
+            self.drop_connection();
         }
     }
 
@@ -596,21 +600,10 @@ impl State {
             return None;
         }
         self.advance();
-        // 会话主人（协议文档 3.1 节）：没有主人时第一个发 DAP_Info 以外命令的传输成为主人；
-        // 别的传输的标准命令回 `命令 FF`，厂商命令回 `命令 05`
-        if cmd != 0x00 {
-            match self.owner {
-                None => self.owner = Some(transport),
-                Some(o) if o != transport => {
-                    let busy = if (0x80..=0x9F).contains(&cmd) {
-                        BUSY
-                    } else {
-                        0xFF
-                    };
-                    return Some(vec![cmd, busy]);
-                }
-                Some(_) => {}
-            }
+        // 开始采样的传输又发来 DAP_Connect：它的上位机回来了，结束旧的连接和采样，重新连接
+        // （协议文档 3.1 节）
+        if cmd == 0x02 && self.active && self.sampling_link == transport {
+            self.drop_connection();
         }
         // 采样期间只接受 DAP_Info、DAP_HostStatus 和厂商命令（协议文档 3.1 节）
         if self.active && !matches!(cmd, 0x00 | 0x01 | 0x80..=0x86) {
@@ -619,9 +612,9 @@ impl State {
         Some(match cmd {
             0x00 => self.dap_info(req),
             0x01 => vec![0x01, 0x00],
-            0x02 => self.dap_connect(req),
+            0x02 => self.dap_connect(transport, req),
             0x03 => {
-                self.end_session(transport);
+                self.drop_connection();
                 vec![0x03, 0x00]
             }
             0x04 | 0x08 | 0x11 | 0x12 | 0x13 => vec![cmd, 0x00],
@@ -629,7 +622,7 @@ impl State {
             0x80 => self.info(req),
             0x81 => self.cmd_read(req),
             0x82 => self.cmd_write(req),
-            0x83 => self.sub_start(req),
+            0x83 => self.sub_start(transport, req),
             0x84 => self.sub_ctrl(req),
             0x85 => self.sub_read(req),
             0x86 => self.wifi(req),
@@ -660,11 +653,11 @@ impl State {
         out
     }
 
-    fn dap_connect(&mut self, req: &[u8]) -> Vec<u8> {
+    fn dap_connect(&mut self, transport: u32, req: &[u8]) -> Vec<u8> {
         // 端口 0（默认）和 1 是 SWD；只支持 SWD
         match req.get(1) {
             Some(0 | 1) => {
-                self.connected = true;
+                self.connected = Some(transport);
                 vec![0x02, 0x01]
             }
             _ => vec![0x02, 0x00],
@@ -771,7 +764,7 @@ impl State {
         if resp_len > PACKET_SIZE {
             return vec![0x81, RESOURCE];
         }
-        if !self.connected {
+        if self.connected.is_none() {
             return vec![0x81, NO_TARGET];
         }
         let now = self.now_us();
@@ -790,7 +783,7 @@ impl State {
             Ok(i) => i,
             Err(s) => return vec![0x82, s],
         };
-        if !self.connected {
+        if self.connected.is_none() {
             return vec![0x82, NO_TARGET];
         }
         let now = self.now_us();
@@ -808,7 +801,7 @@ impl State {
     }
 
     /// 0x83 SUB_START：一条命令带全部配置，检查通过就开始采样，第 0 拍立即采（协议文档 3.4 节）。
-    fn sub_start(&mut self, req: &[u8]) -> Vec<u8> {
+    fn sub_start(&mut self, transport: u32, req: &[u8]) -> Vec<u8> {
         if self.active {
             return vec![0x83, STATE];
         }
@@ -849,9 +842,10 @@ impl State {
         if count > MAX_ITEMS || aps.len() > 8 || full_frame + 2 > self.ring_bytes {
             return vec![0x83, RESOURCE];
         }
-        if !self.connected {
+        if self.connected.is_none() {
             return vec![0x83, NO_TARGET];
         }
+        self.sampling_link = transport;
         self.sub = Some(Subscription {
             items,
             period_us,

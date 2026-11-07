@@ -245,15 +245,25 @@ fn watch_warns_when_not_keeping_up() {
     assert!(out.contains(xrdap::watch::Lag::Swd.advice()), "{out}");
 }
 
-/// 协议文档 3.1：另一条连接占着探针时显示“探针正被另一条连接使用”。
+/// 协议文档 3.1：探针不仲裁，另一条链路连接着也照样执行；它在采样时 DAP_Connect 得到 `FF`，
+/// 命令报告探针正在采样，它的采样不停。
 #[test]
-fn second_connection_is_reported_busy() {
+fn only_sampling_on_another_link_refuses_a_command() {
     let (sim, host) = sim();
-    // 另一个传输（例如 USB）先占着探针
-    let mut owner = xrdap::dap::Probe::new(Box::new(sim.link()), Duration::from_secs(2));
-    owner.connect(4_000_000).unwrap();
+    let mut other = xrdap::dap::Probe::new(Box::new(sim.link()), Duration::from_secs(2));
+    other.connect(4_000_000).unwrap();
+    xrdap(&host, &["read", "0x2000007c:u32"]).unwrap();
+    // 这条命令退出时发了 DAP_Disconnect，它结束任何链路上的连接
+    other.connect(4_000_000).unwrap();
+    let item = xrdap::raw::vendor::SubItem {
+        item: xrdap::Item::direct(0, 4, 0x2000_0000),
+        div: 1,
+        phase: 0,
+    };
+    other.sub_start(1000, 0, &[item]).unwrap();
     let e = xrdap(&host, &["read", "0x2000007c:u32"]).unwrap_err();
-    assert!(e.contains("探针正被另一条连接使用"), "{e}");
+    assert!(e.contains("探针正在采样"), "{e}");
+    assert!(sim.is_sampling());
 }
 
 /// 协议文档 3.7：wifi status 显示最近一次清除的来源和本次启动原因；清除带确认字节。

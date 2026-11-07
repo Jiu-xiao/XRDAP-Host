@@ -412,45 +412,94 @@ fn reset_always_restores_demcr() {
     assert_eq!(sim.demcr(), 1 << 24, "复位失败");
 }
 
-/// 协议文档 3.1：另一个传输是会话主人时，标准命令回 `命令 FF`、厂商命令回 `命令 05`，
-/// DAP_Info 照常；主人断开后会话结束，它开始的采样停下。
+/// 协议文档 3.1：探针不仲裁。连接在一条链路上时，别的链路的命令照样执行。
 #[test]
-fn second_connection_gets_busy() {
-    let (sim, mut owner, mut syms) = setup();
-    owner.connect(4_000_000).unwrap();
-    let t = targets(&mut syms, &["counter"]);
-    owner.sub_start(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
-    let mut other = Probe::new(Box::new(sim.link()), TIMEOUT);
-    assert!(other.identity().unwrap().serial.is_some());
-    for e in [
-        other.connect(4_000_000).unwrap_err(),
-        other.read(&[t[0].item(0)]).unwrap_err(),
-    ] {
-        assert!(
-            matches!(&e, xrdap::Error::Busy(m) if m == vendor::BUSY_TEXT),
-            "{e}"
-        );
-    }
-    assert!(sim.is_sampling());
-    drop(owner);
-    assert!(!sim.is_sampling());
-    other.connect(4_000_000).unwrap();
+fn commands_from_any_link_run() {
+    let (sim, mut a, mut syms) = setup();
+    a.connect(4_000_000).unwrap();
+    let mut b = Probe::new(Box::new(sim.link()), TIMEOUT);
+    assert!(b.identity().unwrap().serial.is_some());
+    let counter = Item::direct(1, 4, addr(&mut syms, "counter"));
+    let want = 12345u32.to_le_bytes();
+    assert_eq!(
+        b.read(std::slice::from_ref(&counter)).unwrap()[0].value,
+        want
+    );
+    b.connect(4_000_000).unwrap();
+    assert_eq!(a.read(&[counter]).unwrap()[0].value, want);
 }
 
-/// 用户决定（A1）：主机不停自己没开始的采样。同一条连接上还在运行的采样让连接报占用，
-/// 采样照常进行；SUB_START 回 0x02。
+/// 协议文档 3.1：一条链路丢了，连接在它上面才作废；不在它上面时什么也不发生。
 #[test]
-fn sampling_not_started_here_is_left_alone() {
+fn losing_a_link_ends_only_a_connection_on_it() {
+    let (sim, mut a, mut syms) = setup();
+    let read = vendor::read_request(&[Item::direct(1, 4, addr(&mut syms, "counter"))]);
+    // 直接发 DAP_Connect：Probe 没有记下连接，丢弃时不发 DAP_Disconnect，只是链路丢了
+    assert_eq!(a.xfer(&[0x02, 0x01]).unwrap(), [0x02, 0x01]);
+    let mut b = Probe::new(Box::new(sim.link()), TIMEOUT);
+    assert_eq!(b.xfer(&read).unwrap()[1], 0x00);
+    drop(b);
+    assert_eq!(a.xfer(&read).unwrap()[1], 0x00);
+    drop(a);
+    let mut c = Probe::new(Box::new(sim.link()), TIMEOUT);
+    assert_eq!(c.xfer(&read).unwrap(), [0x81, 0x04]);
+}
+
+/// 协议文档 3.1：DAP_Disconnect 结束任何链路上的连接，之后扩展命令要求重新 DAP_Connect。
+#[test]
+fn disconnect_from_any_link_ends_the_connection() {
+    let (sim, mut a, mut syms) = setup();
+    a.connect(4_000_000).unwrap();
+    let read = vendor::read_request(&[Item::direct(1, 4, addr(&mut syms, "counter"))]);
+    assert_eq!(a.xfer(&read).unwrap()[1], 0x00);
+    let mut b = Probe::new(Box::new(sim.link()), TIMEOUT);
+    assert_eq!(b.xfer(&[0x03]).unwrap(), [0x03, 0x00]);
+    assert_eq!(a.xfer(&read).unwrap(), [0x81, 0x04]);
+    a.connect(4_000_000).unwrap();
+    assert_eq!(a.xfer(&read).unwrap()[1], 0x00);
+}
+
+/// 协议文档 3.1：采样期间，开始采样的那条链路发来 DAP_Connect 是它的上位机回来了，探针结束
+/// 旧的连接和采样并重新连接；缓冲里的帧留着。
+#[test]
+fn connect_from_the_sampling_link_restarts() {
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let t = targets(&mut syms, &["counter"]);
     probe.sub_start(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
-    assert!(matches!(
-        probe.connect(4_000_000),
-        Err(xrdap::Error::Busy(_))
-    ));
-    assert!(Sampler::start(&mut probe, vars(&[sub(&t[0], 0, 1, 0)]), 1000, false).is_err());
+    probe.connect(4_000_000).unwrap();
+    assert!(!sim.is_sampling());
+    let (r, _, _) = probe.sub_read(512).unwrap();
+    assert!(!r.sampling);
+    assert!(r.frame_count > 0);
+    // 连接是新的：厂商命令和新的采样都能用
+    assert_eq!(probe.read(&[t[0].item(0)]).unwrap()[0].status, 0);
+    probe.sub_start(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
     assert!(sim.is_sampling());
+}
+
+/// 协议文档 3.1：采样期间别的链路的 DAP_Connect 和 DAP_Disconnect 回 `FF`，它的 SUB_START 回
+/// 0x02，采样不受影响；DAP_Info 和厂商命令照常。开始采样的链路丢了，采样停下，别的链路才能连接。
+#[test]
+fn another_link_cannot_end_sampling_by_connecting() {
+    let (sim, mut a, mut syms) = setup();
+    a.connect(4_000_000).unwrap();
+    let t = targets(&mut syms, &["counter"]);
+    a.sub_start(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
+    let mut b = Probe::new(Box::new(sim.link()), TIMEOUT);
+    assert!(b.identity().unwrap().serial.is_some());
+    let e = b.connect(4_000_000).unwrap_err();
+    assert!(
+        matches!(&e, xrdap::Error::Busy(m) if m.contains("探针正在采样")),
+        "{e}"
+    );
+    assert_eq!(b.xfer(&[0x03]).unwrap(), [0xFF]);
+    assert_eq!(b.read(&[t[0].item(0)]).unwrap()[0].status, 0);
+    assert!(Sampler::start(&mut b, vars(&[sub(&t[0], 0, 1, 0)]), 1000, false).is_err());
+    assert!(sim.is_sampling());
+    drop(a);
+    assert!(!sim.is_sampling());
+    b.connect(4_000_000).unwrap();
 }
 
 /// 协议文档 3.4：会话结束后采样停下，SUB_READ 回 0x02 但照样带缓冲里的帧。

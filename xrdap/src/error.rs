@@ -56,10 +56,10 @@ pub enum Error {
     ///
     /// A problem on the target side: no SWD answer, or the core did not halt or reset.
     Target(String),
-    /// 探针正在被占用：在采样，只接受 DAP_Info 和厂商命令（协议文档 3.1 节）。
+    /// 探针正在采样，只接受 DAP_Info、DAP_HostStatus 和厂商命令（协议文档 3.1 节）。
     ///
-    /// The probe is busy sampling and accepts only DAP_Info and vendor commands (protocol
-    /// document, section 3.1).
+    /// The probe is sampling and accepts only DAP_Info, DAP_HostStatus and vendor commands
+    /// (protocol document, section 3.1).
     Busy(String),
     /// 表达式、符号或参数有问题。
     ///

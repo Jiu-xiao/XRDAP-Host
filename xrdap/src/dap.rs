@@ -192,7 +192,7 @@ pub struct Probe {
     timeout: Duration,
     /// 上一个请求超时了，链路上可能还有它迟到的响应
     stale: bool,
-    /// 这条连接做过 DAP_Connect，还没有 DAP_Disconnect：探针把它当会话主人
+    /// 这条连接做过 DAP_Connect，还没有 DAP_Disconnect
     session: bool,
     /// [`Probe::forward`] 发出、探针还没应答的 DAP_QueueCommands 包数
     queued: usize,
@@ -213,24 +213,25 @@ impl Probe {
         }
     }
 
-    /// 结束这条连接在探针上的会话（DAP_Disconnect），让别的传输可以接着用探针。
-    /// 只有这条连接做过 [`Probe::connect`] 才会发；出错（探针已断开、已重启）被忽略。
-    /// 连接被丢弃时会自动调用。
+    /// 告诉探针连接结束（DAP_Disconnect）：Windows 上关闭 USB 设备不产生 USB 事件，探针只能靠
+    /// 这条命令知道。只有这条连接做过 [`Probe::connect`] 才会发；出错（探针已断开、已重启）被
+    /// 忽略。连接被丢弃时会自动调用。
     ///
-    /// End this connection's session on the probe (DAP_Disconnect) so another transport can use
-    /// the probe. Sent only if this connection ran [`Probe::connect`]; errors (the probe is gone
-    /// or restarted) are ignored. Called automatically when the connection is dropped.
+    /// Tell the probe the connection has ended (DAP_Disconnect): closing a USB device on Windows
+    /// produces no USB event, so this command is the only way the probe learns of it. Sent only
+    /// if this connection ran [`Probe::connect`]; errors (the probe is gone or restarted) are
+    /// ignored. Called automatically when the connection is dropped.
     pub fn disconnect(&mut self) {
         if std::mem::take(&mut self.session) {
             self.end_session();
         }
     }
 
-    /// 不论这条连接有没有连接过，都发 DAP_Disconnect。共享给别的工具时，客户端自己连接的
-    /// 会话在客户端离开后要结束。
+    /// 不论这条连接有没有连接过，都发 DAP_Disconnect。共享给别的工具时，客户端自己做的连接在
+    /// 客户端离开后要结束。
     ///
     /// Send DAP_Disconnect whether or not this connection connected. When sharing the probe, the
-    /// session a client opened must end when the client leaves.
+    /// connection a client made must end when the client leaves.
     pub(crate) fn end_session(&mut self) {
         /// 离开时不值得等久：探针可能已经没了
         const LEAVE_TIMEOUT: Duration = Duration::from_millis(300);
@@ -534,14 +535,14 @@ impl Probe {
         Ok(le_u32(&resp, 3))
     }
 
-    /// 开始一次会话：先查 INFO，厂商扩展的协议版本必须是 [`vendor::PROTOCOL_VERSION`]
-    /// （协议文档第 3 节），再连接目标（SWD 连接和 ADIv5 初始化）。另一条连接占着探针、
-    /// 或者这条连接上的采样还在运行时返回 [`Error::Busy`]；别人开始的采样不停。
+    /// 先查 INFO，厂商扩展的协议版本必须是 [`vendor::PROTOCOL_VERSION`]（协议文档第 3 节），
+    /// 再连接目标（SWD 连接和 ADIv5 初始化）。另一条链路正在采样时返回 [`Error::Busy`]，它的
+    /// 采样不受影响；这条链路自己开始的采样还在运行时，探针结束它并重新连接（协议文档 3.1 节）。
     ///
-    /// Start a session: query INFO, whose extension version must be
-    /// [`vendor::PROTOCOL_VERSION`], then connect the target. Returns [`Error::Busy`] while another
-    /// connection owns the probe or sampling on this connection is still running; sampling
-    /// started by someone else is left alone.
+    /// Query INFO, whose extension version must be [`vendor::PROTOCOL_VERSION`], then connect the
+    /// target. Returns [`Error::Busy`] while another link is sampling, and that sampling goes on;
+    /// sampling this link started and left running is ended by the probe, which connects afresh
+    /// (protocol section 3.1).
     pub fn connect(&mut self, clock_hz: u32) -> Result<TargetInfo> {
         self.vendor_info()?;
         self.connect_swd(clock_hz)
@@ -549,18 +550,14 @@ impl Probe {
 
     /// SWD 连接和 ADIv5 初始化：DAP_Connect(SWD)、设时钟、线复位加 JTAG 转 SWD、
     /// 读 DPIDR、清粘滞错误、调试域和系统域上电。之后厂商命令才能访问目标。
-    /// 探针正在采样或被另一条连接占用时返回 [`Error::Busy`]。
+    /// 另一条链路正在采样时返回 [`Error::Busy`]。
     ///
     /// SWD connect and ADIv5 setup: DAP_Connect(SWD), clock, line reset with JTAG-to-SWD,
     /// DPIDR, sticky error clear, debug and system power-up. Vendor commands need it first.
-    /// Returns [`Error::Busy`] while the probe is sampling or another connection owns it.
+    /// Returns [`Error::Busy`] while another link is sampling.
     pub(crate) fn connect_swd(&mut self, clock_hz: u32) -> Result<TargetInfo> {
         self.query_packet_size()?;
         let resp = self.simple(&[0x02, 0x01], "DAP_Connect")?;
-        // 另一个传输是会话主人时标准命令回 `命令 FF`（协议文档 3.1 节）
-        if resp.get(1) == Some(&DAP_INVALID) {
-            return Err(Error::Busy(vendor::BUSY_TEXT.into()));
-        }
         if resp.get(1) != Some(&0x01) {
             return Err(Error::protocol(format!(
                 "DAP_Connect(SWD) 失败：{}",
@@ -871,7 +868,7 @@ mod tests {
         assert_eq!(p.xfer(&[0x80]).unwrap(), vec![0x80, 1, 1]);
     }
 
-    /// 连接过目标的连接被丢弃时发 DAP_Disconnect，探针的会话主人才会放手（协议文档 3.1 节）。
+    /// 连接过目标的连接被丢弃时发 DAP_Disconnect，探针才知道连接结束（协议文档 3.1 节）。
     #[test]
     fn dropping_a_connected_probe_sends_disconnect() {
         let link = Script::default();
@@ -882,7 +879,7 @@ mod tests {
         assert_eq!(link.sent(), vec![vec![CMD_DISCONNECT]]);
     }
 
-    /// 没有连接过的连接（例如只查 DAP_Info）不发 DAP_Disconnect：它不是会话主人。
+    /// 没有连接过的连接（例如只查 DAP_Info）不发 DAP_Disconnect：它会结束任何链路上的连接。
     #[test]
     fn dropping_an_unconnected_probe_sends_nothing() {
         let link = Script::default();

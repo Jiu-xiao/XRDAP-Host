@@ -568,12 +568,18 @@ mod tests {
         worker.join().unwrap();
     }
 
-    /// 协议文档 3.1：另一条连接占着探针时，连接失败并显示“探针正被另一条连接使用”。
+    /// 协议文档 3.1：另一条链路正在采样时，连接失败并显示探针正在采样。
     #[test]
-    fn connect_reports_busy_probe() {
+    fn connect_reports_sampling_on_another_link() {
         let sim = xrdap_sim::Sim::new();
-        let mut owner = Probe::new(Box::new(sim.link()), TIMEOUT);
-        owner.connect(4_000_000).unwrap();
+        let mut other = Probe::new(Box::new(sim.link()), TIMEOUT);
+        other.connect(4_000_000).unwrap();
+        let item = xrdap::raw::vendor::SubItem {
+            item: xrdap::Item::direct(0, 4, 0x2000_0000),
+            div: 1,
+            phase: 0,
+        };
+        other.sub_start(1000, 0, &[item]).unwrap();
         let (cmd_tx, cmd_rx) = channel();
         let (ev_tx, ev_rx) = channel();
         let worker = std::thread::spawn(move || run(cmd_rx, ev_tx, || {}, "127.0.0.1:0"));
@@ -583,7 +589,7 @@ mod tests {
             .unwrap();
         next(
             &ev_rx,
-            |e| matches!(e, Event::Failed { op: Op::Connect, msg } if msg.contains("探针正被另一条连接使用")),
+            |e| matches!(e, Event::Failed { op: Op::Connect, msg } if msg.contains("探针正在采样")),
         );
         drop(cmd_tx);
         worker.join().unwrap();
