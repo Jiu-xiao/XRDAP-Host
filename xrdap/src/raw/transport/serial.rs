@@ -347,6 +347,25 @@ mod tests {
         assert_eq!(t.recv(Duration::from_secs(1)).unwrap(), [0x80, 0x00]);
     }
 
+    /// 协议文档 3.7.1：控制请求是 ctrl_req 帧（0x3D2538F2），应答是 ctrl_resp 帧（0x31BDA5B6），
+    /// 载荷布局和 DAP 帧相同；等应答时收到的 DAP 响应帧被丢掉。
+    #[test]
+    fn control_uses_its_own_topics() {
+        let (mut t, lines) = transport();
+        {
+            let mut l = lines.lock().unwrap();
+            l.rx.push_back(build_frame(
+                crc32(RESP_TOPIC),
+                &serial_payload(&[0x80, 0x00]),
+                0,
+            ));
+            l.rx.push_back(build_frame(0x31BD_A5B6, &serial_payload(&[0x00, 0xF2]), 0));
+        }
+        assert_eq!(t.control(&[0x00]).unwrap(), Some(vec![0x00, 0xF2]));
+        let l = lines.lock().unwrap();
+        assert_eq!(l.tx, build_frame(0x3D25_38F2, &serial_payload(&[0x00]), 0));
+    }
+
     /// 协议文档第 1 节：请求是 dap_req 帧；响应帧拆成几次读到也能拼起来。
     #[test]
     fn frames_requests_and_reassembles_responses() {

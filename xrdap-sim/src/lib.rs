@@ -5,7 +5,7 @@
 //!   DAP_TransferAbort 没有响应，不认识的命令回 `FF`；
 //! - XRDAP-Core 的协议文档（版本 2）<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>：
 //!   TCP 帧（第 2 节）、一次只使用一条链路的规则和采样（第 3.1 节）、厂商命令 0x80 到 0x86
-//!   （第 3 节）、探针身份（第 4.1 节）。
+//!   （第 3 节）、控制口（第 3.7.1 节）、探针身份（第 4.1 节）。
 //!
 //! 每条链路（[`Sim::link`] 的每一个、TCP 的每个客户端）是一个传输。探针不仲裁，所有命令谁发都
 //! 执行。DAP_Connect 记下它来自哪个传输，这个连接随 DAP_Disconnect（任何传输发的）或那个传输
@@ -26,7 +26,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use xrdap::raw::frame::{
-    tcp_frame, TCP_HEADER_LEN, TCP_MAGIC, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
+    tcp_frame, TCP_HEADER_LEN, TCP_MAGIC, TCP_TYPE_CONTROL_REQUEST, TCP_TYPE_CONTROL_RESPONSE,
+    TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
 };
 use xrdap::raw::transport::Transport;
 
@@ -36,10 +37,22 @@ pub const SERIAL: &str = "XRobot-XRDAP-AABBCCDDEEFF";
 pub const PACKET_SIZE: usize = 1024;
 /// 每次请求和每个订阅最多的条目数（协议文档 3.4 节 INFO）。
 pub const MAX_ITEMS: usize = 32;
+/// 默认的功能位（协议文档 3.4 节 INFO）：XRDAP-ESP 的值，有 Wi-Fi 配置、控制口和紧凑帧。
+pub const FEATURES: u32 = 0x7F;
 /// DPIDR：ARM 的 SW-DP v1，部件号 0xBA。
 pub const DPIDR: u32 = 0x2BA0_1477;
 /// CPUID：Cortex-M4 r0p1。
 pub const CPUID: u32 = 0x410F_C241;
+
+const FEATURE_WIFI: u32 = 1 << 4;
+const FEATURE_CONTROL: u32 = 1 << 5;
+const FEATURE_COMPACT: u32 = 1 << 6;
+
+/// 控制口自己的状态：没有这个操作（协议文档 3.7.1 节）。
+const CONTROL_UNSUPPORTED: u8 = 0xF2;
+
+/// 时间戳 48 位。
+const STAMP_MASK: u64 = (1 << 48) - 1;
 
 const FLASH: u32 = 0x0800_0000;
 const RAM: u32 = 0x2000_0000;
@@ -85,6 +98,8 @@ struct Subscription {
     items: Vec<SubItem>,
     period_us: u32,
     drop_new: bool,
+    /// SUB_READ 用紧凑帧，直到下一次 SUB_START（协议文档 3.5 节）
+    compact: bool,
 }
 
 /// Cortex-M 的调试状态（ARMv7-M C1.6）。
@@ -98,6 +113,11 @@ struct Core {
 }
 
 struct State {
+    /// 功能位（INFO 偏移 3）
+    features: u32,
+    /// 控制口 SEND 能带的最长请求
+    control_limit: usize,
+    control_requests: Vec<Vec<u8>>,
     regions: Vec<Region>,
     counters: Vec<Counter>,
     /// 计数器的零点（探针时间）；系统复位时重新开始
@@ -144,6 +164,9 @@ impl Sim {
     /// Flash 和 RAM 内容全为 0，内核在运行。
     pub fn new() -> Self {
         Self(Arc::new(Mutex::new(State {
+            features: FEATURES,
+            control_limit: usize::MAX,
+            control_requests: Vec::new(),
             regions: vec![
                 Region {
                     start: FLASH,
@@ -235,6 +258,18 @@ impl Sim {
         });
     }
 
+    /// 功能位（INFO 偏移 3），默认 [`FEATURES`]。例如 0x6F 是没有 Wi-Fi 的探针，0x1F 是没有控制口
+    /// 和紧凑帧的旧固件（协议文档 3.4 节）。
+    pub fn set_features(&self, bits: u32) {
+        self.st().features = bits;
+    }
+
+    /// [`Sim::link`] 的控制口 SEND 能带的最长请求，更长的被拒（协议文档 3.7.1 节，USB 的 EP0 OUT
+    /// 缓冲）。默认不限。
+    pub fn set_control_limit(&self, bytes: usize) {
+        self.st().control_limit = bytes;
+    }
+
     /// 接下来 `times` 次读 `addr` 都失败（SWD FAULT）。
     pub fn fail_reads(&self, addr: u32, times: u32) {
         self.st().failing_reads.push((addr, times));
@@ -273,6 +308,11 @@ impl Sim {
     /// 到现在为止收到的全部请求。
     pub fn requests(&self) -> Vec<Vec<u8>> {
         self.st().requests.clone()
+    }
+
+    /// 到现在为止经控制口收到的全部请求。
+    pub fn control_requests(&self) -> Vec<Vec<u8>> {
+        self.st().control_requests.clone()
     }
 
     /// 一条直接连着这个模拟探针的链路，是一个新的传输。
@@ -315,18 +355,27 @@ impl Sim {
 }
 
 /// 处理一个 TCP 客户端：一个请求帧对应一个响应帧，没有响应的命令不回帧，帧头无效时断开。
+/// 帧类型 3 是控制请求，应答是类型 4；没有控制口的固件把它当帧头无效。
 fn serve_client(sim: &Sim, transport: u32, mut s: std::net::TcpStream) -> std::io::Result<()> {
     let _ = s.set_nodelay(true);
     let mut h = [0u8; TCP_HEADER_LEN];
     loop {
         s.read_exact(&mut h)?;
         let len = u16::from_le_bytes([h[4], h[5]]) as usize;
-        if &h[..4] != TCP_MAGIC || h[6] != TCP_TYPE_REQUEST || len == 0 || len > PACKET_SIZE {
+        let control = h[6] == TCP_TYPE_CONTROL_REQUEST && sim.st().has_control();
+        if &h[..4] != TCP_MAGIC
+            || !(h[6] == TCP_TYPE_REQUEST || control)
+            || len == 0
+            || len > PACKET_SIZE
+        {
             return Ok(());
         }
         let mut req = vec![0u8; len];
         s.read_exact(&mut req)?;
-        if let Some(resp) = sim.execute(transport, &req) {
+        if control {
+            let answer = sim.st().control(&req);
+            s.write_all(&tcp_frame(&answer, TCP_TYPE_CONTROL_RESPONSE))?;
+        } else if let Some(resp) = sim.execute(transport, &req) {
             s.write_all(&tcp_frame(&resp, TCP_TYPE_RESPONSE))?;
         }
     }
@@ -361,6 +410,14 @@ impl Transport for Link {
     fn describe(&self) -> String {
         "模拟探针".into()
     }
+
+    /// 控制口，按 USB 的规则（协议文档 3.7.1 节）：固件没有控制口、请求为空或超过 EP0 的 OUT 缓冲
+    /// 时 SEND 被拒。
+    fn control(&mut self, request: &[u8]) -> xrdap::Result<Option<Vec<u8>>> {
+        let mut st = self.sim.st();
+        let refused = !st.has_control() || request.is_empty() || request.len() > st.control_limit;
+        Ok((!refused).then(|| st.control(request)))
+    }
 }
 
 fn u16_at(p: &[u8], at: usize) -> u16 {
@@ -369,6 +426,22 @@ fn u16_at(p: &[u8], at: usize) -> u16 {
 
 fn u32_at(p: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([p[at], p[at + 1], p[at + 2], p[at + 3]])
+}
+
+/// 完整帧开头的节拍序号和时间戳（协议文档 3.5 节）。
+fn frame_head(frame: &[u8]) -> (u32, u64) {
+    let mut stamp = [0u8; 8];
+    stamp[..6].copy_from_slice(&frame[4..10]);
+    (u32_at(frame, 0), u64::from_le_bytes(stamp))
+}
+
+/// 无符号 LEB128（协议文档 3.5 节）：每字节低 7 位，从低位起；最高位为 1 表示后面还有字节。
+fn put_varint(out: &mut Vec<u8>, mut v: u64) {
+    while v >= 0x80 {
+        out.push(v as u8 | 0x80);
+        v >>= 7;
+    }
+    out.push(v as u8);
 }
 
 /// 从 `p` 开头解析一个条目（协议文档 3.3 节）并前移 `p`。长度不够返回 None；字段不合法时
@@ -409,6 +482,25 @@ impl State {
     fn new_transport(&mut self) -> u32 {
         self.next_transport += 1;
         self.next_transport
+    }
+
+    fn has_control(&self) -> bool {
+        self.features & FEATURE_CONTROL != 0
+    }
+
+    /// 一个控制请求，`op + 载荷`（协议文档 3.7.1 节）。Wi-Fi 操作的 op 和载荷与 0x86 相同，只是请求
+    /// 没有 `86`，应答第 1 字节是 op；别的操作这个模拟探针没有。不影响连接和采样。
+    fn control(&mut self, req: &[u8]) -> Vec<u8> {
+        self.control_requests.push(req.to_vec());
+        let op = req[0];
+        if self.features & FEATURE_WIFI == 0 || op > 2 {
+            return vec![op, CONTROL_UNSUPPORTED];
+        }
+        let mut dap = vec![0x86];
+        dap.extend_from_slice(req);
+        let mut answer = self.wifi(&dap);
+        answer[0] = op;
+        answer
     }
 
     /// 连接作废：扩展命令要求重新 DAP_Connect，正在进行的采样停止（协议文档 3.1 节）。
@@ -625,7 +717,7 @@ impl State {
             0x83 => self.sub_start(transport, req),
             0x84 => self.sub_ctrl(req),
             0x85 => self.sub_read(req),
-            0x86 => self.wifi(req),
+            0x86 if self.features & FEATURE_WIFI != 0 => self.wifi(req),
             _ => vec![0xFF],
         })
     }
@@ -714,7 +806,7 @@ impl State {
             return vec![0x80, ARG];
         }
         let mut out = vec![0x80, OK, 2];
-        out.extend_from_slice(&0x1Fu32.to_le_bytes());
+        out.extend_from_slice(&self.features.to_le_bytes());
         out.extend_from_slice(&(MAX_ITEMS as u16).to_le_bytes());
         out.push(8);
         out.extend_from_slice(&(self.ring_bytes as u32).to_le_bytes());
@@ -811,7 +903,13 @@ impl State {
         let period_us = u32_at(req, 1);
         let flags = req[5];
         let count = u16_at(req, 6) as usize;
-        if period_us == 0 || flags & !1 != 0 || count == 0 {
+        // flags：bit0 缓冲满时丢新帧，bit1 紧凑帧（功能位 bit6 为 1 时才能用），其余位必须为 0
+        let compact = flags & 2 != 0;
+        if period_us == 0
+            || flags & !3 != 0
+            || count == 0
+            || (compact && self.features & FEATURE_COMPACT == 0)
+        {
             return vec![0x83, ARG];
         }
         let mut p = &req[8..];
@@ -850,6 +948,7 @@ impl State {
             items,
             period_us,
             drop_new: flags & 1 != 0,
+            compact,
         });
         self.clear_ring();
         self.active = true;
@@ -961,15 +1060,25 @@ impl State {
             return vec![0x85, ARG];
         }
         let limit = (u16_at(req, 1) as usize).min(PACKET_SIZE - 24);
+        let compact = self.sub.as_ref().is_some_and(|sub| sub.compact);
         let mut frames = Vec::new();
         let mut n = 0u16;
+        // 回复里上一帧的节拍序号和时间戳：每个回复的第 1 帧是完整帧，单独解码
+        let mut prev = None;
         while let Some(f) = self.ring.front() {
-            if frames.len() + f.len() > limit {
+            let encoded = match prev {
+                Some(prev) if compact => self.compact_frame(f, prev),
+                _ => f.clone(),
+            };
+            if frames.len() + encoded.len() > limit {
                 break;
             }
-            frames.extend(self.ring.pop_front().unwrap_or_default());
+            prev = Some(frame_head(f));
+            frames.extend(encoded);
+            self.ring.pop_front();
             n += 1;
         }
+        // 剩余字节数按完整帧计，紧凑帧也一样
         let remaining: usize = self.ring.iter().map(Vec::len).sum();
         let mut out = vec![0x85, if self.active { OK } else { STATE }];
         out.extend_from_slice(&self.now_us().to_le_bytes());
@@ -978,6 +1087,31 @@ impl State {
         out.extend_from_slice(&self.skipped.to_le_bytes());
         out.extend_from_slice(&n.to_le_bytes());
         out.extend(frames);
+        out
+    }
+
+    /// 按紧凑帧编码缓冲里的一帧（协议文档 3.5 节），`prev` 是回复里上一帧的节拍序号和时间戳：
+    /// `h = (Δk << 1) | f`、Δt，有条目失败（f 为 1）时带位图，然后是值。
+    fn compact_frame(&self, frame: &[u8], prev: (u32, u64)) -> Vec<u8> {
+        let (k, stamp) = frame_head(frame);
+        let due = self.sub.as_ref().map_or(0, |sub| {
+            sub.items
+                .iter()
+                .filter(|s| (k as u64 + s.phase as u64).is_multiple_of(s.div as u64))
+                .count()
+        });
+        let bitmap = &frame[10..10 + due.div_ceil(8)];
+        let failed = bitmap.iter().any(|&b| b != 0);
+        let mut out = Vec::new();
+        put_varint(
+            &mut out,
+            u64::from(k.wrapping_sub(prev.0)) << 1 | u64::from(failed),
+        );
+        put_varint(&mut out, stamp.wrapping_sub(prev.1) & STAMP_MASK);
+        if failed {
+            out.extend_from_slice(bitmap);
+        }
+        out.extend_from_slice(&frame[10 + bitmap.len()..]);
         out
     }
 
@@ -1013,5 +1147,133 @@ impl State {
             }
             _ => vec![0x86, ARG],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unhex(s: &str) -> Vec<u8> {
+        let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// 协议文档 3.8 节 SUB_START 例子的两个条目，打开紧凑帧；缓冲里放 `frames`（完整帧）。
+    fn with_frames(frames: &[&str]) -> Sim {
+        let sim = Sim::new();
+        {
+            let mut st = sim.st();
+            let item = |id, size, base, div, phase| SubItem {
+                item: Item {
+                    ap: 0,
+                    id,
+                    size,
+                    base,
+                    derefs: Vec::new(),
+                    final_off: 0,
+                },
+                div,
+                phase,
+            };
+            st.sub = Some(Subscription {
+                items: vec![
+                    item(0x10, 4, 0x2000_0100, 1, 0),
+                    item(0x11, 2, 0x2000_0104, 10, 3),
+                ],
+                period_us: 1000,
+                drop_new: false,
+                compact: true,
+            });
+            st.ring = frames.iter().map(|f| unhex(f)).collect();
+        }
+        sim
+    }
+
+    /// SUB_READ 回复的剩余字节数、帧数和帧。
+    fn read(sim: &Sim, max_bytes: u16) -> (u32, u16, Vec<u8>) {
+        let mut req = vec![0x85];
+        req.extend_from_slice(&max_bytes.to_le_bytes());
+        let r = sim.st().sub_read(&req);
+        (u32_at(&r, 10), u16_at(&r, 22), r[24..].to_vec())
+    }
+
+    const K6: &str = "06000000 B0590F000000 00 07000000";
+    const K7: &str = "07000000 985D0F000000 00 08000000 3412";
+
+    /// 协议文档 3.8 节 SUB_READ 的紧凑帧例子，逐字节。
+    #[test]
+    fn compact_encoding_matches_the_document() {
+        let (remaining, n, frames) = read(&with_frames(&[K6, K7]), 1024);
+        assert_eq!((remaining, n), (0, 2));
+        assert_eq!(
+            frames,
+            unhex("06000000 B0590F000000 00 07000000 02 E807 08000000 3412")
+        );
+    }
+
+    /// 回复的第 1 帧总是完整帧，上一个回复的帧不算。
+    #[test]
+    fn every_reply_starts_with_a_whole_frame() {
+        let sim = with_frames(&[K6, K7]);
+        assert_eq!(read(&sim, 15), (17, 1, unhex(K6)));
+        assert_eq!(read(&sim, 1024), (0, 1, unhex(K7)));
+    }
+
+    /// 帧的总长按编码后的长度算，不超过 max_bytes；剩余字节数按完整帧计。
+    #[test]
+    fn limit_counts_encoded_bytes_and_remaining_counts_whole_frames() {
+        let (remaining, n, _) = read(&with_frames(&[K6, K7]), 23);
+        assert_eq!((remaining, n), (17, 1));
+        let (remaining, n, _) = read(&with_frames(&[K6, K7]), 24);
+        assert_eq!((remaining, n), (0, 2));
+    }
+
+    /// f 为 1 时带位图；跳拍时 Δk 大于 1；时间戳按 48 位回绕。
+    #[test]
+    fn compact_failure_gap_and_wrap() {
+        let sim = with_frames(&[
+            "06000000 FBFFFFFFFFFF 00 07000000",
+            // k=7，两个条目到期，第 2 个失败
+            "07000000 030000000000 02 08000000 0000",
+            // k=17，Δk 10，Δt 11000（F8 55）
+            "11000000 FB2A00000000 00 09000000 3412",
+        ]);
+        let (_, n, frames) = read(&sim, 1024);
+        assert_eq!(n, 3);
+        assert_eq!(
+            frames,
+            unhex(
+                "06000000 FBFFFFFFFFFF 00 07000000
+                 03 08 02 08000000 0000
+                 14 F855 09000000 3412"
+            )
+        );
+    }
+
+    /// 协议文档 3.4 节：功能位没有 bit6 时紧凑帧标志回 0x01，flags 的保留位也回 0x01；INFO 报的
+    /// 功能位就是设的值。
+    #[test]
+    fn features_gate_compact_frames() {
+        let sim = Sim::new();
+        let mut link = sim.link();
+        link.send(&[0x02, 0x01]).unwrap();
+        link.recv(Duration::ZERO).unwrap();
+        sim.set_features(0x1F);
+        let mut start = unhex("83 E8030000 02 0100 00 1000 04 00010020 00 0000 0100 0000");
+        link.send(&start).unwrap();
+        assert_eq!(link.recv(Duration::ZERO).unwrap(), [0x83, ARG]);
+        link.send(&[0x80]).unwrap();
+        assert_eq!(u32_at(&link.recv(Duration::ZERO).unwrap(), 3), 0x1F);
+        sim.set_features(FEATURES);
+        start[5] = 4;
+        link.send(&start).unwrap();
+        assert_eq!(link.recv(Duration::ZERO).unwrap(), [0x83, ARG]);
+        start[5] = 2;
+        link.send(&start).unwrap();
+        assert_eq!(link.recv(Duration::ZERO).unwrap(), [0x83, OK]);
     }
 }
