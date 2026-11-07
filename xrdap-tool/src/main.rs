@@ -18,8 +18,8 @@ fn main() {
     }
 
     // 第一次 Ctrl-C 让命令正常结束：watch 和 share 停止采样、断开客户端，其他命令跑完手上
-    // 的请求（都有超时），所有命令的探针连接被丢弃时发 DAP_Disconnect，探针的会话主人才
-    // 会放手；第二次直接退出。
+    // 的请求（都有超时），所有命令的探针连接被丢弃时发 DAP_Disconnect，探针才知道连接结束；
+    // 第二次直接退出。
     let stop = Arc::new(AtomicBool::new(false));
     let flag = stop.clone();
     let _ = ctrlc::set_handler(move || {

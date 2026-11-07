@@ -56,9 +56,10 @@ pub const STATUS_RESOURCE: u8 = 0x03;
 ///
 /// Overall status: no target connected.
 pub const STATUS_NO_TARGET: u8 = 0x04;
-/// 整体状态：另一个传输是会话主人（协议文档 3.1 节）。
+/// 整体状态：忙。保留的值，当前固件不再发出（协议文档 3.2 节）。
 ///
-/// Overall status: another transport owns the probe (protocol section 3.1).
+/// Overall status: busy. A reserved value that current firmware no longer sends (protocol
+/// section 3.2).
 pub const STATUS_BUSY: u8 = 0x05;
 
 /// 本库实现的厂商扩展协议版本；INFO 报告别的版本时不使用扩展。
@@ -66,11 +67,6 @@ pub const STATUS_BUSY: u8 = 0x05;
 /// The vendor extension protocol version this library implements; with any other version
 /// reported by INFO the extension is not used.
 pub const PROTOCOL_VERSION: u8 = 2;
-
-/// 探针被另一条连接占用时给用户看的说明。
-///
-/// The message shown when another connection owns the probe.
-pub const BUSY_TEXT: &str = "探针正被另一条连接使用";
 
 /// SUB_CTRL 的 op：停止采样。
 ///
@@ -115,7 +111,7 @@ pub fn status_text(status: u8) -> &'static str {
             "资源不足（条目超过 32 个、回复放不进剩余空间、用到超过 8 个 AP，或所有条目都到期的一帧放不进采样缓冲）"
         }
         STATUS_NO_TARGET => "没有连接目标（这次会话还没有 DAP_Connect，或读 AP 的 CSW 失败）",
-        STATUS_BUSY => BUSY_TEXT,
+        STATUS_BUSY => "探针忙",
         _ => "未定义的状态",
     }
 }
@@ -275,15 +271,12 @@ fn check_header(resp: &[u8], cmd: u8) -> Result<u8> {
     Ok(resp[1])
 }
 
-/// 非 0 的整体状态对应的错误；另一条连接占用探针时是 [`Error::Busy`]。
+/// 非 0 的整体状态对应的错误。
 fn status_error(cmd: u8, status: u8) -> Error {
-    match status {
-        STATUS_BUSY => Error::Busy(BUSY_TEXT.into()),
-        status => Error::Status {
-            cmd,
-            status,
-            text: status_text(status),
-        },
+    Error::Status {
+        cmd,
+        status,
+        text: status_text(status),
     }
 }
 
@@ -814,14 +807,14 @@ mod tests {
     #[test]
     fn info_example() {
         let info = parse_info(&unhex(
-            "80 00 02 1F000000 2000 08 00400000 40420F0000000000",
+            "80 00 02 7F000000 2000 08 00400000 40420F0000000000",
         ))
         .unwrap();
         assert_eq!(
             info,
             VendorInfo {
                 version: 2,
-                features: 0x1F,
+                features: 0x7F,
                 max_items: 32,
                 max_depth: 8,
                 ring_bytes: 16384,
@@ -836,19 +829,16 @@ mod tests {
         assert!(v1.to_string().contains("协议版本 1"), "{v1}");
     }
 
-    /// 协议文档 3.2 和 3.8：另一个传输占着探针时厂商命令回 `命令 05`。
+    /// 协议文档 3.2：整体状态不为 0 时响应只有两个字节，转成错误；0x05 是保留的值。
     #[test]
-    fn busy_status() {
+    fn overall_status_errors() {
         let items = [Item::direct(1, 4, 0x2000_0000)];
-        let e = parse_read(&unhex("81 05"), &items).unwrap_err();
-        assert!(matches!(&e, Error::Busy(m) if m == BUSY_TEXT), "{e}");
-        assert!(matches!(
-            parse_read(&unhex("81 03"), &items),
-            Err(Error::Status {
-                status: STATUS_RESOURCE,
-                ..
-            })
-        ));
+        for (resp, want) in [("81 03", STATUS_RESOURCE), ("81 05", STATUS_BUSY)] {
+            assert!(matches!(
+                parse_read(&unhex(resp), &items),
+                Err(Error::Status { status, .. }) if status == want
+            ));
+        }
     }
 
     #[test]
