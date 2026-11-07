@@ -3,7 +3,7 @@
 //! 虚拟设备：VID:PID 1D50:6199、bcdDevice 0x0200（与探针自身 USB 设备的 bcdDevice 不同；
 //! Windows 按 VID、PID、bcdDevice 缓存描述符），一个厂商类接口（接口名 `CMSIS-DAP v2`），
 //! Bulk OUT 0x01、Bulk IN 0x81，高速 512 字节；BOS 里带 MS OS 2.0 描述符，Windows 自动绑定
-//! WinUSB。设备模型与 XRDAP-ESP 的 USB/IP 设备相同；描述符的字节以 XRDAP-Core 协议文档第 6 节为准
+//! WinUSB。描述符的字节以 XRDAP-Core 协议文档第 6 节为准
 //! <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>。
 //!
 //! 协议：`OP_REQ_DEVLIST`、`OP_REQ_IMPORT` 之后是 `USBIP_CMD_SUBMIT`/`RET_SUBMIT`、
@@ -15,8 +15,8 @@
 //! the probe's own USB device; Windows caches descriptors by VID, PID and bcdDevice), one
 //! vendor-class interface (interface name `CMSIS-DAP v2`), bulk OUT 0x01 and bulk IN 0x81, high
 //! speed with 512-byte packets; the BOS carries an MS OS 2.0 descriptor so that Windows binds
-//! WinUSB automatically. The device model is the same as the USB/IP device of XRDAP-ESP; the
-//! descriptor bytes follow section 6 of the XRDAP-Core protocol document.
+//! WinUSB automatically. The descriptor bytes follow section 6 of the XRDAP-Core protocol
+//! document.
 //!
 //! Protocol: `OP_REQ_DEVLIST` and `OP_REQ_IMPORT`, followed by `USBIP_CMD_SUBMIT`/`RET_SUBMIT`
 //! and `CMD_UNLINK`/`RET_UNLINK`, with big-endian fields. See the Linux kernel document

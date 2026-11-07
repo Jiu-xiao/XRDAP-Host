@@ -1,9 +1,10 @@
 //! 厂商命令 0x86：探针 Wi-Fi 配置的查询、保存、清除（协议文档 3.7 节）。只有 XRDAP-ESP 支持，
-//! INFO 功能位 bit4 为 1 时才有。执行见 [`Probe::wifi_status`](crate::dap::Probe::wifi_status)
-//! 等方法。
+//! INFO 功能位 bit4 为 1 时才有。控制口上 op 和载荷相同（协议文档 3.7.1 节）。执行见
+//! [`Probe::wifi_status`](crate::dap::Probe::wifi_status) 等方法。
 //!
 //! Vendor command 0x86: query, save and clear the probe's Wi-Fi credentials (protocol 3.7).
-//! XRDAP-ESP only, present when INFO feature bit 4 is set.
+//! XRDAP-ESP only, present when INFO feature bit 4 is set. The control port takes the same op and
+//! payload (protocol 3.7.1).
 
 use std::net::Ipv4Addr;
 
