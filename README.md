@@ -2,7 +2,7 @@
 
 [English](README.en.md)
 
-XR-DAP 系列调试探针（[XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP)、[XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8)、[XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3)）的电脑端工具 `xrdap`，支持 Windows 和 Linux。工具是一个可执行文件：双击或不带参数运行时打开图形界面，带命令运行时作为命令行工具。
+XR-DAP 系列调试探针（[XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP)、[XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8)、[XRDAP-CH32](https://github.com/Jiu-xiao/XRDAP-CH32)）的电脑端工具 `xrdap`，支持 Windows 和 Linux。工具是一个可执行文件：双击或不带参数运行时打开图形界面，带命令运行时作为命令行工具。
 
 它提供以下功能：
 
