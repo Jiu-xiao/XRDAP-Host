@@ -9,15 +9,19 @@
 //!
 //! 每条链路（[`Sim::link`] 的每一个、TCP 的每个客户端）是一个传输。探针不仲裁，所有命令谁发都
 //! 执行。DAP_Connect 记下它来自哪个传输，这个连接随 DAP_Disconnect（任何传输发的）或那个传输
-//! 断开而作废，采样随之停止（协议文档 3.1 节）。
+//! 断开而作废。采样期间只放行 DAP_Info、DAP_HostStatus 和厂商命令，DAP_Disconnect 也回 `FF`、不
+//! 执行，所以采样只在 SUB_CTRL 停止、连接所在的传输断开、或开始采样的传输又发 DAP_Connect 时结束
+//! （协议文档 3.1 节）。
 //!
 //! 目标是一个 Cortex-M：Flash 0x08000000 起 128 KiB（只读），RAM 0x20000000 起 64 KiB，
 //! 别的地址访问出错（SWD FAULT）；DHCSR、DEMCR、AIRCR、CPUID 按 ARMv7-M 架构手册 C1.6 的
 //! 规则响应。采样按电脑的单调时钟走，收到命令时补齐到期的帧。
 //!
 //! Test-only XR-DAP probe simulator. Its behaviour follows the CMSIS-DAP specification and the
-//! XRDAP-Core protocol document only, not host or firmware code. The target is a Cortex-M with
-//! read-only flash at 0x08000000 and RAM at 0x20000000; other addresses fault.
+//! XRDAP-Core protocol document only, not host or firmware code. While sampling, DAP_Disconnect
+//! gets `FF` and does not run, so sampling ends only on SUB_CTRL stop, the loss of the connection's
+//! link, or a DAP_Connect from the link that started it. The target is a Cortex-M with read-only
+//! flash at 0x08000000 and RAM at 0x20000000; other addresses fault.
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
