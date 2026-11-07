@@ -256,13 +256,14 @@ impl Probe {
         self.packet_size
     }
 
-    /// Wi-Fi 请求：链路有控制口（USB，固件 0.6 起）就走控制口，否则（串口、TCP、旧固件）走 DAP 命令
-    /// 0x86。两条路的应答内容相同，只是控制口的应答以 op 开头，这里改回 0x86 让解析统一。
+    /// Wi-Fi 请求：INFO 报了控制口就走控制口，否则走 DAP 命令 0x86；USB 上 SEND 被拒（例如请求
+    /// 超过 EP0 的 OUT 缓冲）时也走 0x86。两条路的应答内容相同，只是控制口的应答以 op 开头，这里
+    /// 改回 0x86 让解析统一。
     ///
-    /// A Wi-Fi request: through the control port when the link has one (USB, firmware 0.6 on),
-    /// otherwise (serial, TCP, older firmware) through DAP command 0x86. Both answers carry the
-    /// same content; the control port's answer starts with the op, rewritten to 0x86 here so
-    /// parsing is shared.
+    /// A Wi-Fi request: through the control port when INFO reports one, otherwise through DAP
+    /// command 0x86; also through 0x86 when USB refuses the SEND (for example a request longer
+    /// than the EP0 OUT buffer). Both answers carry the same content; the control port's answer
+    /// starts with the op, rewritten to 0x86 here so parsing is shared.
     fn wifi_xfer(&mut self, dap_request: &[u8]) -> Result<Vec<u8>> {
         // 只有 INFO 报了控制口(功能位 5)的固件才试:旧固件收到控制帧可能关连接或不应答 /
         // Only a firmware whose INFO reports the control port (feature bit 5) is tried: an older
@@ -744,25 +745,27 @@ impl Probe {
         Ok((vendor::parse_sub_read(&resp)?, before, after))
     }
 
-    /// 0x86：查询 Wi-Fi 状态。
+    /// 查询 Wi-Fi 状态（控制口或 0x86）。
     ///
-    /// 0x86: query the Wi-Fi state.
+    /// Query the Wi-Fi state (control port or 0x86).
     pub fn wifi_status(&mut self) -> Result<WifiStatus> {
         wifi::parse_status(&self.wifi_xfer(&wifi::status_request())?)
     }
 
-    /// 0x86：保存热点参数。成功后探针重启并连接新热点，这个连接随之断开。经 TCP 连接时密码以明文经过网络（DAP 链路不加密）。
+    /// 保存热点参数（控制口或 0x86）。成功后探针重启并连接新热点，这个连接随之断开。经 TCP 连接时
+    /// 密码以明文经过网络（DAP 链路不加密）。
     ///
-    /// 0x86: save credentials. On success the probe restarts and connects to the new hotspot,
-    /// and this connection is lost. Over TCP the password crosses the network in plaintext
-    /// (the DAP link has no encryption).
+    /// Save credentials (control port or 0x86). On success the probe restarts and connects to the
+    /// new hotspot, and this connection is lost. Over TCP the password crosses the network in
+    /// plaintext (the DAP link has no encryption).
     pub fn wifi_set(&mut self, ssid: &str, password: &str) -> Result<()> {
         wifi::parse_reply(&self.wifi_xfer(&wifi::set_request(ssid, password)?)?)
     }
 
-    /// 0x86：清除热点参数。成功后探针重启，不再连接 Wi-Fi。
+    /// 清除热点参数（控制口或 0x86）。成功后探针重启，不再连接 Wi-Fi。
     ///
-    /// 0x86: clear credentials. On success the probe restarts and no longer joins a Wi-Fi network.
+    /// Clear credentials (control port or 0x86). On success the probe restarts and no longer
+    /// joins a Wi-Fi network.
     pub fn wifi_clear(&mut self) -> Result<()> {
         wifi::parse_reply(&self.wifi_xfer(&wifi::clear_request())?)
     }

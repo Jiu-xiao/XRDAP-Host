@@ -331,7 +331,7 @@ fn no_command_means_gui() {
     assert!(cli.cmd.is_none());
 }
 
-/// 用户决定（C4）：每个子命令只收自己的选项，用不到的选项是参数错误，不再悄悄忽略。
+/// 每个子命令只收自己的选项，用不到的选项是参数错误。
 #[test]
 fn options_belong_to_their_commands() {
     let parse = |args: &[&str]| {
@@ -374,7 +374,7 @@ fn options_belong_to_their_commands() {
     .is_ok());
 }
 
-/// 用户决定（C4）：只在要用的命令加载 --elf；info、halt 这些命令不看 ELF。
+/// 只在要用的命令加载 --elf；info、halt 这些命令不看 ELF。
 #[test]
 fn commands_without_symbols_ignore_no_elf() {
     let (sim, host) = sim();
