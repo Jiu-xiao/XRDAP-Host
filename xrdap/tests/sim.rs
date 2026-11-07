@@ -672,13 +672,15 @@ fn disconnect_from_any_link_ends_the_connection() {
 }
 
 /// 协议文档 3.1：采样期间，开始采样的那条链路发来 DAP_Connect 是它的上位机回来了，探针结束
-/// 旧的连接和采样并重新连接；缓冲里的帧留着。
+/// 旧的连接和采样并重新连接；缓冲里的帧留着。同一条链路的 DAP_Disconnect 回 `FF`，不结束采样。
 #[test]
 fn connect_from_the_sampling_link_restarts() {
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let t = targets(&mut syms, &["counter"]);
     probe.sub_start(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
+    assert_eq!(probe.xfer(&[0x03]).unwrap(), [0xFF]);
+    assert!(sim.is_sampling());
     probe.connect(4_000_000).unwrap();
     assert!(!sim.is_sampling());
     let (r, _, _) = probe.sub_read(512).unwrap();
