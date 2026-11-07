@@ -18,7 +18,7 @@ jobs:
           - os: windows-latest
             exe: .exe
             suffix: windows-x86_64.exe
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             exe: ''
             suffix: linux-x86_64
     runs-on: ${{ matrix.os }}
