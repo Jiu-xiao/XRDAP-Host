@@ -8,7 +8,7 @@ Host-side Rust library for XRDAP probes: open a probe (USB, serial, TCP), read a
 
 ```toml
 [dependencies]
-xrdap = { git = "https://github.com/Jiu-xiao/XRDAP-Host", branch = "main" }
+xrdap = { git = "https://github.com/Jiu-xiao/XRDAP-Host", tag = "v0.6.0" }
 ```
 
 | feature | Default | Content |
@@ -43,7 +43,7 @@ fn main() -> xrdap::Result<()> {
 }
 ```
 
-`open` is the only way to open a probe; the syntax is in the `addr` module. Automatic selection and serial-number lookup look at USB, the LAN and Espressif USB ports recognised from their USB descriptor, without opening other serial ports; serial ports are opened with DTR and RTS deasserted. `Probe::connect` queries INFO first, requires vendor extension protocol version 2, then connects the target; when another connection owns the probe it returns `Error::Busy` ("探针正被另一条连接使用"). The host stops only sampling it started. `Resolver::resolve` accepts forms such as `state.speed`, `motor[1].pid->out`, `*ptr`, `(uint32_t***)p` and `0x20000010:u32`; `resolve_all` expands structs and arrays into members. A failed access returns `Error::Item` with the item status and the variable name. Full example: `read_write`.
+`open` is the only way to open a probe; the syntax is in the `addr` module. Automatic selection and serial-number lookup look at USB, the LAN and Espressif USB ports recognised from their USB descriptor, without opening other serial ports; serial ports are opened with DTR and RTS deasserted. `Probe::connect` queries INFO first, requires vendor extension protocol version 2, then connects the target; while another connection is sampling it returns `Error::Busy`, and sampling this connection started and left running is ended by the probe, which connects afresh. The probe does not arbitrate; keeping to one connection at a time is up to the user. `Resolver::resolve` accepts forms such as `state.speed`, `motor[1].pid->out`, `*ptr`, `(uint32_t***)p` and `0x20000010:u32`; `resolve_all` expands structs and arrays into members. A failed access returns `Error::Item` with the item status and the variable name. Full example: `read_write`.
 
 ### Sampling on the probe
 
@@ -71,7 +71,7 @@ for _ in 0..100 {
 sampler.stop()?;
 ```
 
-Each frame carries the probe timestamp and one value per variable (`None` when not due, `Some(None)` when the read failed). `div` samples slow variables every few ticks; divided variables with `phase` None are staggered by `Sampler::start` to even out the bytes read per tick. With more variables than the item limit reported in the probe's INFO, `Sampler::start` returns an error before sending SUB_START. The probe does not estimate timing; `Stats::lag` judges from skipped ticks, dropped frames and buffer fill whether sampling keeps up, and `Lag::advice` gives the advice. When sampling stops on the probe (for example because the session ended), `sampling_on_probe()` is false and the remaining frames can still be read. Full example: `sample`.
+Each frame carries the probe timestamp and one value per variable (`None` when not due, `Some(None)` when the read failed). `div` samples slow variables every few ticks; divided variables with `phase` None are staggered by `Sampler::start` to even out the bytes read per tick. With more variables than the item limit reported in the probe's INFO, `Sampler::start` returns an error before sending SUB_START. When the probe's INFO reports compact frames, `Sampler` uses them, so the same link can read more frames. The probe does not estimate timing; `Stats::lag` judges from skipped ticks, dropped frames and buffer fill whether sampling keeps up, and `Lag::advice` gives the advice. When sampling stops on the probe (for example because the session ended), `sampling_on_probe()` is false and the remaining frames can still be read. Full example: `sample`.
 
 ### Sharing the probe with Keil, pyOCD, probe-rs, OpenOCD
 
@@ -122,7 +122,7 @@ println!("{}\n{}", wifi.describe(), wifi.history());
 probe.wifi_set("SSID", "PASSWORD")?; // the probe restarts afterwards
 ```
 
-`cortex::reset` changes DEMCR.VC_CORERESET for the reset only and restores DEMCR at the end, on success or failure. `wifi_status` also reports what last cleared the credentials, the reset reason of this boot and whether NVS was rebuilt; `wifi_clear` sends the clear request with its confirm byte, `86 02 A5`. Full example: `wifi`.
+`cortex::reset` changes DEMCR.VC_CORERESET for the reset only and restores DEMCR at the end, on success or failure. `wifi_status` also reports what last cleared the credentials, the reset reason of this boot and whether NVS was rebuilt; `wifi_clear` sends the clear request with its confirm byte. These operations go through the control port when the probe reports one, otherwise through DAP command 0x86. Full example: `wifi`.
 
 ### Testing
 
@@ -142,7 +142,7 @@ The library tests need no hardware. The workspace crate `xrdap-sim` simulates th
 | `watch`, `csv` | Probe-side sampling, CSV records |
 | `cortex` | Core state, halt, resume, reset |
 | `share` | Share the probe as a USB/IP device or OpenOCD TCP backend |
-| `raw` | Protocol layer: encoding and decoding of vendor commands 0x80 to 0x86, serial and TCP framing, three transports. It follows the protocol document and its interface is not kept stable |
+| `raw` | Protocol layer: encoding and decoding of vendor commands 0x80 to 0x86, serial and TCP framing, three transports and their control ports. It follows the protocol document and its interface is not kept stable |
 
 | Example | Purpose |
 |---|---|

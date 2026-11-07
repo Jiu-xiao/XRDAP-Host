@@ -2,7 +2,7 @@
 
 [中文](README.md)
 
-`xrdap` is the host tool for the [XRDAP](https://github.com/Jiu-xiao/XRDAP-ESP) debug probes, for Windows and Linux. It is a single executable: double-clicking it or running it without arguments opens the GUI, and running it with a command works as a command-line tool.
+`xrdap` is the host tool for the XR-DAP family of debug probes ([XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP), [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8), [XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3)), for Windows and Linux. It is a single executable: double-clicking it or running it without arguments opens the GUI, and running it with a command works as a command-line tool.
 
 It provides:
 
@@ -46,7 +46,7 @@ xrdap list --ask-serial
 | `192.0.2.10`, `192.0.2.10:3241`, `xrdap-aabbcc.local`, `tcp:<host>` | TCP (the probe's Wi-Fi, or `xrdap share openocd`) |
 | `XRobot-XRDAP-AABBCCDDEEFF`, `DDEEFF` | Full serial number or its last digits |
 
-One connection (USB, serial or TCP) uses the probe at a time; commands from another connection get a busy reply, which `xrdap` shows as 探针正被另一条连接使用 (the probe is used by another connection), while DAP_Info is still answered. `xrdap` stops only sampling it started. The probe firmware's vendor extension must be protocol version 2 (see the protocol document); a version 1 probe needs a firmware update first.
+The probe uses one connection (USB, serial or TCP) at a time, and keeping to that is up to the user: the probe does not arbitrate, and commands from two connections at once can disturb the SWD state. While another connection is sampling, a command that connects the target gets `FF` and `xrdap` reports 探针正在采样 (the probe is sampling); when the connection that started sampling connects the target again, the probe ends that sampling. The probe firmware's vendor extension must be protocol version 2 (see the protocol document); a version 1 probe needs a firmware update first.
 
 Serial ports are opened with DTR and RTS both deasserted, as Espressif's idf_monitor does; the auto-download circuit of ESP32 boards drives EN and GPIO0 from these lines. A probe behind a USB-serial chip is selected by its port name.
 
@@ -87,7 +87,7 @@ Variable syntax: `counter`, `state.speed`, `motor[1].pid->out`, `*ptr`, `p->q->x
 
 | Probe connection | Method |
 |---|---|
-| ESP32-S3 on USB | The probe is a USB CMSIS-DAP probe; use it directly |
+| ESP32-S3, ESP32-S2, STM32F103, CH32V307 or CH32V305 probe on USB | The probe is a USB CMSIS-DAP probe; use it directly |
 | Probe on a serial port (ESP32-C3, classic ESP32 and others) | `xrdap share usbip`, then attach over USB/IP, see below |
 | Wi-Fi | OpenOCD connects to the probe's own IP (`cmsis-dap tcp host <probe IP>`, port 3241) without `xrdap share`; Keil, pyOCD and others use `xrdap share usbip -p <probe IP or host name>` to make it a USB probe and attach that. The probe carries no USB device model and no longer serves USB/IP itself, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
 
@@ -136,7 +136,7 @@ xrdap wifi set -p COM3 SSID --password-stdin < password.txt
 xrdap wifi clear -p COM3
 ```
 
-The probe joins an existing hotspot as a Wi-Fi client; it does not open one. `status` shows the saved access point, whether it is connected, the IP address and the signal strength, plus what last cleared the credentials (board button, serial console, 0x86 clear or NVS repair), the reset reason of this boot and whether NVS was rebuilt at this boot. `set` saves the SSID and password (omit the password for an open network) and `clear` removes them (the request carries a confirm byte). `--password-stdin` reads one line from standard input as the password, keeping it out of the shell history and the process list; over TCP (Wi-Fi) the password crosses the LAN in plaintext. After `set` or `clear` the probe restarts in about 0.5 s and the connection is lost. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
+Wi-Fi is a feature of XRDAP-ESP. The probe joins an existing hotspot as a Wi-Fi client; it does not open one. `status` shows the saved access point, whether it is connected, the IP address and the signal strength, plus what last cleared the credentials (board button, serial console, 0x86 clear or NVS repair), the reset reason of this boot and whether NVS was rebuilt at this boot. `set` saves the SSID and password (omit the password for an open network) and `clear` removes them (the request carries a confirm byte). `--password-stdin` reads one line from standard input as the password, keeping it out of the shell history and the process list; over TCP (Wi-Fi) the password crosses the LAN in plaintext. After `set` or `clear` the probe restarts in about 0.5 s and the connection is lost. Once configured, `xrdap list` shows the probe's LAN address (`xrdap-xxxxxx.local`), and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
 
 In the GUI, after connecting, expand Wi-Fi at the bottom of the connection area: it shows the current state, and 保存并重启 (save and restart) or 清除 (clear) apply the SSID and password entered.
 
@@ -207,7 +207,7 @@ This produces `target/release/xrdap`. On Linux install `libgtk-3-dev libxkbcommo
 cargo test --workspace
 ```
 
-The tests need no hardware. `xrdap-sim` simulates the probe and target from the CMSIS-DAP specification and the protocol document and serves the probe's TCP framing; the tests cover framing, vendor commands, sampling, DWARF parsing, every command and sharing. CI also checks `cargo fmt` and `cargo clippy`.
+The tests need no hardware. `xrdap-sim` simulates the probe and target from the CMSIS-DAP specification and the protocol document and serves the probe's TCP framing; the tests cover framing, vendor commands, the control port, sampling and compact frames, DWARF parsing, every command and sharing. CI also checks `cargo fmt` and `cargo clippy`.
 
 ## License
 
