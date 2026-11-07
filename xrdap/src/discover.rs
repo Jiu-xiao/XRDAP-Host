@@ -289,7 +289,11 @@ pub fn serial_ports() -> Vec<SerialPortInfo> {
 ///
 /// Information on one port; [`Chip::Other`] when it is not in [`serial_ports`].
 pub(crate) fn serial_port(port: &str) -> SerialPortInfo {
-    serial_ports()
+    port_in(serial_ports(), port)
+}
+
+fn port_in(ports: Vec<SerialPortInfo>, port: &str) -> SerialPortInfo {
+    ports
         .into_iter()
         .find(|p| p.port.eq_ignore_ascii_case(port))
         .unwrap_or(SerialPortInfo {
@@ -482,7 +486,13 @@ mod tests {
 
     #[test]
     fn unknown_serial_port_tries_both_firmware_bauds() {
-        let p = serial_port("XRDAP-NO-SUCH-PORT");
+        let known = SerialPortInfo {
+            port: "COM3".into(),
+            chip: Chip::WchFast,
+            usb_serial: None,
+        };
+        assert_eq!(port_in(vec![known.clone()], "com3").chip, Chip::WchFast);
+        let p = port_in(vec![known], "COM4");
         assert_eq!(p.chip, Chip::Other);
         assert_eq!(p.chip.bauds(), &[DEFAULT_BAUD, SAFE_BAUD]);
     }
