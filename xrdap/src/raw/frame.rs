@@ -1,23 +1,78 @@
-//! 链路帧：串口上的 libxr Topic 帧和 TCP 上的 `"DAP\0"` 帧。格式见 docs/protocol.md 第 1、2 节。
+//! 链路帧：串口上的 libxr Topic 帧和 TCP 上的 `"DAP\0"` 帧。格式见协议文档第 1、2 节：
+//! <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>
+//!
+//! Link frames: the libxr topic frame on serial and the `"DAP\0"` frame on TCP. Formats:
+//! sections 1 and 2 of the protocol document:
+//! <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>
 
 use crate::bytes::le_u32;
 
+/// TCP 帧头开头的 4 字节标记 `"DAP\0"`。
+///
+/// The 4-byte marker `"DAP\0"` at the start of a TCP frame header.
 pub const TCP_MAGIC: &[u8; 4] = b"DAP\0";
+/// TCP 帧头的字节数。
+///
+/// Size of the TCP frame header in bytes.
 pub const TCP_HEADER_LEN: usize = 8;
+/// TCP 帧类型：请求。
+///
+/// TCP frame type: request.
 pub const TCP_TYPE_REQUEST: u8 = 1;
+/// TCP 帧类型：响应。
+///
+/// TCP frame type: response.
 pub const TCP_TYPE_RESPONSE: u8 = 2;
+/// TCP 帧类型:控制请求。
+///
+/// TCP frame type: control request.
+pub const TCP_TYPE_CONTROL_REQUEST: u8 = 3;
+/// TCP 帧类型:控制应答。
+///
+/// TCP frame type: control answer.
+pub const TCP_TYPE_CONTROL_RESPONSE: u8 = 4;
 
+/// 请求帧的 topic 名。
+///
+/// Topic name of request frames.
 pub const REQ_TOPIC: &[u8] = b"dap_req";
+/// 响应帧的 topic 名。
+///
+/// Topic name of response frames.
 pub const RESP_TOPIC: &[u8] = b"dap_resp";
+/// 控制请求的 topic 名(探针自己的设置,不是 DAP 命令)。
+///
+/// Name of the control request topic (the probe's own settings, not a DAP command).
+pub const CTRL_REQ_TOPIC: &[u8] = b"ctrl_req";
+/// 控制响应的 topic 名。
+///
+/// Name of the control response topic.
+pub const CTRL_RESP_TOPIC: &[u8] = b"ctrl_resp";
 
+/// Topic 帧的起始字节。
+///
+/// The first byte of a topic frame.
 pub const PACKET_PREFIX: u8 = 0x5A;
+/// Topic 帧头里的版本号。
+///
+/// The version number in a topic frame header.
 pub const PACKET_VERSION: u8 = 1;
+/// Topic 帧头的字节数。
+///
+/// Size of the topic frame header in bytes.
 pub const HEADER_LEN: usize = 16;
 /// 帧头 16 字节加尾 CRC8 1 字节。
+///
+/// The 16-byte header plus the 1-byte trailing CRC8.
 pub const FRAME_OVERHEAD: usize = 17;
+/// 解析时接受的 Topic 载荷上限，字节。
+///
+/// Largest topic payload accepted when parsing, in bytes.
 pub const MAX_TOPIC_PAYLOAD: usize = 2 + 4096;
 
 /// libxr 的 CRC8（多项式 0x8C 反射，初值 0xFF）。
+///
+/// The libxr CRC8 (reflected polynomial 0x8C, initial value 0xFF).
 pub fn crc8(data: &[u8]) -> u8 {
     let mut crc = 0xFFu8;
     for &byte in data {
@@ -34,6 +89,9 @@ pub fn crc8(data: &[u8]) -> u8 {
 }
 
 /// libxr 的 CRC32（反射，初值 0xFFFFFFFF，最后不取反），用来算 topic 名的键。
+///
+/// The libxr CRC32 (reflected, initial value 0xFFFFFFFF, final value not inverted), used as
+/// the key of a topic name.
 pub fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &byte in data {
@@ -50,6 +108,8 @@ pub fn crc32(data: &[u8]) -> u32 {
 }
 
 /// 组一个 Topic 帧：16 字节头 + 载荷 + 1 字节尾 CRC8。
+///
+/// Build a topic frame: 16-byte header, payload and a 1-byte trailing CRC8.
 pub fn build_frame(topic_crc: u32, payload: &[u8], timestamp_us: u64) -> Vec<u8> {
     let mut frame = vec![0u8; HEADER_LEN + payload.len() + 1];
     frame[0] = PACKET_PREFIX;
@@ -64,6 +124,8 @@ pub fn build_frame(topic_crc: u32, payload: &[u8], timestamp_us: u64) -> Vec<u8>
 }
 
 /// 串口上的 Topic 载荷是 `u16 长度 + DAP 包`。
+///
+/// The topic payload on serial is a `u16` length followed by the DAP packet.
 pub fn serial_payload(request: &[u8]) -> Vec<u8> {
     let mut payload = Vec::with_capacity(2 + request.len());
     payload.extend_from_slice(&(request.len() as u16).to_le_bytes());
@@ -71,12 +133,41 @@ pub fn serial_payload(request: &[u8]) -> Vec<u8> {
     payload
 }
 
-/// 一个完整的串口请求帧（topic `dap_req`）。
+/// USB 转串口的 Bulk 包长。整包的数据要等下一个短包才到达对方程序，所以帧长正好是它的
+/// 整数倍时在帧后补一个 0x00（协议文档第 1 节）；接收方跳过 0x5A 之前的字节。
+///
+/// Bulk packet size of USB-serial bridges. Data that fills whole packets reaches the other
+/// program only with the next short packet, so a frame whose length is a multiple of it is
+/// followed by one 0x00 (protocol section 1); receivers skip bytes before 0x5A.
+const PAD_EVERY: usize = 64;
+
+/// 一个完整的串口请求帧（topic `dap_req`），长度是 64 的整数倍时后面补一个 0x00。
+///
+/// A complete serial request frame (topic `dap_req`), followed by one 0x00 when its length is
+/// a multiple of 64.
 pub fn serial_request_frame(request: &[u8]) -> Vec<u8> {
-    build_frame(crc32(REQ_TOPIC), &serial_payload(request), 0)
+    let mut frame = build_frame(crc32(REQ_TOPIC), &serial_payload(request), 0);
+    if frame.len().is_multiple_of(PAD_EVERY) {
+        frame.push(0x00);
+    }
+    frame
+}
+
+/// 一个完整的串口控制请求帧(topic `ctrl_req`),补字节的规则同 [`serial_request_frame`]。
+///
+/// A complete serial control request frame (topic `ctrl_req`), padded as
+/// [`serial_request_frame`] is.
+pub fn serial_control_frame(request: &[u8]) -> Vec<u8> {
+    let mut frame = build_frame(crc32(CTRL_REQ_TOPIC), &serial_payload(request), 0);
+    if frame.len().is_multiple_of(PAD_EVERY) {
+        frame.push(0x00);
+    }
+    frame
 }
 
 /// 从 Topic 载荷里取出 DAP 包；长度字段不合理时返回 None。
+///
+/// Extract the DAP packet from a topic payload; None when the length field is not plausible.
 pub fn dap_from_payload(payload: &[u8]) -> Option<&[u8]> {
     if payload.len() < 2 {
         return None;
@@ -88,14 +179,22 @@ pub fn dap_from_payload(payload: &[u8]) -> Option<&[u8]> {
     Some(&payload[2..2 + len])
 }
 
-/// 从字节流里切出 Topic 帧；头或尾 CRC 错时丢一个字节重新找前缀。
-/// 只返回 topic 与 `topic_crc` 相同的帧的载荷。
+/// 从字节流里切出 Topic 帧；帧头无效（版本不对、载荷长度超限或头 CRC 错）或尾 CRC 错时
+/// 丢一个字节重新找前缀。只返回 topic 与 `topic_crc` 相同的帧的载荷。
+///
+/// Cut topic frames out of a byte stream. When the header is invalid (wrong version, payload
+/// length over the limit or header CRC mismatch) or the trailing CRC mismatches, one byte is
+/// dropped and the search for the prefix restarts. Only payloads of frames whose topic equals
+/// `topic_crc` are returned.
 pub struct FrameParser {
     buf: Vec<u8>,
     topic_crc: u32,
 }
 
 impl FrameParser {
+    /// 解析 topic 的 CRC32 为 `topic_crc` 的帧。
+    ///
+    /// Parse frames whose topic CRC32 is `topic_crc`.
     pub fn new(topic_crc: u32) -> Self {
         Self {
             buf: Vec::new(),
@@ -104,10 +203,15 @@ impl FrameParser {
     }
 
     /// 解析探针发来的响应帧（topic `dap_resp`）。
+    ///
+    /// Parse the response frames sent by the probe (topic `dap_resp`).
     pub fn responses() -> Self {
         Self::new(crc32(RESP_TOPIC))
     }
 
+    /// 送入收到的字节，返回其中已经收齐的帧的载荷。
+    ///
+    /// Feed received bytes and return the payloads of the frames completed so far.
     pub fn feed(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
         self.buf.extend_from_slice(data);
         let mut out = Vec::new();
@@ -154,6 +258,8 @@ impl FrameParser {
 }
 
 /// TCP 帧头：`"DAP\0" + 长度(2) + 类型(1) + 保留(1)`。
+///
+/// The TCP frame header: `"DAP\0"`, length (2), type (1) and a reserved byte (1).
 pub fn tcp_header(len: usize, kind: u8) -> [u8; TCP_HEADER_LEN] {
     let mut h = [0u8; TCP_HEADER_LEN];
     h[..4].copy_from_slice(TCP_MAGIC);
@@ -163,6 +269,8 @@ pub fn tcp_header(len: usize, kind: u8) -> [u8; TCP_HEADER_LEN] {
 }
 
 /// 组一个完整的 TCP 帧。
+///
+/// Build a complete TCP frame.
 pub fn tcp_frame(packet: &[u8], kind: u8) -> Vec<u8> {
     let mut out = Vec::with_capacity(TCP_HEADER_LEN + packet.len());
     out.extend_from_slice(&tcp_header(packet.len(), kind));
@@ -170,7 +278,10 @@ pub fn tcp_frame(packet: &[u8], kind: u8) -> Vec<u8> {
     out
 }
 
-/// 检查 TCP 帧头，返回后面 DAP 包的长度。
+/// 检查 TCP 帧头，返回后面 DAP 包的长度；标记或类型不符时返回 None。
+///
+/// Check a TCP frame header and return the length of the DAP packet that follows; None when the
+/// marker or the type does not match.
 pub fn parse_tcp_header(h: &[u8; TCP_HEADER_LEN], kind: u8) -> Option<usize> {
     if &h[..4] != TCP_MAGIC || h[6] != kind {
         return None;
@@ -187,6 +298,8 @@ mod tests {
         assert_eq!(crc32(b"123456789"), 0x340B_C6D9);
         assert_eq!(crc32(REQ_TOPIC), 0xDC83_09C5);
         assert_eq!(crc32(RESP_TOPIC), 0x89E1_A688);
+        assert_eq!(crc32(CTRL_REQ_TOPIC), 0x3D25_38F2);
+        assert_eq!(crc32(CTRL_RESP_TOPIC), 0x31BD_A5B6);
     }
 
     #[test]
@@ -198,6 +311,24 @@ mod tests {
             0x00, 0x00, 0xFF, 0x32,
         ];
         assert_eq!(frame, expect);
+    }
+
+    /// 协议文档第 1 节：帧长是 64 的整数倍时补一个 0x00。响应帧是 19 + n 字节，n = 45 时
+    /// 正好 64；接收方跳过补的字节，后面的帧照常解析。
+    #[test]
+    fn frames_of_64_bytes_are_padded() {
+        assert_eq!(serial_request_frame(&[0x81; 45]).len(), 65);
+        assert_eq!(serial_request_frame(&[0x81; 45])[64], 0x00);
+        assert_eq!(serial_request_frame(&[0x81; 44]).len(), 63);
+        let topic = crc32(RESP_TOPIC);
+        let full = serial_payload(&[0x81; 45]);
+        let mut stream = build_frame(topic, &full, 1);
+        assert_eq!(stream.len(), 64);
+        stream.push(0x00);
+        let short = serial_payload(&[0x00, 0x01, 0x02]);
+        stream.extend(build_frame(topic, &short, 2));
+        let mut parser = FrameParser::new(topic);
+        assert_eq!(parser.feed(&stream), vec![full, short]);
     }
 
     #[test]

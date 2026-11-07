@@ -1,4 +1,4 @@
-//! 把一块探针（例如插在 COM7 上的 ESP32-C3）共享成标准的 USB CMSIS-DAP 探针。
+//! 把一块探针（例如经串口连接的 ESP32-C3）共享成标准的 USB CMSIS-DAP 探针。
 //!
 //! ```text
 //! cargo run -p xrdap --example share                 # 在 127.0.0.1:3240 等待挂载
@@ -6,15 +6,16 @@
 //! ```
 //!
 //! 挂载后 Keil、pyOCD、probe-rs、OpenOCD 都能把它当 USB 探针用。按回车停止，对挂载的一方
-//! 来说设备被拔掉。探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap --probe`），不设时自动选
+//! 来说设备被拔掉。探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap -p`），不设时自动选
 //! 唯一的那块。
 
+use xrdap::addr::Spec;
 use xrdap::open::{open, OpenOptions};
 use xrdap::share::{Event, Protocol, Share};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let spec = std::env::var("XRDAP_PROBE").ok();
-    let probe = open(spec.as_deref(), &OpenOptions::default())?;
+    let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
+    let probe = open(&spec, &OpenOptions::default())?;
     let share = Share::start(probe, Protocol::Usbip, "127.0.0.1:3240", |e| match e {
         Event::Client(peer) => println!("{peer} 已连接"),
         Event::Idle(None) => println!("已断开"),

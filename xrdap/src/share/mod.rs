@@ -10,17 +10,26 @@
 //! （对它来说设备被拔掉），把探针交回来。同一时间只服务一个客户端，客户端离开时如果探针还在
 //! 采样就替它停掉。
 //!
-//! Share one probe with other debug tools: as a USB CMSIS-DAP v2 device over USB/IP
-//! (Keil, pyOCD, probe-rs, OpenOCD) or as OpenOCD's CMSIS-DAP TCP backend. The probe may
-//! be attached over serial, TCP or USB; the share runs in a background thread that owns
-//! the probe until [`Share::stop`] hands it back.
+//! Share one probe with other debug tools.
+//!
+//! | Protocol | Port | Used by |
+//! |---|---|---|
+//! | [`Protocol::Usbip`] | 3240 | After a USB/IP client attaches it (`usbip` in the Linux kernel tools, usbip-win2 on Windows), the system shows a USB CMSIS-DAP v2 probe that Keil, pyOCD, probe-rs and OpenOCD can use |
+//! | [`Protocol::OpenOcd`] | 3241 | OpenOCD's `cmsis-dap backend tcp` |
+//!
+//! The probe may be attached over serial, TCP or USB; a common use is turning an ESP32-C3
+//! plugged into the computer (serial) into a USB probe. The share runs in a background thread
+//! that owns the probe. [`Share::stop`] disconnects the client in use (the device appears
+//! unplugged to it) and hands the probe back. Only one client is served at a time; when a
+//! client leaves while the probe is still sampling, sampling is stopped for it.
 //!
 //! ```no_run
+//! use xrdap::addr::Spec;
 //! use xrdap::open::{open, OpenOptions};
 //! use xrdap::share::{Protocol, Share};
 //!
 //! # fn main() -> xrdap::Result<()> {
-//! let probe = open(Some("COM7"), &OpenOptions::default())?;
+//! let probe = open(&Spec::parse("COM3"), &OpenOptions::default())?;
 //! let share = Share::start(probe, Protocol::Usbip, "127.0.0.1:3240", |e| println!("{e:?}"))
 //!     .map_err(|(_, e)| e)?;
 //! println!("挂载：{}", share.attach_hint());
@@ -34,9 +43,10 @@ mod link;
 mod openocd;
 mod usbip;
 
+use std::io;
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -46,22 +56,32 @@ use crate::dap::Probe;
 use crate::{Error, Result};
 use link::{is_normal_end, Link};
 
-/// 探针没有应答时回的 DAP 响应：0xFF 表示命令不支持，调试工具会报错而不是一直等
-const DAP_INVALID: u8 = 0xFF;
+/// 转发一个 DAP 请求，返回这时到期的全部响应，按顺序（[`Probe::forward`]）：通常一个；
+/// DAP_QueueCommands 和 DAP_TransferAbort 没有；排队之后的第一个有应答的命令带回多个。
+type Exec<'a> = dyn FnMut(&[u8]) -> io::Result<Vec<Vec<u8>>> + 'a;
+
 /// 等客户端时多久看一次停止标志
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
 
 /// 共享给别的工具时用的协议。
+///
+/// The protocol used to share the probe with other tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
-    /// USB/IP 虚拟 USB 探针
+    /// USB/IP 虚拟 USB 探针。
+    ///
+    /// USB/IP virtual USB probe.
     Usbip,
-    /// OpenOCD 的 CMSIS-DAP TCP 后端
+    /// OpenOCD 的 CMSIS-DAP TCP 后端。
+    ///
+    /// OpenOCD's CMSIS-DAP TCP backend.
     OpenOcd,
 }
 
 impl Protocol {
-    /// 默认端口：USB/IP 3240，OpenOCD 3241
+    /// 默认端口：USB/IP 3240，OpenOCD 3241。
+    ///
+    /// Default port: 3240 for USB/IP, 3241 for OpenOCD.
     pub fn default_port(self) -> u16 {
         match self {
             Protocol::Usbip => 3240,
@@ -71,15 +91,23 @@ impl Protocol {
 }
 
 /// 共享线程报告的变化。
+///
+/// A change reported by the share thread.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// 客户端连上（USB/IP 的挂载或设备列表查询，或 OpenOCD 连接）
+    /// 客户端连上（USB/IP 的挂载或设备列表查询，或 OpenOCD 连接）。
+    ///
+    /// A client connected (a USB/IP attach or device-list query, or an OpenOCD connection).
     Client(SocketAddr),
-    /// 客户端断开；`Some` 是异常断开的原因
+    /// 客户端断开；`Some` 是异常断开的原因。
+    ///
+    /// The client disconnected; `Some` carries the reason of an abnormal disconnect.
     Idle(Option<String>),
 }
 
 /// 正在进行的共享。
+///
+/// A running share.
 pub struct Share {
     protocol: Protocol,
     addr: SocketAddr,
@@ -91,7 +119,22 @@ pub struct Share {
 impl Share {
     /// 在 `listen`（例如 `127.0.0.1:3240`）上开始共享。失败时把探针还回来。
     /// `notify` 在共享线程里调用。
+    ///
+    /// Start sharing on `listen` (e.g. `127.0.0.1:3240`). On failure the probe is handed back.
+    /// `notify` is called on the share thread.
     pub fn start(
+        probe: Probe,
+        protocol: Protocol,
+        listen: &str,
+        notify: impl Fn(Event) + Send + 'static,
+    ) -> std::result::Result<Self, (Probe, Error)> {
+        let thread = std::thread::Builder::new().name("xrdap-share".into());
+        Self::start_on(thread, probe, protocol, listen, notify)
+    }
+
+    /// [`Share::start`] 的主体，共享线程按 `thread` 创建。
+    fn start_on(
+        thread: std::thread::Builder,
         mut probe: Probe,
         protocol: Protocol,
         listen: &str,
@@ -114,14 +157,23 @@ impl Share {
             Err(e) => return Err((probe, e)),
         };
         let stop = Arc::new(AtomicBool::new(false));
-        let thread = {
+        // 探针在线程建好之后才交过去：建线程失败时探针还在这里，可以还给调用方
+        let (handoff, receive) = mpsc::sync_channel::<Probe>(1);
+        let spawned = {
             let stop = stop.clone();
             let device = device.clone();
-            std::thread::Builder::new()
-                .name("xrdap-share".into())
-                .spawn(move || run(listener, protocol, &device, probe, &stop, notify))
-                .expect("创建共享线程")
+            thread.spawn(move || {
+                let probe = receive.recv().expect("start 建好线程后立即交出探针");
+                run(listener, protocol, &device, probe, &stop, notify)
+            })
         };
+        let thread = match spawned {
+            Ok(t) => t,
+            Err(e) => return Err((probe, Error::Io(format!("创建共享线程失败：{e}")))),
+        };
+        if let Err(mpsc::SendError(probe)) = handoff.send(probe) {
+            return Err((probe, Error::Io("共享线程没有启动".into())));
+        }
         Ok(Self {
             protocol,
             addr,
@@ -131,12 +183,17 @@ impl Share {
         })
     }
 
-    /// USB/IP 虚拟设备的产品名和序列号
+    /// USB/IP 虚拟设备的产品名和序列号。
+    ///
+    /// Product name and serial number of the USB/IP virtual device.
     pub fn device(&self) -> &DeviceInfo {
         &self.device
     }
 
     /// 客户端一侧怎么用：USB/IP 的挂载命令，或 OpenOCD 的配置行。
+    ///
+    /// How the client side uses it: the USB/IP attach command, or the OpenOCD configuration
+    /// line.
     pub fn attach_hint(&self) -> String {
         let host = if self.addr.ip().is_unspecified() {
             "<本机 IP>".to_string()
@@ -156,7 +213,9 @@ impl Share {
         }
     }
 
-    /// 停止共享：0.1 秒内断开正在用的客户端，取回探针。
+    /// 停止共享：断开正在用的客户端，取回探针。
+    ///
+    /// Stop sharing: disconnect the client in use and take the probe back.
     pub fn stop(self) -> Probe {
         self.stop.store(true, Ordering::Release);
         self.thread
@@ -191,13 +250,20 @@ fn run(
             continue;
         };
         notify(Event::Client(peer));
-        let mut exec = |req: &[u8]| probe.xfer(req).unwrap_or_else(|_| vec![DAP_INVALID]);
+        // 探针读写出错（超时、断开）时结束这个客户端，原因经 Event::Idle 报告
+        let mut exec = |req: &[u8]| {
+            probe
+                .forward(req)
+                .map_err(|e| io::Error::other(format!("探针：{e}")))
+        };
         let result = match protocol {
             Protocol::Usbip => usbip::serve(&mut link, device, &mut exec),
             Protocol::OpenOcd => openocd::serve(&mut link, &mut exec),
         };
         // 客户端开过采样的话替它停掉，否则探针会一直占着 SWD
-        let _ = probe.stop_sampling();
+        let _ = crate::watch::stop(&mut probe);
+        // 客户端做的连接也结束：探针只能靠这条命令知道（协议文档 3.1 节）
+        probe.end_session();
         notify(Event::Idle(
             result
                 .err()
@@ -206,4 +272,111 @@ fn run(
         ));
     }
     probe
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::raw::frame::{parse_tcp_header, tcp_frame, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE};
+    use crate::raw::transport::script::{Late, Script};
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::mpsc;
+
+    fn share(link: &Script) -> (Share, mpsc::Receiver<Event>) {
+        let probe = Probe::new(Box::new(link.clone()), Duration::from_secs(2));
+        let (tx, rx) = mpsc::channel();
+        let share = Share::start(probe, Protocol::OpenOcd, "127.0.0.1:0", move |e| {
+            let _ = tx.send(e);
+        })
+        .map_err(|(_, e)| e)
+        .unwrap();
+        (share, rx)
+    }
+
+    fn client(share: &Share) -> TcpStream {
+        let c = TcpStream::connect(share.addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        c
+    }
+
+    fn read_frame(c: &mut TcpStream) -> Vec<u8> {
+        let mut h = [0u8; 8];
+        c.read_exact(&mut h).unwrap();
+        let mut p = vec![0u8; parse_tcp_header(&h, TCP_TYPE_RESPONSE).unwrap()];
+        c.read_exact(&mut p).unwrap();
+        p
+    }
+
+    /// CMSIS-DAP：DAP_TransferAbort 没有响应，共享时也不回帧；下一个命令的响应不错位。
+    #[test]
+    fn openocd_transfer_abort_gets_no_frame() {
+        let link = Script::default();
+        let (share, _events) = share(&link);
+        let mut c = client(&share);
+        c.write_all(&tcp_frame(&[0x07], TCP_TYPE_REQUEST)).unwrap();
+        c.write_all(&tcp_frame(&[0x00, 0xFF], TCP_TYPE_REQUEST))
+            .unwrap();
+        // 探针的第 0 个请求是共享开始时读身份的 DAP_Info，客户端的 0x07、DAP_Info 排在后面
+        let first = read_frame(&mut c);
+        assert_eq!(first[0], 0x00);
+        let sent = link.sent();
+        assert_eq!(sent[sent.len() - 2], vec![0x07]);
+        drop(c);
+        share.stop();
+    }
+
+    /// 建不了共享线程时不 panic，探针交还给调用方。
+    #[test]
+    fn spawn_failure_returns_the_probe() {
+        let link = Script::default();
+        let probe = Probe::new(Box::new(link.clone()), Duration::from_secs(2));
+        // 栈大到系统给不出来，建线程失败
+        let huge = std::thread::Builder::new().stack_size(usize::MAX / 2);
+        let Err((mut probe, e)) =
+            Share::start_on(huge, probe, Protocol::OpenOcd, "127.0.0.1:0", |_| {})
+        else {
+            panic!("共享线程不应该建得起来");
+        };
+        assert!(e.to_string().contains("共享线程"), "{e}");
+        assert!(probe.identity().is_ok());
+    }
+
+    /// 客户端离开后探针收到 DAP_Disconnect，客户端做的连接结束。
+    #[test]
+    fn client_leaving_ends_the_probe_session() {
+        let link = Script::default();
+        let (share, events) = share(&link);
+        let mut c = client(&share);
+        c.write_all(&tcp_frame(&[0x00, 0xFF], TCP_TYPE_REQUEST))
+            .unwrap();
+        let _ = read_frame(&mut c);
+        drop(c);
+        // Event::Idle 在连接结束之后发出
+        assert!(events.iter().any(|e| matches!(e, Event::Idle(_))));
+        assert_eq!(link.sent().last(), Some(&vec![0x03]));
+        share.stop();
+    }
+
+    /// 探针不应答时断开这个客户端，并报告原因；不回假的 0xFF。
+    #[test]
+    fn probe_failure_ends_client_with_reason() {
+        let link = Script::default();
+        let (share, events) = share(&link);
+        let mut c = client(&share);
+        link.delay_next(Late::NextSend);
+        c.write_all(&tcp_frame(&[0x00, 0xFF], TCP_TYPE_REQUEST))
+            .unwrap();
+        let mut buf = [0u8; 16];
+        assert_eq!(c.read(&mut buf).unwrap(), 0, "客户端应被断开，不应收到响应");
+        let reason = events
+            .iter()
+            .find_map(|e| match e {
+                Event::Idle(r) => Some(r),
+                Event::Client(_) => None,
+            })
+            .unwrap();
+        assert!(reason.is_some_and(|r| r.contains("探针")));
+        share.stop();
+    }
 }

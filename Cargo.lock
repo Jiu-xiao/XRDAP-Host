@@ -2745,17 +2745,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serial2"
-version = "0.2.38"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b16809bc35793b19ce4e0c53924bc0dce3937f15487997cfdaed936004180730"
-dependencies = [
- "cfg-if",
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "serialport"
 version = "4.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3832,19 +3821,27 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xrdap"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "gimli",
  "mdns-sd",
  "nusb",
  "object",
- "serial2",
  "serialport",
+ "xrdap-sim",
+]
+
+[[package]]
+name = "xrdap-sim"
+version = "0.6.0"
+dependencies = [
+ "object",
+ "xrdap",
 ]
 
 [[package]]
 name = "xrdap-tool"
-version = "0.5.2"
+version = "0.6.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -3854,6 +3851,7 @@ dependencies = [
  "rfd",
  "windows-sys 0.59.0",
  "xrdap",
+ "xrdap-sim",
 ]
 
 [[package]]

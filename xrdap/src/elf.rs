@@ -1,11 +1,15 @@
 //! 从 ELF 读全局变量的地址和 DWARF 类型，得到 [`SymbolTable`]。
 //! 只处理有固定地址（`DW_OP_addr`）的变量：全局变量和文件内的 static 变量。
+//!
+//! Read the addresses of global variables and the DWARF types from an ELF file into a
+//! [`SymbolTable`]. Only variables with a fixed address (`DW_OP_addr`) are handled: global
+//! variables and file-scope static variables.
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use gimli::{AttributeValue, EndianSlice, RunTimeEndian, UnitOffset};
-use object::{Object, ObjectSection, ObjectSymbol, SectionKind, SymbolKind};
+use object::{Object, ObjectSection, ObjectSymbol, SymbolKind};
 
 use crate::types::{Aggregate, Encoding, Member, SymbolTable, Type, TypeId, Variable};
 use crate::{Error, Result};
@@ -16,7 +20,18 @@ fn derr(e: gimli::Error) -> Error {
     Error::usage(format!("解析 DWARF 失败：{e}"))
 }
 
+/// 数组一维的元素个数：上界减下界加一；结果是负数或超出 u64 时不知道（损坏的 DWARF 不能让
+/// 解析溢出）。
+///
+/// Element count of one array dimension: upper bound minus lower bound plus one; unknown when
+/// the result is negative or does not fit in u64 (broken DWARF must not overflow the parser).
+fn subrange_len(lb: i64, ub: i64) -> Option<u64> {
+    u64::try_from(i128::from(ub) - i128::from(lb) + 1).ok()
+}
+
 /// 读 ELF 文件。
+///
+/// Read an ELF file.
 pub fn load(path: &Path) -> Result<SymbolTable> {
     let data =
         std::fs::read(path).map_err(|e| Error::usage(format!("读不了 {}：{e}", path.display())))?;
@@ -27,7 +42,7 @@ fn parse_file(data: &[u8]) -> Result<object::File<'_>> {
     object::File::parse(data).map_err(|e| Error::usage(format!("不是可以识别的 ELF 文件：{e}")))
 }
 
-pub fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
+fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
     let file = parse_file(data)?;
     let endian = if file.is_little_endian() {
         RunTimeEndian::Little
@@ -75,30 +90,6 @@ pub fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
         loader.scan_unit(i)?;
     }
     Ok(loader.syms)
-}
-
-/// ELF 里要装到目标内存的段：(地址, 内容)。模拟探针用它填内存。
-pub fn load_image(data: &[u8]) -> Result<Vec<(u64, Vec<u8>)>> {
-    let file = parse_file(data)?;
-    let mut out = Vec::new();
-    for sec in file.sections() {
-        let loadable = matches!(
-            sec.kind(),
-            SectionKind::Text
-                | SectionKind::Data
-                | SectionKind::ReadOnlyData
-                | SectionKind::ReadOnlyString
-        );
-        if !loadable || sec.size() == 0 {
-            continue;
-        }
-        if let Ok(bytes) = sec.data() {
-            if !bytes.is_empty() {
-                out.push((sec.address(), bytes.to_vec()));
-            }
-        }
-    }
-    Ok(out)
 }
 
 struct Loader<'a, 'd> {
@@ -384,10 +375,7 @@ impl<'a, 'd> Loader<'a, 'd> {
                     }
                     let n = match (s.count, s.upper_bound) {
                         (Some(n), _) => Some(n),
-                        (None, Some(ub)) => {
-                            let lb = s.lower_bound.unwrap_or(0);
-                            (ub >= lb - 1).then(|| (ub - lb + 1) as u64)
-                        }
+                        (None, Some(ub)) => subrange_len(s.lower_bound.unwrap_or(0), ub),
                         _ => None,
                     };
                     dims.push(n);
@@ -497,5 +485,22 @@ impl<'a, 'd> Loader<'a, 'd> {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subrange_lengths() {
+        assert_eq!(subrange_len(0, 3), Some(4));
+        assert_eq!(subrange_len(1, 0), Some(0));
+        assert_eq!(subrange_len(0, -1), Some(0));
+        assert_eq!(subrange_len(5, 3), None);
+        // 损坏的 DWARF：极端的上下界不能让解析溢出
+        assert_eq!(subrange_len(i64::MIN, 0), Some((1 << 63) + 1));
+        assert_eq!(subrange_len(i64::MIN, i64::MAX), None);
+        assert_eq!(subrange_len(0, i64::MAX), Some(1 << 63));
     }
 }

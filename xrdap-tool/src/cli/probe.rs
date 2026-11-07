@@ -1,31 +1,82 @@
 //! 探针本身的命令：list、info、wifi，以及内核的停住、继续、复位。
 
-use std::io::Write;
+use std::io::{BufRead, Write};
 
+use xrdap::addr::Addr;
 use xrdap::cortex::{self, AfterReset};
 use xrdap::dap::{self, Probe};
-use xrdap::discover;
-use xrdap::wifi;
+use xrdap::discover::{self, ProbeEntry};
 
-use super::connect::{connect_target, ConnOpts};
 use super::{CliResult, CoreOp, WifiCmd};
 
-pub fn cmd_list(out: &mut dyn Write) -> CliResult {
-    let probes = discover::group(discover::find(&discover::Options::default()));
+/// 列出探针。`ask_serial` 为 false 时不打开任何串口，只列出可能接着探针的串口。
+pub fn cmd_list(ask_serial: bool, out: &mut dyn Write) -> CliResult {
+    let probes = discover::group(discover::find(&discover::Options {
+        ask_serial,
+        ..Default::default()
+    }));
     if probes.is_empty() {
-        writeln!(out, "没有找到探针（USB、串口、局域网都没有）")?;
-        return Ok(());
+        writeln!(out, "没有找到探针")?;
     }
-    write!(out, "{}", discover::table(&probes))?;
+    write!(out, "{}", table(&probes))?;
+    let listed: Vec<&Addr> = probes
+        .iter()
+        .flat_map(|p| &p.links)
+        .map(|l| &l.addr)
+        .collect();
+    let unchecked: Vec<_> = discover::serial_ports()
+        .into_iter()
+        .filter(|s| {
+            !listed.contains(&&Addr::Serial {
+                port: s.port.clone(),
+            })
+        })
+        .collect();
+    if !unchecked.is_empty() {
+        if ask_serial {
+            writeln!(out, "没有应答的串口：")?;
+        } else {
+            writeln!(
+                out,
+                "没有打开检查的串口（用 -p 串口名 连接，或 xrdap list --ask-serial 逐个打开询问）："
+            )?;
+        }
+        for s in unchecked {
+            writeln!(out, "    {}  {}", s.port, s.chip.name())?;
+        }
+    }
     Ok(())
 }
 
-pub fn cmd_info(
-    probe: &mut Probe,
-    conn: &ConnOpts,
-    target: bool,
-    out: &mut dyn Write,
-) -> CliResult {
+/// 每块探针一行序列号和产品，下面每行一个连接和选它时 -p 的写法。
+fn table(probes: &[ProbeEntry]) -> String {
+    let mut s = String::new();
+    for p in probes {
+        s.push_str(&format!(
+            "{}  {}
+",
+            p.serial.as_deref().unwrap_or("（没有序列号）"),
+            p.product.as_deref().unwrap_or("")
+        ));
+        for l in &p.links {
+            let note = l
+                .note
+                .as_deref()
+                .map(|n| format!("（{n}）"))
+                .unwrap_or_default();
+            s.push_str(&format!(
+                "    {}{note}    -p {}
+",
+                l.addr,
+                l.addr.spec()
+            ));
+        }
+    }
+    s
+}
+
+/// 探针信息；`clock` 不为 None 时再按这个 SWD 时钟连接目标。
+pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> CliResult {
     writeln!(out, "连接：{}", probe.describe())?;
     let packet = probe.query_packet_size()?;
     let id = probe.identity()?;
@@ -61,26 +112,14 @@ pub fn cmd_info(
                 "  每次最多 {} 个条目，最多 {} 级指针，采样缓冲 {} 字节",
                 info.max_items, info.max_depth, info.ring_bytes
             )?;
-            let calib = if info.access_us == 0 {
-                "单次 SWD 访问耗时还没有标定（每次 SUB_SET 时按当前时钟标定）".to_string()
-            } else {
-                format!(
-                    "单次 SWD 访问耗时 {} µs（上次 SUB_SET 时标定）",
-                    info.access_us
-                )
-            };
-            writeln!(
-                out,
-                "  探针时间 {:.6} s，{calib}",
-                info.probe_time_us as f64 / 1e6
-            )?;
+            writeln!(out, "  探针时间 {:.6} s", info.probe_time_us as f64 / 1e6)?;
         }
         Err(e) => writeln!(out, "厂商扩展：不可用（{e}）")?,
     }
-    if target {
-        match probe.connect_swd(conn.clock) {
+    if let Some(clock) = clock {
+        match probe.connect(clock) {
             Ok(t) => {
-                writeln!(out, "目标：{}，SWD 时钟 {} Hz", t.describe(), conn.clock)?;
+                writeln!(out, "目标：{}，SWD 时钟 {clock} Hz", t.describe())?;
                 let core = cortex::info(probe).map(|i| i.describe());
                 let state = cortex::status(probe);
                 match (core, state) {
@@ -99,24 +138,43 @@ pub fn cmd_info(
     Ok(())
 }
 
-pub fn cmd_wifi(probe: &mut Probe, op: &WifiCmd, out: &mut dyn Write) -> CliResult {
+/// Wi-Fi 的查询、保存、清除。`input` 是 `--password-stdin` 读密码的地方。
+pub fn cmd_wifi(
+    probe: &mut Probe,
+    op: &WifiCmd,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> CliResult {
     match op {
-        WifiCmd::Status => writeln!(out, "{}", wifi::status(probe)?.describe())?,
-        WifiCmd::Set { ssid, password } => {
-            wifi::set(probe, ssid, password.as_deref().unwrap_or(""))?;
+        WifiCmd::Status { .. } => {
+            let st = probe.wifi_status()?;
+            writeln!(out, "{}", st.describe())?;
+            writeln!(out, "{}", st.history())?;
+        }
+        WifiCmd::Set {
+            ssid,
+            password,
+            password_stdin,
+            ..
+        } => {
+            let password = match (password, password_stdin) {
+                (_, true) => read_password(input)?,
+                (Some(p), false) => p.clone(),
+                (None, false) => String::new(),
+            };
+            probe.wifi_set(ssid, &password)?;
             writeln!(out, "已保存，探针重启后连接热点 {ssid}")?;
         }
-        WifiCmd::Clear => {
-            wifi::clear(probe)?;
+        WifiCmd::Clear { .. } => {
+            probe.wifi_clear()?;
             writeln!(out, "已清除，探针重启后不再连 Wi-Fi")?;
         }
     }
     Ok(())
 }
 
-/// 停住、继续或复位内核，打印之后的状态。
-pub fn cmd_core(probe: &mut Probe, conn: &ConnOpts, op: CoreOp, out: &mut dyn Write) -> CliResult {
-    connect_target(probe, conn)?;
+/// 停住、继续或复位已连上的目标内核，打印之后的状态。
+pub fn cmd_core(probe: &mut Probe, op: CoreOp, out: &mut dyn Write) -> CliResult {
     let s = match op {
         CoreOp::Halt => cortex::halt(probe)?,
         CoreOp::Run => cortex::resume(probe)?,
@@ -125,4 +183,27 @@ pub fn cmd_core(probe: &mut Probe, conn: &ConnOpts, op: CoreOp, out: &mut dyn Wr
     };
     writeln!(out, "内核：{}（DHCSR 0x{:08X}）", s.state.text(), s.dhcsr)?;
     Ok(())
+}
+
+/// 从输入读一行作为密码：去掉行尾的换行，其余原样保留（密码里可以有空格）。
+fn read_password(input: &mut dyn BufRead) -> CliResult<String> {
+    let mut line = String::new();
+    input.read_line(&mut line)?;
+    let end = line.trim_end_matches(['\r', '\n']).len();
+    line.truncate(end);
+    Ok(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn password_from_stdin_keeps_spaces() {
+        let read = |s: &str| read_password(&mut s.as_bytes()).unwrap();
+        assert_eq!(read("12345678\n"), "12345678");
+        assert_eq!(read(" pass word \r\n"), " pass word ");
+        assert_eq!(read("no-newline"), "no-newline");
+        assert_eq!(read(""), "");
+    }
 }
