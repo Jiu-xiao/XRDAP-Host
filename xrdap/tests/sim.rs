@@ -381,16 +381,228 @@ fn halt_resume_and_reset() {
     assert!(t < 25, "复位后计数应从 0 开始，读到 {t}");
 }
 
-/// 协议文档 3.7：0x86 的查询、保存、清除。
+/// 协议文档 3.7.1：探针报了控制口时，Wi-Fi 的查询、保存、清除都走控制口，不发 0x86；不需要
+/// 连接，采样期间也能用。
 #[test]
-fn wifi_status_set_clear() {
-    let (sim, mut probe, _) = setup();
+fn wifi_goes_through_the_control_port() {
+    let (sim, mut probe, mut syms) = setup();
     assert!(probe.wifi_status().unwrap().ssid.is_empty());
     probe.wifi_set("lab", "12345678").unwrap();
     assert_eq!(sim.wifi_ssid(), "lab");
+    assert_eq!(
+        sim.control_requests()[1],
+        b"\x01\x03lab\x0812345678".to_vec()
+    );
+    probe.connect(4_000_000).unwrap();
+    let t = targets(&mut syms, &["counter"]);
+    probe.sub_start(1000, 0, &[sub(&t[0], 0, 1, 0)]).unwrap();
     assert_eq!(probe.wifi_status().unwrap().ssid, "lab");
+    assert!(sim.is_sampling());
     probe.wifi_clear().unwrap();
     assert!(sim.wifi_ssid().is_empty());
+    assert_eq!(sim.control_requests().last().unwrap(), &[0x02, 0xA5]);
+    assert!(sim.requests().iter().all(|r| r[0] != 0x86));
+}
+
+fn tcp_probe(sim: &Sim) -> Probe {
+    let host = sim.serve_tcp().to_string();
+    let t = xrdap::raw::transport::tcp::TcpTransport::connect(&host, TIMEOUT).unwrap();
+    Probe::new(Box::new(t), TIMEOUT)
+}
+
+/// 协议文档第 2 节、3.7.1：TCP 上控制请求是帧类型 3，应答是类型 4，和 DAP 帧在同一条连接上。
+#[test]
+fn wifi_over_tcp_uses_control_frames() {
+    let (sim, _, _) = setup();
+    let mut probe = tcp_probe(&sim);
+    probe.wifi_set("lab", "12345678").unwrap();
+    assert_eq!(probe.wifi_status().unwrap().ssid, "lab");
+    probe.connect(4_000_000).unwrap();
+    probe.wifi_clear().unwrap();
+    assert!(sim.wifi_ssid().is_empty());
+    assert_eq!(sim.control_requests().len(), 3);
+    assert!(sim.requests().iter().all(|r| r[0] != 0x86));
+}
+
+/// 协议文档第 2 节、3.7.1：TCP 传输的控制口。探针没有的操作回状态 0xF2；之后 DAP 帧照常配对；
+/// 空请求是帧头无效，连接被关闭。
+#[test]
+fn tcp_transport_control_frames() {
+    use xrdap::raw::transport::{tcp::TcpTransport, Transport};
+    let (sim, _, _) = setup();
+    let host = sim.serve_tcp().to_string();
+    let mut t = TcpTransport::connect(&host, TIMEOUT).unwrap();
+    assert_eq!(t.control(&[0x7E]).unwrap(), Some(vec![0x7E, 0xF2]));
+    t.send(&[0x00, 0xFF]).unwrap();
+    assert_eq!(t.recv(TIMEOUT).unwrap()[..2], [0x00, 0x02]);
+    assert!(matches!(t.control(&[]), Err(xrdap::Error::Io(_))));
+}
+
+/// 协议文档 3.7.1：探针没有 Wi-Fi 操作时（功能位 0x6F）应答状态 0xF2，不再试 0x86。
+#[test]
+fn wifi_on_a_probe_without_wifi_reports_no_such_operation() {
+    let (sim, link, _) = setup();
+    sim.set_features(0x6F);
+    for mut probe in [link, tcp_probe(&sim)] {
+        match probe.wifi_status() {
+            Err(xrdap::Error::Status {
+                cmd: 0x86,
+                status: 0xF2,
+                text,
+            }) => assert!(text.contains("探针没有这个设置操作"), "{text}"),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert!(sim.requests().iter().all(|r| r[0] != 0x86));
+}
+
+/// 协议文档 3.4：INFO 的 bit5 为 0 的固件不发控制请求，走 0x86；TCP 上它收到类型 3 的帧会关连接。
+#[test]
+fn wifi_without_the_control_bit_uses_the_dap_command() {
+    let (sim, _, _) = setup();
+    sim.set_features(0x1F);
+    let mut probe = tcp_probe(&sim);
+    probe.wifi_set("lab", "12345678").unwrap();
+    assert_eq!(probe.wifi_status().unwrap().ssid, "lab");
+    assert!(sim.control_requests().is_empty());
+    assert_eq!(sim.requests().iter().filter(|r| r[0] == 0x86).count(), 2);
+}
+
+/// 协议文档 3.7.1：请求超过 EP0 的 OUT 缓冲时 SEND 被拒，Wi-Fi 保存回退到 0x86；放得下的照走
+/// 控制口。
+#[test]
+fn wifi_falls_back_to_the_dap_command_when_send_is_refused() {
+    let (sim, mut probe, _) = setup();
+    sim.set_control_limit(64);
+    let (ssid, password) = ("s".repeat(32), "p".repeat(63));
+    probe.wifi_set(&ssid, &password).unwrap();
+    assert_eq!(sim.wifi_ssid(), ssid);
+    assert!(sim.control_requests().is_empty());
+    assert_eq!(sim.requests().last().unwrap()[0], 0x86);
+    assert_eq!(probe.wifi_status().unwrap().ssid, ssid);
+    assert_eq!(sim.control_requests(), [[0x00]]);
+}
+
+/// 协议文档 3.1：没有 0x86 的固件回 `FF`，报告不支持。
+#[test]
+fn wifi_on_old_firmware_without_wifi_is_reported() {
+    let (sim, mut probe, _) = setup();
+    sim.set_features(0x0F);
+    let e = probe.wifi_status().unwrap_err().to_string();
+    assert!(e.contains("探针不支持 Wi-Fi 配置命令"), "{e}");
+}
+
+/// 最近一次 SUB_START 的 flags 字节。
+fn start_flags(sim: &Sim) -> u8 {
+    sim.requests()
+        .iter()
+        .rfind(|r| r[0] == vendor::CMD_SUB_START)
+        .unwrap()[5]
+}
+
+/// 协议文档 3.4、3.5：探针报了 bit6 时 Sampler 要紧凑帧；到期条目、失败、跳拍、时间戳和值都解得对。
+#[test]
+fn sampler_uses_compact_frames_when_offered() {
+    let (sim, mut probe, mut syms) = setup();
+    probe.connect(4_000_000).unwrap();
+    sim.add_counter(addr(&mut syms, "counter"), 4, 1000);
+    sim.skip_every(Some(5));
+    let t = targets(&mut syms, &["counter", "state.count", "*null_p1"]);
+    let list = vec![
+        sub(&t[0], 0, 1, 0),
+        sub(&t[1], 1, 3, 0),
+        sub(&t[2], 2, 2, 1),
+    ];
+    let mut s = Sampler::start(&mut probe, vars(&list), 1000, false).unwrap();
+    assert_eq!(start_flags(&sim), vendor::SUB_FLAG_COMPACT);
+    let mut frames = Vec::new();
+    let end = Instant::now() + Duration::from_millis(60);
+    while Instant::now() < end {
+        frames.extend(s.poll().unwrap().0);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    frames.extend(s.stop().unwrap());
+    let stats = s.stats();
+    assert!(frames.len() > 20, "{} 帧", frames.len());
+    assert!(stats.skipped > 0, "{stats:?}");
+    // 最后几拍跳过时后面没有帧，主机看不出缺口
+    assert!(
+        stats.missing > 0 && stats.missing <= stats.skipped as u64,
+        "{stats:?}"
+    );
+    for w in frames.windows(2) {
+        let dk = w[1].tick - w[0].tick;
+        assert!(dk == 1 || dk == 2, "{dk}");
+        assert_eq!(w[1].probe_us - w[0].probe_us, 1000 * dk);
+    }
+    let value = |f: &xrdap::watch::HostFrame| {
+        let v = f.values[0].clone().unwrap().unwrap();
+        u32::from_le_bytes(v[..4].try_into().unwrap()) as u64
+    };
+    for w in frames.windows(2) {
+        assert_eq!(value(&w[1]) - value(&w[0]), w[1].tick - w[0].tick);
+    }
+    for f in &frames {
+        for (i, item) in list.iter().enumerate() {
+            assert_eq!(
+                f.values[i].is_some(),
+                item.due(f.tick),
+                "k={} 条目 {i}",
+                f.tick
+            );
+        }
+        if let Some(v) = &f.values[1] {
+            assert_eq!(v.as_deref(), Some(&123456u32.to_le_bytes()[..]));
+        }
+        if let Some(v) = &f.values[2] {
+            assert!(v.is_none(), "*null_p1 应该读失败");
+        }
+    }
+}
+
+/// 协议文档 3.5：每拍采一次、全部成功、周期 1 ms 时，1 个 4 字节条目的帧从 15 字节降到 7 字节，
+/// 每个回复的第 1 帧是完整帧。
+#[test]
+fn compact_frames_on_the_wire() {
+    let (sim, mut probe, mut syms) = setup();
+    probe.connect(4_000_000).unwrap();
+    let t = targets(&mut syms, &["counter"]);
+    let list = [sub(&t[0], 0, 1, 0)];
+    probe
+        .sub_start(1000, vendor::SUB_FLAG_COMPACT, &list)
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    let (r, _, _) = probe.sub_read(1000).unwrap();
+    assert!(r.frame_count > 3, "{} 帧", r.frame_count);
+    assert_eq!(r.frames.len(), 15 + 7 * (r.frame_count as usize - 1));
+    assert!(vendor::decode_frames(&r.frames, &list, r.frame_count, false).is_err());
+    let frames = vendor::decode_frames(&r.frames, &list, r.frame_count, true).unwrap();
+    assert_eq!(frames[1].tick, frames[0].tick + 1);
+    assert_eq!(frames[1].timestamp_us, frames[0].timestamp_us + 1000);
+    assert!(sim.is_sampling());
+}
+
+/// 协议文档 3.4：功能位没有 bit6 的探针不要紧凑帧，否则回 0x01；`--no-overwrite` 的 bit0 不受影响。
+#[test]
+fn sampler_uses_whole_frames_without_the_feature_bit() {
+    let (sim, mut probe, mut syms) = setup();
+    sim.set_features(0x1F);
+    probe.connect(4_000_000).unwrap();
+    let t = targets(&mut syms, &["counter"]);
+    let list = [sub(&t[0], 0, 1, 0)];
+    assert!(matches!(
+        probe.sub_start(1000, vendor::SUB_FLAG_COMPACT, &list),
+        Err(xrdap::Error::Status {
+            status: vendor::STATUS_ARG,
+            ..
+        })
+    ));
+    let mut s = Sampler::start(&mut probe, vars(&list), 1000, true).unwrap();
+    assert_eq!(start_flags(&sim), 0x01);
+    std::thread::sleep(Duration::from_millis(10));
+    let (frames, _) = s.poll().unwrap();
+    assert!(frames.len() > 3, "{} 帧", frames.len());
+    assert_eq!(frames[1].tick, frames[0].tick + 1);
 }
 
 /// 复位只临时改 DEMCR.VC_CORERESET：复位成功、失败，复位后运行还是停住，DEMCR 都恢复原值。
