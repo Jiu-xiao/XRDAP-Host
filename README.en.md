@@ -2,7 +2,7 @@
 
 [中文](README.md)
 
-`xrdap` is the host tool for the XR-DAP family of debug probes ([XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP), [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8), [XRDAP-CH32V3](https://github.com/Jiu-xiao/XRDAP-CH32V3)), for Windows and Linux. It is a single executable: double-clicking it or running it without arguments opens the GUI, and running it with a command works as a command-line tool.
+`xrdap` is the host tool for the XR-DAP family of debug probes ([XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP), [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8), [XRDAP-CH32](https://github.com/Jiu-xiao/XRDAP-CH32)), for Windows and Linux. It is a single executable: double-clicking it or running it without arguments opens the GUI, and running it with a command works as a command-line tool.
 
 It provides:
 
