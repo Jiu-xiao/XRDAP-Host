@@ -18,9 +18,13 @@ use super::model::{Csv, Found, ShareState, VarRow, Watch};
 use super::panels::{ElfLoaded, SavedWatch};
 use super::plot::PlotView;
 use super::theme::{self, Choice};
+use super::window_frame;
 use super::worker::{self, Cmd, CoreCmd, Event, Op};
 
 const LOG_LINES: usize = 300;
+/// 顶栏左右、上下的内边距。
+const BAR_MARGIN_X: i8 = 16;
+const BAR_MARGIN_Y: i8 = 8;
 
 pub struct App {
     pub(super) ctx: egui::Context,
@@ -444,14 +448,20 @@ impl App {
 }
 
 impl App {
-    /// 顶栏：产品名和主题选择。
+    /// 顶栏兼作标题栏：整条可以拖动窗口，标题和标签不响应点击；右侧是窗口按钮和主题选择。
     fn ui_bar(&mut self, ui: &mut egui::Ui) {
+        // 整条顶栏（包括四周的内边距）都是拖动区
+        let bar = ui.max_rect() + egui::Margin::symmetric(BAR_MARGIN_X, BAR_MARGIN_Y);
+        window_frame::title_bar(ui, bar);
+        ui.style_mut().interaction.selectable_labels = false;
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 theme::path_label(ui, "XRDAP / HOST");
                 ui.label(RichText::new("XR-DAP").text_style(egui::TextStyle::Heading));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                window_frame::window_buttons(ui);
+                ui.separator();
                 for c in Choice::ALL.iter().rev() {
                     if ui.selectable_label(self.theme == *c, c.label()).clicked() {
                         self.theme = *c;
@@ -471,12 +481,12 @@ impl eframe::App for App {
         }
         self.poll_elf();
         let p = theme::Palette::of(ctx.theme());
-        // 导航栏：paper-raised 加底部一条 line
+        // 导航栏兼标题栏：paper-raised 加底部一条 line
         egui::TopBottomPanel::top("bar")
             .frame(
                 egui::Frame::new()
                     .fill(p.raised)
-                    .inner_margin(egui::Margin::symmetric(16, 8)),
+                    .inner_margin(egui::Margin::symmetric(BAR_MARGIN_X, BAR_MARGIN_Y)),
             )
             .show(ctx, |ui| self.ui_bar(ui));
         // 页脚的位置放日志：paper-sunken 加顶部一条 line
@@ -533,6 +543,7 @@ impl eframe::App for App {
             }
             ctx.request_repaint_after(POLL);
         }
+        window_frame::edges(ctx);
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

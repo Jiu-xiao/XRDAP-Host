@@ -9,14 +9,16 @@ mod plot;
 mod series;
 mod theme;
 mod widgets;
+mod window_frame;
 mod worker;
 
-/// 打开主窗口，直到用户关闭。
+/// 打开主窗口，直到用户关闭。窗口不带系统标题栏，顶栏兼作标题栏（见 [`window_frame`]）。
 pub fn run() -> eframe::Result {
     let opts = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 760.0])
             .with_min_inner_size([800.0, 500.0])
+            .with_decorations(false)
             .with_title("XR-DAP"),
         ..Default::default()
     };
