@@ -56,18 +56,40 @@ fn usb_err(what: &str, e: impl std::fmt::Display) -> Error {
     Error::Io(format!("{what}：{e}"))
 }
 
+/// 名字表明设备是 CMSIS-DAP 探针：产品名或某个接口名里带 "CMSIS-DAP"（CMSIS-DAP 规范对
+/// v1 的产品名、对 v2 的接口名的要求）。用同一对 VID:PID 的别的设备两处都不带，不算探针。
+///
+/// The names say the device is a CMSIS-DAP probe: the product string or an interface string
+/// contains "CMSIS-DAP", as the CMSIS-DAP specification asks of v1 product strings and v2
+/// interface strings. Other devices with the same VID:PID have neither and are not probes.
+fn named_cmsis_dap<'a>(
+    product: Option<&str>,
+    mut interfaces: impl Iterator<Item = Option<&'a str>>,
+) -> bool {
+    const NAME: &str = "CMSIS-DAP";
+    product.is_some_and(|s| s.contains(NAME))
+        || interfaces.any(|s| s.is_some_and(|s| s.contains(NAME)))
+}
+
 fn probes() -> Result<Vec<DeviceInfo>> {
     let list = nusb::list_devices()
         .wait()
         .map_err(|e| usb_err("列 USB 设备失败", e))?;
     Ok(list
         .filter(|d| d.vendor_id() == VID && d.product_id() == PID)
+        .filter(|d| {
+            named_cmsis_dap(
+                d.product_string(),
+                d.interfaces().map(|i| i.interface_string()),
+            )
+        })
         .collect())
 }
 
-/// 列出 VID:PID 为 1D50:6199 的设备。
+/// 列出 VID:PID 为 1D50:6199、产品名或接口名带 "CMSIS-DAP" 的设备。
 ///
-/// List the devices with VID:PID 1D50:6199.
+/// List the devices with VID:PID 1D50:6199 whose product or interface string contains
+/// "CMSIS-DAP".
 pub fn list() -> Result<Vec<UsbProbeInfo>> {
     Ok(probes()?
         .iter()
@@ -292,5 +314,34 @@ impl Transport for UsbTransport {
     fn set_packet_size(&mut self, size: usize) {
         let mps = self.ep_in.max_packet_size().max(1);
         self.in_len = size.max(1).div_ceil(mps) * mps;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::named_cmsis_dap;
+
+    #[test]
+    fn only_devices_named_cmsis_dap_are_probes() {
+        // XR-DAP 探针：产品名带 " CMSIS-DAP"，DAP 接口名是 "CMSIS-DAP v2"
+        assert!(named_cmsis_dap(
+            Some("XR-DAP-S3 CMSIS-DAP"),
+            [Some("CMSIS-DAP v2"), Some("XR-DAP Serial")].into_iter()
+        ));
+        // 只有接口名（单接口设备在 Windows 上读不到接口名时靠产品名，反之亦然）
+        assert!(named_cmsis_dap(
+            Some("XR-DAP-V307"),
+            [None, Some("CMSIS-DAP v2")].into_iter()
+        ));
+        assert!(named_cmsis_dap(
+            Some("XR-DAP-F103 CMSIS-DAP"),
+            [None].into_iter()
+        ));
+        // 同一对 VID:PID 的别的设备（例如用 LibXR 的主控板）
+        assert!(!named_cmsis_dap(
+            Some("MainCtrl"),
+            [Some("CDC ACM"), None].into_iter()
+        ));
+        assert!(!named_cmsis_dap(None, std::iter::empty()));
     }
 }

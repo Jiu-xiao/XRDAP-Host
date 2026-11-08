@@ -1,6 +1,7 @@
 //! 找探针：USB（VID:PID 1D50:6199）、串口、局域网（mDNS）。
 //!
-//! - USB：列出 VID:PID 为 1D50:6199 的设备，序列号来自 USB 描述符。
+//! - USB：列出 VID:PID 为 1D50:6199、产品名或接口名带 "CMSIS-DAP" 的设备，序列号来自 USB
+//!   描述符。
 //! - 串口：只看系统列出的端口和它们的 USB 描述符，默认**不打开**任何串口——打开串口可能复位
 //!   接在上面的别的开发板。乐鑫芯片自带的 USB Serial/JTAG（VID:PID 303A:1001）按描述符认作
 //!   探针：描述符里的序列号是芯片的 MAC，探针序列号由它得出。别的串口只有
@@ -9,7 +10,8 @@
 //!
 //! 同一块探针可能同时经 USB、串口、Wi-Fi 被找到，序列号相同；[`group`] 把它们合成一项。
 //!
-//! Find probes on USB (1D50:6199), serial ports and the LAN (mDNS). Serial ports are only
+//! Find probes on USB (1D50:6199, with "CMSIS-DAP" in the product or an interface string),
+//! serial ports and the LAN (mDNS). Serial ports are only
 //! listed with their USB descriptors and are not opened by default, since opening a port can
 //! reset another board on it. Espressif's built-in USB Serial/JTAG (303A:1001) is recognised
 //! from its descriptor, whose serial number is the chip MAC. Other ports are opened and asked
