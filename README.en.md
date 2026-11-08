@@ -87,9 +87,11 @@ Variable syntax: `counter`, `state.speed`, `motor[1].pid->out`, `*ptr`, `p->q->x
 
 | Probe connection | Method |
 |---|---|
-| ESP32-S3, ESP32-S2, STM32F103, CH32V307 or CH32V305 probe on USB | The probe is a USB CMSIS-DAP probe; use it directly |
+| ESP32-S3, ESP32-S2, STM32F103, CH32V307, CH32V305 or CH32V208 (`linkw`, WCH-LinkW-R0-1v1) probe on USB | The probe is a USB CMSIS-DAP probe; use it directly |
 | Probe on a serial port (ESP32-C3, classic ESP32 and others) | `xrdap share usbip`, then attach over USB/IP, see below |
 | Wi-Fi | OpenOCD connects to the probe's own IP (`cmsis-dap tcp host <probe IP>`, port 3241) without `xrdap share`; Keil, pyOCD and others use `xrdap share usbip -p <probe IP or host name>` to make it a USB probe and attach that. The probe carries no USB device model and no longer serves USB/IP itself, see [XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP/blob/main/README.en.md#23-over-wi-fi-with-keil-pyocd-probe-rs-openocd) |
+
+CH32 wireless probes (two `wdap` or two `linkw`) are used in pairs; they are paired with a key on the probes, as the [XRDAP-CH32](https://github.com/Jiu-xiao/XRDAP-CH32) documentation describes.
 
 Share a probe on a serial port as a USB probe:
 
