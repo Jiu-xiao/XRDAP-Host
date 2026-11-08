@@ -1,11 +1,21 @@
-//! 探针的 Wi-Fi：当前状态，保存或清除热点参数（经 DAP 的 0x86 命令，不用另开串口终端）。
+//! 探针的 Wi-Fi：当前状态，保存或清除热点参数（经探针的控制口或 DAP 命令 0x86，不用另开串口终端）。
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 
 use super::super::app::App;
+use super::super::theme;
 use super::super::worker::{Cmd, WifiChange};
 
 impl App {
+    /// 保存热点参数的命令。密码从界面状态里取走，交给后台线程用完即丢，界面不再留着它
+    /// （保存成功还是失败都一样）。
+    pub(crate) fn wifi_set_cmd(&mut self) -> Cmd {
+        Cmd::WifiApply(WifiChange::Set {
+            ssid: self.wifi_ssid.trim().to_string(),
+            password: std::mem::take(&mut self.wifi_password),
+        })
+    }
+
     /// Wi-Fi 状态和热点参数表单。保存、清除后探针重启，连接随之断开。
     pub(super) fn ui_wifi(&mut self, ui: &mut egui::Ui) {
         let mut cmd = None;
@@ -14,17 +24,13 @@ impl App {
             .show(ui, |ui| {
                 match &self.wifi {
                     None => ui.label(RichText::new("读取中").weak()),
-                    Some(Err(e)) => ui.label(
-                        RichText::new(format!("读不到（固件不支持或读取失败）：{e}"))
-                            .color(ui.visuals().error_fg_color),
-                    ),
+                    Some(Err(e)) => {
+                        theme::fail(ui, format!("读不到（固件不支持或读取失败）：{e}"));
+                        ui.label("")
+                    }
                     Some(Ok(st)) => {
-                        let color = if st.connected {
-                            Color32::from_rgb(90, 200, 120)
-                        } else {
-                            ui.visuals().warn_fg_color
-                        };
-                        ui.label(RichText::new(format!("● {}", st.describe())).color(color))
+                        ui.label(st.describe());
+                        ui.label(RichText::new(st.history()).weak().small())
                     }
                 };
                 egui::Grid::new("wifi_form").num_columns(2).show(ui, |ui| {
@@ -45,13 +51,12 @@ impl App {
                         let ssid_ok = !self.wifi_ssid.trim().is_empty();
                         if ui
                             .add_enabled(ssid_ok, egui::Button::new("保存并重启"))
-                            .on_hover_text("探针保存热点参数后约 0.5 秒重启，当前连接会断开")
+                            .on_hover_text(
+                                "探针保存热点参数后约 0.5 秒重启，当前连接会断开。\n                                 经 TCP（Wi-Fi）连接时，密码以明文经过局域网",
+                            )
                             .clicked()
                         {
-                            cmd = Some(Cmd::WifiApply(WifiChange::Set {
-                                ssid: self.wifi_ssid.trim().to_string(),
-                                password: self.wifi_password.clone(),
-                            }));
+                            cmd = Some(self.wifi_set_cmd());
                         }
                         if ui
                             .button("清除")

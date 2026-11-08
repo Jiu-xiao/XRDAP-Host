@@ -2,6 +2,12 @@
 //!
 //! Windows 上从别的线程 shutdown 套接字叫不醒阻塞中的 recv，所以读超时设为 [`STOP_POLL`]，
 //! 每次超时醒来看一眼停止标志。
+//!
+//! Client connection of a share: reads can be interrupted by a stop flag set from another
+//! thread.
+//!
+//! On Windows, shutting a socket down from another thread does not wake a blocked receive, so
+//! the read timeout is set to [`STOP_POLL`] and each timeout wakes up to check the stop flag.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
@@ -24,13 +30,19 @@ impl<'a> Link<'a> {
         Ok(Self { stream, stop })
     }
 
-    /// 停止标志已置位
+    /// 停止标志已置位。
+    ///
+    /// The stop flag is set.
     pub fn stopped(&self) -> bool {
         self.stop.load(Ordering::Acquire)
     }
 
     /// 读满 `buf`。超时醒来时已读到的数据保留，接着读，不会把一帧拆坏。停止时返回
     /// `Interrupted`，对方关闭时返回 `UnexpectedEof`。
+    ///
+    /// Fill `buf`. Data already read is kept when a timeout wakes the read, and reading
+    /// continues, so a frame is not split. Returns `Interrupted` on stop and `UnexpectedEof`
+    /// when the peer closes.
     pub fn read_full(&mut self, buf: &mut [u8]) -> io::Result<()> {
         let mut got = 0;
         while got < buf.len() {

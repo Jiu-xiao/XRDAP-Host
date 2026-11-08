@@ -3,13 +3,14 @@
 //! ```text
 //! cargo run -p xrdap --example read_write -- app.elf motor.speed
 //! cargo run -p xrdap --example read_write -- app.elf motor.kp 1.5
-//! XRDAP_PROBE=COM35 cargo run -p xrdap --example read_write -- app.elf motor.speed
+//! XRDAP_PROBE=COM3 cargo run -p xrdap --example read_write -- app.elf motor.speed
 //! ```
 //!
-//! 探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap --probe`），不设时自动选唯一的那块。
+//! 探针用环境变量 `XRDAP_PROBE` 指定（写法同 `xrdap -p`），不设时自动选唯一的那块。
 
 use std::path::PathBuf;
 
+use xrdap::addr::Spec;
 use xrdap::expr::Resolver;
 use xrdap::open::{open, OpenOptions};
 
@@ -26,9 +27,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = Resolver::new(&mut syms).resolve(&expr)?;
 
     // 2. 打开探针并连接 SWD 目标
-    let spec = std::env::var("XRDAP_PROBE").ok();
-    let mut probe = open(spec.as_deref(), &OpenOptions::default())?;
-    probe.connect_swd(4_000_000)?;
+    let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
+    let mut probe = open(&spec, &OpenOptions::default())?;
+    probe.connect(4_000_000)?;
 
     // 3. 写（如果给了新值），再读
     if let Some(v) = value {

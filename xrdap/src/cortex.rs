@@ -2,17 +2,35 @@
 //!
 //! 都通过厂商 READ/WRITE 访问系统控制空间，不用 DAP_Transfer，所以采样期间也能用。
 //! 寄存器定义见 ARMv7-M / ARMv8-M 架构手册的 C1.6（Debug system registers）。
+//!
+//! State and run control of a Cortex-M core: read CPUID and DHCSR; halt, resume and reset.
+//!
+//! All accesses go through the vendor READ/WRITE to the system control space instead of
+//! DAP_Transfer, so they also work while the probe is sampling. For the register definitions
+//! see C1.6 (Debug system registers) of the ARMv7-M / ARMv8-M architecture reference manuals.
 
 use std::time::{Duration, Instant};
 
 use crate::bytes::le_u32;
 use crate::dap::Probe;
-use crate::vendor::{self, Item};
+use crate::raw::vendor::Item;
 use crate::{Error, Result};
 
+/// CPUID 寄存器的地址。
+///
+/// Address of the CPUID register.
 pub const CPUID: u32 = 0xE000_ED00;
+/// AIRCR 寄存器的地址。
+///
+/// Address of the AIRCR register.
 pub const AIRCR: u32 = 0xE000_ED0C;
+/// DHCSR 寄存器的地址。
+///
+/// Address of the DHCSR register.
 pub const DHCSR: u32 = 0xE000_EDF0;
+/// DEMCR 寄存器的地址。
+///
+/// Address of the DEMCR register.
 pub const DEMCR: u32 = 0xE000_EDFC;
 
 const DBGKEY: u32 = 0xA05F_0000;
@@ -27,17 +45,32 @@ const SYSRESETREQ: u32 = 1 << 2;
 const VC_CORERESET: u32 = 1 << 0;
 
 /// 内核此刻的运行状态。
+///
+/// The run state of the core at the moment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreState {
+    /// 运行中。
+    ///
+    /// Running.
     Running,
-    /// 执行了 WFI/WFE，在等中断
+    /// 执行了 WFI/WFE，在等中断。
+    ///
+    /// Executed WFI/WFE and is waiting for an interrupt.
     Sleeping,
+    /// 已停住。
+    ///
+    /// Halted.
     Halted,
-    /// 锁死：HardFault 里又出错
+    /// 锁死：HardFault 里又出错。
+    ///
+    /// Locked up: a further fault occurred inside HardFault.
     Lockup,
 }
 
 impl CoreState {
+    /// 状态的简短说明。
+    ///
+    /// A short description of the state.
     pub fn text(self) -> &'static str {
         match self {
             CoreState::Running => "运行中",
@@ -49,18 +82,33 @@ impl CoreState {
 }
 
 /// 读一次 DHCSR 得到的状态。
+///
+/// The status obtained from one DHCSR read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoreStatus {
+    /// DHCSR 的原始值。
+    ///
+    /// The raw DHCSR value.
     pub dhcsr: u32,
+    /// 内核运行状态。
+    ///
+    /// Run state of the core.
     pub state: CoreState,
     /// 调试器打开了停机调试（C_DEBUGEN）
+    ///
+    /// The debugger enabled halting debug (C_DEBUGEN)
     pub debug_enabled: bool,
     /// 上次读 DHCSR 之后内核复位过（S_RESET_ST，读后清零）
+    ///
+    /// The core was reset since the last DHCSR read (S_RESET_ST, cleared by the read)
     pub reset_seen: bool,
 }
 
 impl CoreStatus {
-    pub fn from_dhcsr(dhcsr: u32) -> Self {
+    /// 从 DHCSR 的值解出状态。
+    ///
+    /// Decode the status from a DHCSR value.
+    pub(crate) fn from_dhcsr(dhcsr: u32) -> Self {
         let state = if dhcsr & S_LOCKUP != 0 {
             CoreState::Lockup
         } else if dhcsr & S_HALT != 0 {
@@ -80,13 +128,20 @@ impl CoreStatus {
 }
 
 /// CPUID 寄存器：内核型号和修订号。
+///
+/// The CPUID register: core model and revision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoreInfo {
+    /// CPUID 的原始值。
+    ///
+    /// The raw CPUID value.
     pub cpuid: u32,
 }
 
 impl CoreInfo {
     /// 内核名字，例如 Cortex-M4；不认识的部件号返回 None。
+    ///
+    /// The core name, e.g. Cortex-M4; None for an unknown part number.
     pub fn name(&self) -> Option<&'static str> {
         if self.cpuid >> 24 != 0x41 {
             return None;
@@ -109,6 +164,8 @@ impl CoreInfo {
     }
 
     /// 例如 "Cortex-M4 r0p1"；不认识时给出 CPUID 原值。
+    ///
+    /// E.g. "Cortex-M4 r0p1"; the raw CPUID value when the core is unknown.
     pub fn describe(&self) -> String {
         let variant = (self.cpuid >> 20) & 0xF;
         let revision = self.cpuid & 0xF;
@@ -120,45 +177,46 @@ impl CoreInfo {
 }
 
 /// 复位之后内核做什么。
+///
+/// What the core does after a reset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AfterReset {
+    /// 继续运行。
+    ///
+    /// Run on.
     Run,
-    /// 停在复位向量（第一条指令之前）
+    /// 停在复位向量（第一条指令之前）。
+    ///
+    /// Halt at the reset vector (before the first instruction).
     Halt,
 }
 
 /// 读一个 32 位字。
+///
+/// Read one 32-bit word.
 pub fn read_u32(probe: &mut Probe, addr: u32) -> Result<u32> {
-    let r = probe.read(&[Item::direct(0, 4, addr)])?;
-    match r.first() {
-        Some(r) if r.status == 0 && r.value.len() == 4 => Ok(le_u32(&r.value, 0)),
-        Some(r) => Err(Error::Io(format!(
-            "读 0x{addr:08X} 失败：{}",
-            vendor::item_status_text(r.status, &[])
-        ))),
-        None => Err(Error::protocol("READ 没有返回结果")),
-    }
+    Ok(le_u32(&probe.read_one(&Item::direct(0, 4, addr))?, 0))
 }
 
 /// 写一个 32 位字。
+///
+/// Write one 32-bit word.
 pub fn write_u32(probe: &mut Probe, addr: u32, value: u32) -> Result<()> {
-    let r = probe.write(&[(Item::direct(0, 4, addr), value.to_le_bytes().to_vec())])?;
-    match r.first() {
-        Some(r) if r.status == 0 => Ok(()),
-        Some(r) => Err(Error::Io(format!(
-            "写 0x{addr:08X} 失败：{}",
-            vendor::item_status_text(r.status, &[])
-        ))),
-        None => Err(Error::protocol("WRITE 没有返回结果")),
-    }
+    probe.write_one(&Item::direct(0, 4, addr), &value.to_le_bytes())
 }
 
+/// 读 CPUID。
+///
+/// Read CPUID.
 pub fn info(probe: &mut Probe) -> Result<CoreInfo> {
     Ok(CoreInfo {
         cpuid: read_u32(probe, CPUID)?,
     })
 }
 
+/// 读 DHCSR，得到内核状态。
+///
+/// Read DHCSR to get the core status.
 pub fn status(probe: &mut Probe) -> Result<CoreStatus> {
     Ok(CoreStatus::from_dhcsr(read_u32(probe, DHCSR)?))
 }
@@ -180,13 +238,16 @@ fn wait_for(
 }
 
 /// 停住内核。返回停住后的状态；100 ms 内没停住时返回错误。
+///
+/// Halt the core. Returns the status after halting; an error when the core has not halted
+/// within 100 ms.
 pub fn halt(probe: &mut Probe) -> Result<CoreStatus> {
     write_u32(probe, DHCSR, DBGKEY | C_DEBUGEN | C_HALT)?;
     let s = wait_for(probe, Duration::from_millis(100), |s| {
         s.state == CoreState::Halted
     })?;
     if s.state != CoreState::Halted {
-        return Err(Error::Io(format!(
+        return Err(Error::Target(format!(
             "内核没有停住（DHCSR 0x{:08X}，{}）",
             s.dhcsr,
             s.state.text()
@@ -196,6 +257,8 @@ pub fn halt(probe: &mut Probe) -> Result<CoreStatus> {
 }
 
 /// 让停住的内核继续运行，保持 C_DEBUGEN（和 OpenOCD 的 resume 一样）。
+///
+/// Let a halted core run on, keeping C_DEBUGEN (as OpenOCD's resume does).
 pub fn resume(probe: &mut Probe) -> Result<CoreStatus> {
     write_u32(probe, DHCSR, DBGKEY | C_DEBUGEN)?;
     wait_for(probe, Duration::from_millis(100), |s| {
@@ -207,8 +270,21 @@ pub fn resume(probe: &mut Probe) -> Result<CoreStatus> {
 ///
 /// 写 AIRCR 时目标正在复位，这次写入和紧接着的几次读可能收不到正常应答，
 /// 所以不检查写入结果，之后在 500 ms 内反复读 DHCSR，直到看到 S_RESET_ST。
+/// 复位期间临时改 DEMCR.VC_CORERESET，结束时（成功或失败）都恢复 DEMCR 原值。
+///
+/// System reset (AIRCR.SYSRESETREQ), then run or halt at the reset vector. DEMCR.VC_CORERESET
+/// is changed for this reset only; DEMCR is restored on every exit, success or failure.
 pub fn reset(probe: &mut Probe, after: AfterReset) -> Result<CoreStatus> {
     let demcr = read_u32(probe, DEMCR)?;
+    let result = reset_with_catch(probe, after, demcr);
+    let restored = write_u32(probe, DEMCR, demcr);
+    let status = result?;
+    restored?;
+    Ok(status)
+}
+
+/// [`reset`] 的主体：按 `after` 设好 VC_CORERESET，复位并等它完成。不恢复 DEMCR。
+fn reset_with_catch(probe: &mut Probe, after: AfterReset, demcr: u32) -> Result<CoreStatus> {
     match after {
         AfterReset::Halt => {
             write_u32(probe, DHCSR, DBGKEY | C_DEBUGEN)?;
@@ -241,19 +317,15 @@ pub fn reset(probe: &mut Probe, after: AfterReset) -> Result<CoreStatus> {
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-    if after == AfterReset::Halt {
-        // 只拦这一次复位：恢复 DEMCR 原来的 VC_CORERESET
-        write_u32(probe, DEMCR, demcr)?;
-    }
-    let s = last.ok_or_else(|| Error::Io("复位后读不到 DHCSR".into()))?;
+    let s = last.ok_or_else(|| Error::Target("复位后读不到 DHCSR".into()))?;
     if !seen {
-        return Err(Error::Io(format!(
+        return Err(Error::Target(format!(
             "没有看到复位发生（DHCSR 0x{:08X}）",
             s.dhcsr
         )));
     }
     if after == AfterReset::Halt && s.state != CoreState::Halted {
-        return Err(Error::Io(format!(
+        return Err(Error::Target(format!(
             "复位后内核没有停住（DHCSR 0x{:08X}）",
             s.dhcsr
         )));

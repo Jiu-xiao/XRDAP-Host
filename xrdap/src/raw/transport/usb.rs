@@ -1,29 +1,74 @@
 //! USB 传输：CMSIS-DAP v2 的 Bulk 端点（Windows 上走 WinUSB，Linux 上走 usbfs）。
+//!
+//! USB transport: the CMSIS-DAP v2 bulk endpoints (WinUSB on Windows, usbfs on Linux).
 
 use std::time::Duration;
 
 use nusb::descriptors::TransferType;
-use nusb::transfer::{Buffer, Bulk, Direction, In, Out};
+use nusb::transfer::{
+    Buffer, Bulk, ControlIn, ControlOut, ControlType, Direction, In, Out, Recipient,
+};
 use nusb::{DeviceInfo, Endpoint, Interface, MaybeFuture};
 
 use super::Transport;
 use crate::{Error, Result};
 
+/// 探针的 USB 厂商 ID。
+///
+/// USB vendor ID of the probe.
 pub const VID: u16 = 0x1D50;
+/// 探针的 USB 产品 ID。
+///
+/// USB product ID of the probe.
 pub const PID: u16 = 0x6199;
 
+/// 发一个 OUT 包的最长时间：探针收不下时（端点一直 NAK）算链路出错
+const SEND_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// 一个找到的探针。
+///
+/// A probe that was found.
 #[derive(Debug, Clone)]
 pub struct UsbProbeInfo {
+    /// USB 描述符里的序列号。
+    ///
+    /// Serial number from the USB descriptor.
     pub serial: Option<String>,
+    /// USB 描述符里的产品名。
+    ///
+    /// Product name from the USB descriptor.
     pub product: Option<String>,
+    /// USB 描述符里的厂商名。
+    ///
+    /// Manufacturer name from the USB descriptor.
     pub manufacturer: Option<String>,
+    /// 设备所在的总线。
+    ///
+    /// The bus the device is on.
     pub bus: String,
+    /// 设备在总线上的地址。
+    ///
+    /// The device address on the bus.
     pub address: u8,
 }
 
 fn usb_err(what: &str, e: impl std::fmt::Display) -> Error {
     Error::Io(format!("{what}：{e}"))
+}
+
+/// 名字表明设备是 CMSIS-DAP 探针：产品名或某个接口名里带 "CMSIS-DAP"（CMSIS-DAP 规范对
+/// v1 的产品名、对 v2 的接口名的要求）。用同一对 VID:PID 的别的设备两处都不带，不算探针。
+///
+/// The names say the device is a CMSIS-DAP probe: the product string or an interface string
+/// contains "CMSIS-DAP", as the CMSIS-DAP specification asks of v1 product strings and v2
+/// interface strings. Other devices with the same VID:PID have neither and are not probes.
+fn named_cmsis_dap<'a>(
+    product: Option<&str>,
+    mut interfaces: impl Iterator<Item = Option<&'a str>>,
+) -> bool {
+    const NAME: &str = "CMSIS-DAP";
+    product.is_some_and(|s| s.contains(NAME))
+        || interfaces.any(|s| s.is_some_and(|s| s.contains(NAME)))
 }
 
 fn probes() -> Result<Vec<DeviceInfo>> {
@@ -32,10 +77,19 @@ fn probes() -> Result<Vec<DeviceInfo>> {
         .map_err(|e| usb_err("列 USB 设备失败", e))?;
     Ok(list
         .filter(|d| d.vendor_id() == VID && d.product_id() == PID)
+        .filter(|d| {
+            named_cmsis_dap(
+                d.product_string(),
+                d.interfaces().map(|i| i.interface_string()),
+            )
+        })
         .collect())
 }
 
-/// 列出 VID:PID 为 1D50:6199 的设备。
+/// 列出 VID:PID 为 1D50:6199、产品名或接口名带 "CMSIS-DAP" 的设备。
+///
+/// List the devices with VID:PID 1D50:6199 whose product or interface string contains
+/// "CMSIS-DAP".
 pub fn list() -> Result<Vec<UsbProbeInfo>> {
     Ok(probes()?
         .iter()
@@ -49,40 +103,45 @@ pub fn list() -> Result<Vec<UsbProbeInfo>> {
         .collect())
 }
 
+/// 一个打开的 USB 探针（CMSIS-DAP v2 的 Bulk 端点）。
+///
+/// An open USB probe (the CMSIS-DAP v2 bulk endpoints).
 pub struct UsbTransport {
     _interface: Interface,
     ep_out: Endpoint<Bulk, Out>,
     ep_in: Endpoint<Bulk, In>,
     in_len: usize,
-    timeout: Duration,
     serial: String,
+    interface_number: u8,
 }
 
 impl UsbTransport {
     /// 打开探针。`serial` 为 None 时要求只插着一个探针。
-    pub fn open(serial: Option<&str>, timeout: Duration) -> Result<Self> {
+    ///
+    /// Open a probe. With `serial` None exactly one probe must be plugged in.
+    pub fn open(serial: Option<&str>) -> Result<Self> {
         let found = probes()?;
         let info = match serial {
             Some(s) => found
                 .iter()
                 .find(|d| d.serial_number() == Some(s))
                 .ok_or_else(|| {
-                    Error::Io(format!(
-                        "没有找到序列号为 {s} 的探针（找到 {} 个：{}）",
+                    Error::Select(format!(
+                        "没有找到序列号为 {s} 的 USB 探针（找到 {} 块：{}）",
                         found.len(),
                         serial_list(&found)
                     ))
                 })?,
             None => match found.len() {
                 0 => {
-                    return Err(Error::Io(format!(
+                    return Err(Error::Select(format!(
                         "没有找到 USB 探针（VID:PID {VID:04X}:{PID:04X}）"
                     )))
                 }
                 1 => &found[0],
                 n => {
-                    return Err(Error::usage(format!(
-                        "插着 {n} 个探针，用 -p usb:<序列号> 选一个：{}",
+                    return Err(Error::Select(format!(
+                        "插着 {n} 块 USB 探针：{}",
                         serial_list(&found)
                     )))
                 }
@@ -152,8 +211,8 @@ impl UsbTransport {
             ep_out,
             ep_in,
             in_len: 0,
-            timeout,
             serial: serial_text,
+            interface_number: number,
         };
         t.set_packet_size(1024);
         Ok(t)
@@ -169,23 +228,26 @@ fn serial_list(found: &[DeviceInfo]) -> String {
 }
 
 impl Transport for UsbTransport {
-    fn xfer(&mut self, request: &[u8]) -> Result<Vec<u8>> {
+    fn send(&mut self, request: &[u8]) -> Result<()> {
         let done = self
             .ep_out
-            .transfer_blocking(Buffer::from(request.to_vec()), self.timeout);
+            .transfer_blocking(Buffer::from(request.to_vec()), SEND_TIMEOUT);
         done.status.map_err(|e| usb_err("USB 发送失败", e))?;
         // 请求长度正好是端点最大包长的整数倍时，没有短包标志传输结束，探针会一直等；补一个零长度包。
         let mps = self.ep_out.max_packet_size().max(1);
         if !request.is_empty() && request.len().is_multiple_of(mps) {
             let zlp = self
                 .ep_out
-                .transfer_blocking(Buffer::from(Vec::<u8>::new()), self.timeout);
+                .transfer_blocking(Buffer::from(Vec::<u8>::new()), SEND_TIMEOUT);
             zlp.status.map_err(|e| usb_err("USB 发送失败", e))?;
         }
+        Ok(())
+    }
 
+    fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>> {
         let done = self
             .ep_in
-            .transfer_blocking(Buffer::new(self.in_len), self.timeout);
+            .transfer_blocking(Buffer::new(self.in_len), timeout);
         match done.status {
             Ok(()) => Ok(done.buffer.into_vec()),
             Err(nusb::transfer::TransferError::Cancelled) => {
@@ -202,10 +264,84 @@ impl Transport for UsbTransport {
         format!("USB {}", self.serial)
     }
 
+    // 控制口：EP0 厂商请求，发给 DAP 接口。SEND（0x01，OUT）送请求，RECV（0x02，IN）取应答；
+    // 应答没好时 RECV 返回 0 字节，稍后重试。固件没有控制口、或请求超过 EP0 的 OUT 缓冲时 SEND
+    // 被 STALL，返回 Ok(None)。
+    // The control port: EP0 vendor requests to the DAP interface. SEND (0x01, OUT) carries the
+    // request, RECV (0x02, IN) the answer; while it is not ready RECV returns 0 bytes and is
+    // retried. A firmware without a control port, or a request longer than the EP0 OUT buffer,
+    // gets the SEND STALLed: Ok(None).
+    fn control(&mut self, request: &[u8]) -> Result<Option<Vec<u8>>> {
+        const TIMEOUT: Duration = Duration::from_millis(500);
+        let out = ControlOut {
+            control_type: ControlType::Vendor,
+            recipient: Recipient::Interface,
+            request: 0x01,
+            value: 0,
+            index: u16::from(self.interface_number),
+            data: request,
+        };
+        if self._interface.control_out(out, TIMEOUT).wait().is_err() {
+            return Ok(None);
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let recv = ControlIn {
+                control_type: ControlType::Vendor,
+                recipient: Recipient::Interface,
+                request: 0x02,
+                value: 0,
+                index: u16::from(self.interface_number),
+                length: 96,
+            };
+            let answer = self
+                ._interface
+                .control_in(recv, TIMEOUT)
+                .wait()
+                .map_err(|e| usb_err("读控制口应答失败", e))?;
+            if !answer.is_empty() {
+                return Ok(Some(answer));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(Error::Timeout("控制口没有应答".into()));
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     /// IN 传输的请求长度要是端点最大包长的整数倍；取不小于 DAP 包长的最小倍数，
     /// 这样响应正好等于包长时传输也能结束。
     fn set_packet_size(&mut self, size: usize) {
         let mps = self.ep_in.max_packet_size().max(1);
         self.in_len = size.max(1).div_ceil(mps) * mps;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::named_cmsis_dap;
+
+    #[test]
+    fn only_devices_named_cmsis_dap_are_probes() {
+        // XR-DAP 探针：产品名带 " CMSIS-DAP"，DAP 接口名是 "CMSIS-DAP v2"
+        assert!(named_cmsis_dap(
+            Some("XR-DAP-S3 CMSIS-DAP"),
+            [Some("CMSIS-DAP v2"), Some("XR-DAP Serial")].into_iter()
+        ));
+        // 只有接口名（单接口设备在 Windows 上读不到接口名时靠产品名，反之亦然）
+        assert!(named_cmsis_dap(
+            Some("XR-DAP-V307"),
+            [None, Some("CMSIS-DAP v2")].into_iter()
+        ));
+        assert!(named_cmsis_dap(
+            Some("XR-DAP-F103 CMSIS-DAP"),
+            [None].into_iter()
+        ));
+        // 同一对 VID:PID 的别的设备（例如用 LibXR 的主控板）
+        assert!(!named_cmsis_dap(
+            Some("MainCtrl"),
+            [Some("CDC ACM"), None].into_iter()
+        ));
+        assert!(!named_cmsis_dap(None, std::iter::empty()));
     }
 }

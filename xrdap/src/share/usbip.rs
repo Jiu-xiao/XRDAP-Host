@@ -1,12 +1,26 @@
 //! USB/IP 服务端：把探针模拟成一个 USB CMSIS-DAP v2 设备。
 //!
-//! 虚拟设备：VID:PID 1D50:6199、bcdDevice 0x0200（与 S3 真 USB 设备的 0x0100 区分，Windows 按
-//! 这三项缓存描述符），一个厂商类接口（接口名 `CMSIS-DAP v2`），Bulk OUT 0x01、Bulk IN 0x81，
-//! 高速 512 字节；BOS 里带 MS OS 2.0 描述符，Windows 自动绑定 WinUSB。与固件
-//! `firmware/common/net/usbip_device.hpp` 是同一个设备模型。
+//! 虚拟设备：VID:PID 1D50:6199、bcdDevice 0x0200（与探针自身 USB 设备的 bcdDevice 不同；
+//! Windows 按 VID、PID、bcdDevice 缓存描述符），一个厂商类接口（接口名 `CMSIS-DAP v2`），
+//! Bulk OUT 0x01、Bulk IN 0x81，高速 512 字节；BOS 里带 MS OS 2.0 描述符，Windows 自动绑定
+//! WinUSB。描述符的字节以 XRDAP-Core 协议文档第 6 节为准
+//! <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>。
 //!
 //! 协议：`OP_REQ_DEVLIST`、`OP_REQ_IMPORT` 之后是 `USBIP_CMD_SUBMIT`/`RET_SUBMIT`、
 //! `CMD_UNLINK`/`RET_UNLINK`，字段大端。见 Linux 内核文档 `usb/usbip_protocol.rst`。
+//!
+//! USB/IP server: emulates the probe as a USB CMSIS-DAP v2 device.
+//!
+//! The virtual device: VID:PID 1D50:6199 and bcdDevice 0x0200 (different from the bcdDevice of
+//! the probe's own USB device; Windows caches descriptors by VID, PID and bcdDevice), one
+//! vendor-class interface (interface name `CMSIS-DAP v2`), bulk OUT 0x01 and bulk IN 0x81, high
+//! speed with 512-byte packets; the BOS carries an MS OS 2.0 descriptor so that Windows binds
+//! WinUSB automatically. The descriptor bytes follow section 6 of the XRDAP-Core protocol
+//! document.
+//!
+//! Protocol: `OP_REQ_DEVLIST` and `OP_REQ_IMPORT`, followed by `USBIP_CMD_SUBMIT`/`RET_SUBMIT`
+//! and `CMD_UNLINK`/`RET_UNLINK`, with big-endian fields. See the Linux kernel document
+//! `usb/usbip_protocol.rst`.
 
 use std::collections::VecDeque;
 use std::io;
@@ -38,10 +52,18 @@ const MS_VENDOR_CODE: u8 = 0x20;
 const DAP_EP: u32 = 1;
 
 /// 虚拟设备的产品名和序列号。
+///
+/// Product name and serial number of the virtual device.
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
-    /// USB 产品名，例如 `XR-DAP-C3 CMSIS-DAP`（带 "CMSIS-DAP"，工具按它识别）
+    /// USB 产品名，例如 `XR-DAP-C3 CMSIS-DAP`（带 "CMSIS-DAP"，工具按它识别）。
+    ///
+    /// USB product name, e.g. `XR-DAP-C3 CMSIS-DAP` (it contains "CMSIS-DAP", by which tools
+    /// recognize the device).
     pub product: String,
+    /// USB 序列号。
+    ///
+    /// USB serial number.
     pub serial: String,
 }
 
@@ -239,7 +261,7 @@ impl Session<'_> {
     }
 
     /// 一个命令引起的回复（OUT 的回复和配上的 IN 响应）合成一次写。分两次写时第二段要等
-    /// 对方的延迟 ACK，每个来回多出约 40 ms。
+    /// 对方的延迟 ACK，每个来回都会多出这段等待。
     fn flush(&mut self, s: &mut Link) -> io::Result<()> {
         if self.tx.is_empty() {
             return Ok(());
@@ -249,12 +271,7 @@ impl Session<'_> {
         r
     }
 
-    fn submit(
-        &mut self,
-        s: &mut Link,
-        hdr: &[u8; 48],
-        exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-    ) -> io::Result<()> {
+    fn submit(&mut self, s: &mut Link, hdr: &[u8; 48], exec: &mut super::Exec) -> io::Result<()> {
         let (seq, dir, ep) = (be_u32(hdr, 4), be_u32(hdr, 12), be_u32(hdr, 16));
         let len = be_u32(hdr, 24) as usize;
         let mut setup = [0u8; 8];
@@ -277,13 +294,12 @@ impl Session<'_> {
                 self.pair();
             }
             (DAP_EP, _) => {
-                let resp = exec(&out_data);
+                let responses = exec(&out_data)?;
                 // OUT 的回复只带写入的字节数，不带数据
                 self.reply(RET_SUBMIT, seq, 0, out_data.len(), &[]);
-                // 没有应答的命令（DAP_TransferAbort）不占 IN
-                if !resp.is_empty() {
-                    self.responses.push_back(resp);
-                }
+                // 没有应答的命令（DAP_TransferAbort、排队的包）不占 IN；排队之后的命令带回
+                // 多个应答，按顺序给后面的 IN
+                self.responses.extend(responses);
                 self.pair();
             }
             _ => self.reply(RET_SUBMIT, seq, EPIPE, 0, &[]),
@@ -306,11 +322,7 @@ impl Session<'_> {
 
 /// 处理一个客户端连接，直到对方断开（返回 Ok）或出错。设备列表查询（`usbip list -r`）
 /// 回完列表就返回。
-pub(super) fn serve(
-    s: &mut Link,
-    info: &DeviceInfo,
-    exec: &mut dyn FnMut(&[u8]) -> Vec<u8>,
-) -> io::Result<()> {
+pub(super) fn serve(s: &mut Link, info: &DeviceInfo, exec: &mut super::Exec) -> io::Result<()> {
     let mut op = [0u8; 8];
     s.read_full(&mut op)?;
     let code = u16::from_be_bytes([op[2], op[3]]);
@@ -418,7 +430,7 @@ mod tests {
                 serve(&mut link, &info, &mut |req| {
                     let mut r = req.to_vec();
                     r.push(0xAA);
-                    r
+                    Ok(vec![r])
                 })
                 .unwrap();
             }
@@ -491,11 +503,55 @@ mod tests {
         server.join().unwrap();
     }
 
+    fn unhex(s: &str) -> Vec<u8> {
+        let s: String = s.chars().filter(|c| !c.is_whitespace()).collect();
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    /// 描述符的字节和 XRDAP-Core 协议文档第 6 节的十六进制块逐字节相同（固件和主机共用的
+    /// 唯一来源）。
     #[test]
-    fn ms_os_lengths_consistent() {
-        let set = ms_os_20_set();
-        assert_eq!(u16::from_le_bytes([set[8], set[9]]) as usize, set.len());
-        assert_eq!(set.len(), 162);
-        assert_eq!(config_descriptor().len(), 32);
+    fn descriptors_match_protocol_section_6() {
+        assert_eq!(
+            device_descriptor().to_vec(),
+            unhex("12 01 10 02 00 00 00 40 50 1D 99 61 00 02 01 02 03 01")
+        );
+        assert_eq!(
+            config_descriptor(),
+            unhex(
+                "09 02 20 00 01 01 00 80 32
+                 09 04 00 00 02 FF 00 00 04
+                 07 05 01 02 00 02 00
+                 07 05 81 02 00 02 00"
+            )
+        );
+        assert_eq!(
+            qualifier_descriptor().to_vec(),
+            unhex("0A 06 00 02 00 00 00 40 01 00")
+        );
+        assert_eq!(
+            bos_descriptor(),
+            unhex(
+                "05 0F 21 00 01
+                 1C 10 05 00 DF 60 DD D8 89 45 C7 4C 9C D2 65 9D 9E 64 8A 9F 00 00 03 06 A2 00 20 00"
+            )
+        );
+        assert_eq!(
+            ms_os_20_set(),
+            unhex(
+                "0A 00 00 00 00 00 03 06 A2 00
+                 14 00 03 00 57 49 4E 55 53 42 00 00 00 00 00 00 00 00 00 00
+                 84 00 04 00 07 00 2A 00
+                 44 00 65 00 76 00 69 00 63 00 65 00 49 00 6E 00 74 00 65 00 72 00 66 00 61 00 63 00
+                 65 00 47 00 55 00 49 00 44 00 73 00 00 00
+                 50 00
+                 7B 00 43 00 44 00 42 00 33 00 42 00 35 00 41 00 44 00 2D 00 32 00 39 00 33 00 42 00
+                 2D 00 34 00 36 00 36 00 33 00 2D 00 41 00 41 00 33 00 36 00 2D 00 31 00 41 00 41 00
+                 45 00 34 00 36 00 34 00 36 00 33 00 37 00 37 00 36 00 7D 00 00 00 00 00"
+            )
+        );
     }
 }

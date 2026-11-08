@@ -1,16 +1,15 @@
 [workspace]
 resolver = "2"
-members = ["xrdap", "xrdap-tool"]
+members = ["xrdap", "xrdap-tool", "xrdap-sim"]
 
 [workspace.package]
-version = "0.5.2"
+version = "0.6.0"
 edition = "2021"
 license = "Apache-2.0"
 
 [workspace.dependencies]
 xrdap = { path = "xrdap", default-features = false }
 clap = { version = "4", features = ["derive"] }
-serial2 = "0.2.38"
 
 [profile.release]
 strip = true

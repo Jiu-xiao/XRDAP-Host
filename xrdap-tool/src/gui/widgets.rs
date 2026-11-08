@@ -1,6 +1,6 @@
 //! 几个小的界面工具函数。
 
-use eframe::egui::{self, Color32};
+use eframe::egui;
 
 /// 输入框占满剩下的宽度：留出边框和内边距，否则每帧把面板撑宽一点。
 pub(super) fn fill_width(ui: &egui::Ui) -> f32 {
@@ -13,12 +13,7 @@ pub(super) fn unix_us_now() -> i64 {
         .map_or(0, |d| d.as_micros() as i64)
 }
 
-pub(super) fn color_for(id: u64) -> Color32 {
-    let h = (id as f32 * 0.618_034).fract();
-    egui::ecolor::Hsva::new(h, 0.75, 0.85, 1.0).into()
-}
-
-/// 序列号的末尾 6 位，例如 …93EF1C；短的原样返回。
+/// 序列号的末尾 6 位，例如 …DDEEFF；短的原样返回。
 pub(super) fn short_serial(sn: &str) -> String {
     let n = sn.chars().count();
     if n > 8 {

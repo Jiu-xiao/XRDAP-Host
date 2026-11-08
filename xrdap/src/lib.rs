@@ -9,13 +9,14 @@
 //!
 //! ```no_run
 //! use xrdap::expr::Resolver;
+//! use xrdap::addr::Spec;
 //! use xrdap::open::{open, OpenOptions};
 //!
 //! # fn main() -> xrdap::Result<()> {
-//! // 自动选唯一的探针；也可以写 Some("COM35")、Some("192.168.0.108")、Some("93EF1C")
-//! // Auto-select the only probe; Some("COM35"), Some("192.168.0.108"), Some("93EF1C") also work
-//! let mut probe = open(None, &OpenOptions::default())?;
-//! probe.connect_swd(4_000_000)?;
+//! // 自动选唯一的探针；也可以写 Spec::parse("COM3")、Spec::parse("192.0.2.10")、Spec::parse("DDEEFF")
+//! // Auto-select the only probe; Spec::parse("COM3"), ("192.0.2.10") or ("DDEEFF") also work
+//! let mut probe = open(&Spec::Auto, &OpenOptions::default())?;
+//! probe.connect(4_000_000)?;
 //!
 //! let mut syms = xrdap::elf::load(std::path::Path::new("app.elf"))?;
 //! let speed = Resolver::new(&mut syms).resolve("motor.speed")?;
@@ -32,33 +33,32 @@
 //! | [`expr`]、[`types`]、[`elf`] | 变量表达式、类型、DWARF / Variable expressions, types, DWARF |
 //! | [`watch`]、[`csv`] | 探针端采样、CSV 记录 / Probe-side sampling, CSV records |
 //! | [`cortex`] | 内核状态和停住、继续、复位 / Core state, halt, resume, reset |
-//! | [`wifi`] | 探针 Wi-Fi 的查询、设置、清除 / Query, set and clear the probe's Wi-Fi |
 //! | [`share`] | 把探针共享成 USB/IP 设备或 OpenOCD TCP 后端 / Share a probe over USB/IP or as an OpenOCD TCP backend |
-//! | [`vendor`]、[`frame`]、[`transport`] | 厂商命令编码、串口/TCP 帧、三种传输 / Vendor encoding, serial/TCP framing, transports |
-//! | `fake`（feature `fake`）| 进程内的模拟探针，测试和演示用 / In-process fake probe for tests and demos |
+//! | [`raw`] | 协议层：厂商命令编码、串口/TCP 帧、三种传输 / Protocol layer: vendor encoding, serial/TCP framing, transports |
 //!
-//! 字节格式见 XRDAP-ESP 仓库的 `docs/protocol.md`。完整示例在 `examples/`。
-//! Byte formats: `docs/protocol.md` in the XRDAP-ESP repository. Full examples: `examples/`.
+//! 字节格式见协议文档：<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>。
+//! 完整示例在 `examples/`。
+//!
+//! Byte formats: the protocol document at
+//! <https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>.
+//! Full examples: `examples/`.
 
+pub mod addr;
 mod bytes;
 pub mod cortex;
 pub mod csv;
 pub mod dap;
-#[cfg(feature = "discover")]
 pub mod discover;
 #[cfg(feature = "elf")]
 pub mod elf;
-pub mod error;
+mod error;
 pub mod expr;
-#[cfg(feature = "fake")]
-pub mod fake;
-pub mod frame;
 pub mod open;
+pub mod raw;
 pub mod share;
-pub mod transport;
 pub mod types;
-pub mod vendor;
 pub mod watch;
-pub mod wifi;
 
 pub use error::{Error, Result};
+pub use raw::vendor::wifi::WifiStatus;
+pub use raw::vendor::{item_status_text, Item, ItemResult};
