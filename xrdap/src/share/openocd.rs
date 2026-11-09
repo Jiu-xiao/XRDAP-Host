@@ -13,18 +13,29 @@ use crate::raw::frame::{
     parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
 };
 
-/// 处理一个客户端连接，直到对方断开或出错。没有响应的命令（DAP_TransferAbort，`exec`
-/// 返回空包）不回帧。
-pub(super) fn serve(s: &mut Link, exec: &mut super::Exec) -> io::Result<()> {
+/// 处理一个客户端连接，直到对方断开或出错。请求到了就转给探针，不等应答；客户端暂时没有新
+/// 请求、或者探针那里的包已满时，再收应答回给客户端。没有响应的命令（DAP_TransferAbort）
+/// 不回帧。
+pub(super) fn serve(s: &mut Link, f: &mut dyn super::Forward) -> io::Result<()> {
     let mut header = [0u8; TCP_HEADER_LEN];
     loop {
+        while f.due() && !s.has_data()? {
+            reply(s, f)?;
+        }
         s.read_full(&mut header)?;
         let len = parse_tcp_header(&header, TCP_TYPE_REQUEST)
             .ok_or_else(|| bad(format!("OpenOCD TCP：帧头无效 {header:02X?}")))?;
         let mut request = vec![0u8; len];
         s.read_full(&mut request)?;
-        for response in exec(&request)? {
-            s.write_all(&tcp_frame(&response, TCP_TYPE_RESPONSE))?;
+        while f.full() && f.due() {
+            reply(s, f)?;
         }
+        f.send(&request)?;
     }
+}
+
+/// 收一个应答，回给客户端
+fn reply(s: &mut Link, f: &mut dyn super::Forward) -> io::Result<()> {
+    let response = f.recv()?;
+    s.write_all(&tcp_frame(&response, TCP_TYPE_RESPONSE))
 }

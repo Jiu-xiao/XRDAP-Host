@@ -67,6 +67,20 @@ impl<'a> Link<'a> {
         Ok(())
     }
 
+    /// 客户端已经发来、还没读的数据（或者对方已关闭）：不等待。
+    ///
+    /// Whether the client has sent data not yet read (or has closed): does not wait.
+    pub fn has_data(&mut self) -> io::Result<bool> {
+        self.stream.set_nonblocking(true)?;
+        let peeked = self.stream.peek(&mut [0u8; 1]);
+        self.stream.set_nonblocking(false)?;
+        match peeked {
+            Ok(_) => Ok(true),
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
         self.stream.write_all(data)
     }
