@@ -178,4 +178,4 @@ openocd -c "adapter driver cmsis-dap; cmsis-dap backend tcp; cmsis-dap tcp host 
 
 ### OpenOCD versions
 
-Over USB or USB/IP, OpenOCD uses its USB backend, and release 0.12.0 works. `cmsis-dap backend tcp` (`xrdap share openocd` and direct connections to Wi-Fi probes) is not in 0.12.0 and needs OpenOCD built from master. On Windows the build must include commit e89e73839d53: earlier master treats "no data yet" as an error on Windows, waits a dozen seconds at startup and repeats `error reading header`.
+Over USB or USB/IP, OpenOCD uses its USB backend, and release 0.12.0 works. `cmsis-dap backend tcp` (`xrdap share openocd` and direct connections to Wi-Fi probes) is not in 0.12.0 and needs OpenOCD built from master. On Windows the build must include commit e89e73839d53: a build without it treats "no data yet" as an error on Windows, waits a dozen seconds at startup and repeats `error reading header`, and reads and writes may fail. Without such a build, the probe is shared with `xrdap share usbip`, attached, and reached through the USB backend.

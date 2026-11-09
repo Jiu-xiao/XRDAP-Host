@@ -178,4 +178,4 @@ openocd -c "adapter driver cmsis-dap; cmsis-dap backend tcp; cmsis-dap tcp host 
 
 ### OpenOCD 版本
 
-经 USB 或 USB/IP 使用探针时，OpenOCD 使用 USB 后端，正式版 0.12.0 可以使用。`cmsis-dap backend tcp`（`xrdap share openocd` 和直接连接 Wi-Fi 探针）不在 0.12.0 中，需要从 master 编译的 OpenOCD。Windows 上要包含提交 e89e73839d53：更早的 master 在 Windows 上把“暂时没有数据”当作错误，启动时等待十几秒，并反复输出 `error reading header`。
+经 USB 或 USB/IP 使用探针时，OpenOCD 使用 USB 后端，正式版 0.12.0 可以使用。`cmsis-dap backend tcp`（`xrdap share openocd` 和直接连接 Wi-Fi 探针）不在 0.12.0 中，需要从 master 编译的 OpenOCD。Windows 上要包含提交 e89e73839d53：不含这个提交的版本在 Windows 上把“暂时没有数据”当作错误，启动时等待十几秒，并反复输出 `error reading header`，读写也可能失败。没有这样的版本时，用 `xrdap share usbip` 共享探针，挂载后经 USB 后端连接。
