@@ -128,7 +128,7 @@ xrdap wifi set -p COM3 热点名 --password-stdin < password.txt
 
 `status` 显示保存的热点名、是否连上、IP 地址和信号强度（dBm），以及最近一次清除热点参数的来源（板上按键、串口命令行 `wifi clear`、0x86 清除命令或 NVS 修复）、本次启动的复位原因（上电、软件重启、看门狗、程序崩溃、欠压或其他）和 NVS 是否在本次启动时损坏并重建。
 
-`set` 保存热点名（1 到 32 字节）和密码（8 到 63 字节），例如 `xrdap wifi set -p COM3 热点名 密码`；开放网络省略密码。`--password-stdin` 从标准输入读一行作为密码，去掉行尾的换行，其余原样保留，密码因此不出现在 shell 历史和进程列表中；经 TCP（Wi-Fi）连接探针时，密码以明文经过局域网。`xrdap wifi clear -p COM3` 清除热点参数，请求带确认字节。`set` 和 `clear` 成功后，探针在回复后约 0.5 s 重启，当前连接随之断开。
+`set` 保存热点名（1 到 32 字节）和密码（8 到 63 字节），例如 `xrdap wifi set -p COM3 热点名 密码`；开放网络省略密码。`--password-stdin` 从标准输入读一行作为密码，去掉行尾的换行，其余原样保留，密码因此不出现在 shell 历史和进程列表中；不重定向时，命令回车后输入密码，再按回车结束。PowerShell 不支持 `<` 重定向，在其中写作 `Get-Content password.txt | xrdap wifi set -p COM3 热点名 --password-stdin`。`--password-stdin` 和命令中的密码参数只能用一个；经 TCP（Wi-Fi）连接探针时，密码以明文经过局域网。`xrdap wifi clear -p COM3` 清除热点参数，请求带确认字节。`set` 和 `clear` 成功后，探针在回复后约 0.5 s 重启，当前连接随之断开。
 
 配置完成后 `xrdap list` 列出探针的局域网地址 `xrdap-xxxxxx.local`，`-p xrdap-xxxxxx.local` 经 Wi-Fi 连接。
 
