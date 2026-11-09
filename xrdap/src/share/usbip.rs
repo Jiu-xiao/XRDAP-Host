@@ -260,8 +260,14 @@ impl Session<'_> {
         self.tx.extend_from_slice(data);
     }
 
-    /// 一个命令引起的回复（OUT 的回复和配上的 IN 响应）合成一次写。分两次写时第二段要等
-    /// 对方的延迟 ACK，每个来回都会多出这段等待。
+    /// 收一个探针的应答，配给等着的 IN。
+    fn collect(&mut self, f: &mut dyn super::Forward) -> io::Result<()> {
+        self.responses.push_back(f.recv()?);
+        self.pair();
+        Ok(())
+    }
+
+    /// 攒下的回复合成一次写。
     fn flush(&mut self, s: &mut Link) -> io::Result<()> {
         if self.tx.is_empty() {
             return Ok(());
@@ -271,7 +277,12 @@ impl Session<'_> {
         r
     }
 
-    fn submit(&mut self, s: &mut Link, hdr: &[u8; 48], exec: &mut super::Exec) -> io::Result<()> {
+    fn submit(
+        &mut self,
+        s: &mut Link,
+        hdr: &[u8; 48],
+        f: &mut dyn super::Forward,
+    ) -> io::Result<()> {
         let (seq, dir, ep) = (be_u32(hdr, 4), be_u32(hdr, 12), be_u32(hdr, 16));
         let len = be_u32(hdr, 24) as usize;
         let mut setup = [0u8; 8];
@@ -294,13 +305,14 @@ impl Session<'_> {
                 self.pair();
             }
             (DAP_EP, _) => {
-                let responses = exec(&out_data)?;
-                // OUT 的回复只带写入的字节数，不带数据
+                while f.full() && f.due() {
+                    self.collect(f)?;
+                }
+                // 请求转给探针就完成这个 OUT（只带写入的字节数），不等应答：客户端接着发下一个
+                // 请求，几个请求同时在途。应答到了按顺序配给 IN；没有应答的命令
+                // （DAP_TransferAbort、排队的包）不占 IN
+                f.send(&out_data)?;
                 self.reply(RET_SUBMIT, seq, 0, out_data.len(), &[]);
-                // 没有应答的命令（DAP_TransferAbort、排队的包）不占 IN；排队之后的命令带回
-                // 多个应答，按顺序给后面的 IN
-                self.responses.extend(responses);
-                self.pair();
             }
             _ => self.reply(RET_SUBMIT, seq, EPIPE, 0, &[]),
         }
@@ -321,8 +333,8 @@ impl Session<'_> {
 }
 
 /// 处理一个客户端连接，直到对方断开（返回 Ok）或出错。设备列表查询（`usbip list -r`）
-/// 回完列表就返回。
-pub(super) fn serve(s: &mut Link, info: &DeviceInfo, exec: &mut super::Exec) -> io::Result<()> {
+/// 回完列表就返回。Bulk OUT 的请求转给探针就完成，客户端暂时没有新命令时再收探针的应答。
+pub(super) fn serve(s: &mut Link, info: &DeviceInfo, f: &mut dyn super::Forward) -> io::Result<()> {
     let mut op = [0u8; 8];
     s.read_full(&mut op)?;
     let code = u16::from_be_bytes([op[2], op[3]]);
@@ -357,13 +369,17 @@ pub(super) fn serve(s: &mut Link, info: &DeviceInfo, exec: &mut super::Exec) -> 
     };
     let mut hdr = [0u8; 48];
     loop {
+        while f.due() && !s.has_data()? {
+            session.collect(f)?;
+            session.flush(s)?;
+        }
         match s.read_full(&mut hdr) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),
         }
         match be_u32(&hdr, 0) {
-            CMD_SUBMIT => session.submit(s, &hdr, exec)?,
+            CMD_SUBMIT => session.submit(s, &hdr, f)?,
             CMD_UNLINK => session.unlink(&hdr),
             other => return Err(bad(format!("USB/IP：未知命令 {other}"))),
         }
@@ -378,6 +394,30 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::AtomicBool;
     use std::thread;
+
+    /// 测试用的探针：每个请求的应答是请求本身加一个 0xAA；DAP_TransferAbort 没有应答。
+    #[derive(Default)]
+    struct Echo(VecDeque<Vec<u8>>);
+
+    impl super::super::Forward for Echo {
+        fn send(&mut self, request: &[u8]) -> io::Result<()> {
+            if request.first() != Some(&0x07) {
+                let mut r = request.to_vec();
+                r.push(0xAA);
+                self.0.push_back(r);
+            }
+            Ok(())
+        }
+        fn due(&self) -> bool {
+            !self.0.is_empty()
+        }
+        fn full(&self) -> bool {
+            self.0.len() >= 4
+        }
+        fn recv(&mut self) -> io::Result<Vec<u8>> {
+            Ok(self.0.pop_front().unwrap())
+        }
+    }
 
     fn submit(
         s: &mut TcpStream,
@@ -427,12 +467,7 @@ mod tests {
                 let (s, _) = listener.accept().unwrap();
                 let stop = AtomicBool::new(false);
                 let mut link = Link::new(s, &stop).unwrap();
-                serve(&mut link, &info, &mut |req| {
-                    let mut r = req.to_vec();
-                    r.push(0xAA);
-                    Ok(vec![r])
-                })
-                .unwrap();
+                serve(&mut link, &info, &mut Echo::default()).unwrap();
             }
         });
 

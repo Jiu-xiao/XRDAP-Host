@@ -2,6 +2,7 @@
 //!
 //! CMSIS-DAP standard commands, minimal SWD/ADIv5 setup, and wrappers for the vendor commands.
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::bytes::le_u32;
@@ -194,8 +195,11 @@ pub struct Probe {
     stale: bool,
     /// 这条连接做过 DAP_Connect，还没有 DAP_Disconnect
     session: bool,
-    /// [`Probe::forward`] 发出、探针还没应答的 DAP_QueueCommands 包数
+    /// [`Probe::forward_send`] 发出、还没到期的 DAP_QueueCommands 包数：下一个有应答的命令
+    /// 发出后它们才应答
     queued: usize,
+    /// [`Probe::forward_send`] 发出、已经到期还没收的应答，按到达顺序，每项是应答的命令号
+    pending: VecDeque<u8>,
 }
 
 impl Probe {
@@ -210,6 +214,7 @@ impl Probe {
             stale: false,
             session: false,
             queued: 0,
+            pending: VecDeque::new(),
         }
     }
 
@@ -304,46 +309,75 @@ impl Probe {
         self.recv_answer(cmd)
     }
 
-    /// 转发一个客户端发来的原始 DAP 包（共享给别的工具时），返回这时到期的全部应答，按顺序。
-    /// DAP_QueueCommands 只发出不等应答；之后第一个有应答的命令带回排队的包的应答
-    /// （DAP_ExecuteCommands 格式）和它自己的应答。没有应答的命令（DAP_TransferAbort）
-    /// 不让排队的包执行。
+    /// 转发一个客户端发来的原始 DAP 包（共享给别的工具时），不等应答；应答用
+    /// [`Probe::forward_recv`] 按顺序收。客户端按探针报的包数同时发几个包，探针依次执行，
+    /// 应答按发出的顺序回来。DAP_QueueCommands 的应答要等之后第一个有应答的命令发出才到期
+    /// （DAP_ExecuteCommands 格式），排在那个命令自己的应答前面。没有应答的命令
+    /// （DAP_TransferAbort）不让排队的包执行。
     ///
-    /// Forward one raw DAP packet from a client (when sharing the probe) and return every
-    /// answer now due, in order. DAP_QueueCommands is sent without waiting; the first later
-    /// command with a response brings back the queued packets' answers (DAP_ExecuteCommands
-    /// format) and its own. A command without a response (DAP_TransferAbort) does not make the
+    /// Forward one raw DAP packet from a client (when sharing the probe) without waiting for
+    /// its answer; collect answers in order with [`Probe::forward_recv`]. A client sends as many
+    /// packets at once as the probe's packet count allows; the probe runs them in turn and
+    /// answers in the order sent. The answers of DAP_QueueCommands packets fall due only once
+    /// a later command with a response is sent (DAP_ExecuteCommands format), ahead of that
+    /// command's own answer. A command without a response (DAP_TransferAbort) does not make the
     /// queued packets run.
-    pub(crate) fn forward(&mut self, request: &[u8]) -> Result<Vec<Vec<u8>>> {
+    pub(crate) fn forward_send(&mut self, request: &[u8]) -> Result<()> {
         let Some(&cmd) = request.first() else {
             return Err(Error::usage("DAP 请求不能是空的"));
         };
-        if self.queued == 0 && cmd != CMD_QUEUE_COMMANDS {
-            let resp = self.xfer(request)?;
-            return Ok(if resp.is_empty() {
-                Vec::new()
-            } else {
-                vec![resp]
-            });
-        }
-        if self.stale && self.queued == 0 {
+        if self.stale && self.pending.is_empty() && self.queued == 0 {
             self.drain();
         }
         self.t.send(request)?;
         if cmd == CMD_QUEUE_COMMANDS {
             self.queued += 1;
-            return Ok(Vec::new());
+        } else if expects_response(request) {
+            let queued = std::mem::take(&mut self.queued);
+            self.pending
+                .extend(std::iter::repeat_n(CMD_EXECUTE_COMMANDS, queued));
+            self.pending.push_back(cmd);
         }
-        if !expects_response(request) {
-            return Ok(Vec::new());
+        Ok(())
+    }
+
+    /// 已经发出、还在探针那里的包数：到期没收的应答加上还没到期的排队包。
+    ///
+    /// Packets sent and still held by the probe: answers due and not yet collected, plus queued
+    /// packets not yet due.
+    pub(crate) fn forward_in_flight(&self) -> usize {
+        self.pending.len() + self.queued
+    }
+
+    /// 有没有到期没收的应答。
+    ///
+    /// Whether an answer is due and not yet collected.
+    pub(crate) fn forward_due(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// 收下一个到期的应答，最多等 `timeout`。出错时（超时、断开）其余在途的应答作废。
+    ///
+    /// Collect the next answer due, waiting at most `timeout`. On an error (timeout,
+    /// disconnect) the other answers in flight are given up.
+    pub(crate) fn forward_recv(&mut self) -> Result<Vec<u8>> {
+        let Some(cmd) = self.pending.pop_front() else {
+            return Err(Error::usage("没有在等的应答"));
+        };
+        self.recv_answer(cmd)
+            .inspect_err(|_| self.forward_abandon())
+    }
+
+    /// 客户端走了或出错：放弃在途的应答。它们之后还可能到，下一个请求发出前丢掉。
+    ///
+    /// The client left or failed: give up the answers in flight. They may still arrive and are
+    /// dropped before the next request goes out.
+    pub(crate) fn forward_abandon(&mut self) {
+        if self.forward_in_flight() > 0 {
+            self.stale = true;
         }
-        let queued = std::mem::take(&mut self.queued);
-        let mut answers = Vec::with_capacity(queued + 1);
-        for _ in 0..queued {
-            answers.push(self.recv_answer(CMD_EXECUTE_COMMANDS)?);
-        }
-        answers.push(self.recv_answer(cmd)?);
-        Ok(answers)
+        self.pending.clear();
+        self.queued = 0;
     }
 
     /// 等命令号为 `cmd` 的应答（或 DAP_Invalid），最多 `self.timeout`；命令号对不上的包是
@@ -810,6 +844,16 @@ mod tests {
         assert_eq!(p.xfer(&[0x00, 0xFF]).unwrap(), vec![0x00, 1, 1]);
     }
 
+    /// 转发一个包，收下这时到期的全部应答。
+    fn forward(p: &mut Probe, request: &[u8]) -> Vec<Vec<u8>> {
+        p.forward_send(request).unwrap();
+        let mut answers = Vec::new();
+        while p.forward_due() {
+            answers.push(p.forward_recv().unwrap());
+        }
+        answers
+    }
+
     /// 共享时转发：DAP_QueueCommands 不等应答，之后的命令一次带回排队的包的应答
     /// （0x7F 格式）和自己的应答，按顺序。
     #[test]
@@ -817,22 +861,17 @@ mod tests {
         let link = Script::default();
         let mut p = probe(&link);
         let t0 = Instant::now();
-        assert!(p
-            .forward(&[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF])
-            .unwrap()
-            .is_empty());
-        assert!(p
-            .forward(&[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF])
-            .unwrap()
-            .is_empty());
+        assert!(forward(&mut p, &[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF]).is_empty());
+        assert!(forward(&mut p, &[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF]).is_empty());
         assert!(t0.elapsed() < Duration::from_millis(500));
-        let answers = p.forward(&[CMD_EXECUTE_COMMANDS, 1, 0x00, 0xFF]).unwrap();
+        assert_eq!(p.forward_in_flight(), 2);
+        let answers = forward(&mut p, &[CMD_EXECUTE_COMMANDS, 1, 0x00, 0xFF]);
         assert_eq!(
             answers,
             vec![vec![0x7F, 1, 0], vec![0x7F, 1, 1], vec![0x7F, 1, 2]]
         );
         // 之后照常一问一答
-        assert_eq!(p.forward(&[0x00, 0xFF]).unwrap(), vec![vec![0x00, 1, 3]]);
+        assert_eq!(forward(&mut p, &[0x00, 0xFF]), vec![vec![0x00, 1, 3]]);
     }
 
     /// DAP_TransferAbort 不让排队的包执行，也不占应答。
@@ -840,15 +879,55 @@ mod tests {
     fn forward_transfer_abort_keeps_the_queue() {
         let link = Script::default();
         let mut p = probe(&link);
-        assert!(p
-            .forward(&[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF])
-            .unwrap()
-            .is_empty());
-        assert!(p.forward(&[CMD_TRANSFER_ABORT]).unwrap().is_empty());
+        assert!(forward(&mut p, &[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF]).is_empty());
+        assert!(forward(&mut p, &[CMD_TRANSFER_ABORT]).is_empty());
         assert_eq!(
-            p.forward(&[0x00, 0xFF]).unwrap(),
+            forward(&mut p, &[0x00, 0xFF]),
             vec![vec![0x7F, 1, 0], vec![0x00, 1, 2]]
         );
+    }
+
+    /// 几个包先后发出、都不等应答，应答按发出的顺序收回。
+    #[test]
+    fn forward_keeps_several_packets_in_flight() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        for req in [[0x05u8, 0], [0x06, 0], [0x05, 1]] {
+            p.forward_send(&req).unwrap();
+        }
+        assert_eq!(p.forward_in_flight(), 3);
+        assert_eq!(link.sent().len(), 3);
+        assert_eq!(p.forward_recv().unwrap(), vec![0x05, 1, 0]);
+        assert_eq!(p.forward_recv().unwrap(), vec![0x06, 1, 1]);
+        assert_eq!(p.forward_recv().unwrap(), vec![0x05, 1, 2]);
+        assert!(!p.forward_due());
+    }
+
+    /// 在途的应答超时：其余在途的作废，迟到的应答在下一个请求前丢掉。
+    #[test]
+    fn forward_timeout_gives_up_the_rest() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        link.delay_next(Late::NextRecv);
+        p.forward_send(&[0x05, 0]).unwrap();
+        p.forward_send(&[0x06, 0]).unwrap();
+        // 0x05 的应答迟到，先到的 0x06 应答命令号对不上被丢掉，然后超时
+        assert!(matches!(p.forward_recv(), Err(Error::Timeout(_))));
+        assert_eq!(p.forward_in_flight(), 0);
+        assert_eq!(forward(&mut p, &[0x00, 0xFF]), vec![vec![0x00, 1, 2]]);
+    }
+
+    /// 客户端走时还有在途的包：放弃，它们的应答不会被之后的请求收到。
+    #[test]
+    fn forward_abandon_drops_answers_in_flight() {
+        let link = Script::default();
+        let mut p = probe(&link);
+        p.forward_send(&[0x00, 0xFF]).unwrap();
+        p.forward_send(&[CMD_QUEUE_COMMANDS, 1, 0x00, 0xFF])
+            .unwrap();
+        p.forward_abandon();
+        assert_eq!(p.forward_in_flight(), 0);
+        assert_eq!(p.xfer(&[0x00, 0xFF]).unwrap(), vec![0x00, 1, 2]);
     }
 
     /// 超时的请求的响应在之后才到：下一个同样的请求拿到的是它自己的响应。

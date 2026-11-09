@@ -56,9 +56,58 @@ use crate::dap::Probe;
 use crate::{Error, Result};
 use link::{is_normal_end, Link};
 
-/// 转发一个 DAP 请求，返回这时到期的全部响应，按顺序（[`Probe::forward`]）：通常一个；
-/// DAP_QueueCommands 和 DAP_TransferAbort 没有；排队之后的第一个有应答的命令带回多个。
-type Exec<'a> = dyn FnMut(&[u8]) -> io::Result<Vec<Vec<u8>>> + 'a;
+/// 把客户端的 DAP 请求转给探针：发出去不等应答，应答按发出的顺序收（[`Probe::forward_send`]）。
+/// 客户端（OpenOCD 等）按探针报的包数同时挂几个请求；共享在客户端暂时没有新请求时才去收应答，
+/// 这样经 Wi-Fi、串口时几个请求的来回叠在一起，不是一个一个地等。
+trait Forward {
+    /// 发一个请求，不等应答。
+    fn send(&mut self, request: &[u8]) -> io::Result<()>;
+    /// 有没有到期没收的应答。
+    fn due(&self) -> bool;
+    /// 探针那里的包已经到了它报的包数，要先收应答才能再发。
+    fn full(&self) -> bool;
+    /// 收下一个到期的应答。
+    fn recv(&mut self) -> io::Result<Vec<u8>>;
+}
+
+/// 转发到一块真实的探针。
+struct ProbeForward<'a> {
+    probe: &'a mut Probe,
+    /// 探针报的 DAP 包数（DAP_Info 0xFE）：探针最多同时收这么多个包
+    packet_count: usize,
+}
+
+impl Forward for ProbeForward<'_> {
+    fn send(&mut self, request: &[u8]) -> io::Result<()> {
+        self.probe.forward_send(request).map_err(probe_error)
+    }
+
+    fn due(&self) -> bool {
+        self.probe.forward_due()
+    }
+
+    fn full(&self) -> bool {
+        self.probe.forward_in_flight() >= self.packet_count
+    }
+
+    fn recv(&mut self) -> io::Result<Vec<u8>> {
+        self.probe.forward_recv().map_err(probe_error)
+    }
+}
+
+/// 探针读写出错（超时、断开）时结束这个客户端，原因经 [`Event::Idle`] 报告
+fn probe_error(e: Error) -> io::Error {
+    io::Error::other(format!("探针：{e}"))
+}
+
+/// 探针报的 DAP 包数；没报或读不出时按 1 个，一问一答。
+fn packet_count(probe: &mut Probe) -> usize {
+    probe
+        .dap_info(crate::dap::ID_PACKET_COUNT)
+        .ok()
+        .and_then(|v| v.first().copied())
+        .map_or(1, |n| usize::from(n).max(1))
+}
 
 /// 等客户端时多久看一次停止标志
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
@@ -156,6 +205,7 @@ impl Share {
             Ok(d) => d,
             Err(e) => return Err((probe, e)),
         };
+        let packet_count = packet_count(&mut probe);
         let stop = Arc::new(AtomicBool::new(false));
         // 探针在线程建好之后才交过去：建线程失败时探针还在这里，可以还给调用方
         let (handoff, receive) = mpsc::sync_channel::<Probe>(1);
@@ -164,7 +214,15 @@ impl Share {
             let device = device.clone();
             thread.spawn(move || {
                 let probe = receive.recv().expect("start 建好线程后立即交出探针");
-                run(listener, protocol, &device, probe, &stop, notify)
+                run(
+                    listener,
+                    protocol,
+                    &device,
+                    probe,
+                    packet_count,
+                    &stop,
+                    notify,
+                )
             })
         };
         let thread = match spawned {
@@ -237,6 +295,7 @@ fn run(
     protocol: Protocol,
     device: &DeviceInfo,
     mut probe: Probe,
+    packet_count: usize,
     stop: &AtomicBool,
     notify: impl Fn(Event),
 ) -> Probe {
@@ -250,16 +309,16 @@ fn run(
             continue;
         };
         notify(Event::Client(peer));
-        // 探针读写出错（超时、断开）时结束这个客户端，原因经 Event::Idle 报告
-        let mut exec = |req: &[u8]| {
-            probe
-                .forward(req)
-                .map_err(|e| io::Error::other(format!("探针：{e}")))
+        let mut forward = ProbeForward {
+            probe: &mut probe,
+            packet_count,
         };
         let result = match protocol {
-            Protocol::Usbip => usbip::serve(&mut link, device, &mut exec),
-            Protocol::OpenOcd => openocd::serve(&mut link, &mut exec),
+            Protocol::Usbip => usbip::serve(&mut link, device, &mut forward),
+            Protocol::OpenOcd => openocd::serve(&mut link, &mut forward),
         };
+        // 客户端走时还在途的请求作废，它们迟到的应答不能给到下面的命令
+        probe.forward_abandon();
         // 客户端开过采样的话替它停掉，否则探针会一直占着 SWD
         let _ = crate::watch::stop(&mut probe);
         // 客户端做的连接也结束：探针只能靠这条命令知道（协议文档 3.1 节）
@@ -322,6 +381,28 @@ mod tests {
         assert_eq!(first[0], 0x00);
         let sent = link.sent();
         assert_eq!(sent[sent.len() - 2], vec![0x07]);
+        drop(c);
+        share.stop();
+    }
+
+    /// 客户端连发几个请求不等应答：都转给探针，应答按请求的顺序回来。
+    #[test]
+    fn openocd_requests_in_flight_answer_in_order() {
+        let link = Script::default();
+        let (share, _events) = share(&link);
+        let mut c = client(&share);
+        for cmd in [0x05u8, 0x06, 0x05, 0x00] {
+            c.write_all(&tcp_frame(&[cmd, 0], TCP_TYPE_REQUEST))
+                .unwrap();
+        }
+        let got: Vec<u8> = (0..4).map(|_| read_frame(&mut c)[0]).collect();
+        assert_eq!(got, vec![0x05, 0x06, 0x05, 0x00]);
+        // 每个应答的序号依次加一：没有错位，也没有丢
+        let sent = link.sent();
+        assert_eq!(
+            &sent[sent.len() - 4..],
+            &[vec![0x05, 0], vec![0x06, 0], vec![0x05, 0], vec![0x00, 0]]
+        );
         drop(c);
         share.stop();
     }
