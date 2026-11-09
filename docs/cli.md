@@ -138,7 +138,7 @@ xrdap wifi set -p COM3 热点名 --password-stdin < password.txt
 
 ### USB/IP
 
-`xrdap share usbip` 在 127.0.0.1:3240 提供 USB/IP 设备，并打印挂载命令。客户端挂载后，系统中出现产品名为 `<探针产品名> CMSIS-DAP` 的 USB CMSIS-DAP v2 探针，Keil、pyOCD、probe-rs、OpenOCD 按 USB 探针使用。
+`xrdap share usbip` 在 127.0.0.1:3240 提供 USB/IP 设备，并打印挂载命令。客户端挂载后，系统中出现产品名为 `<探针产品名> CMSIS-DAP` 的 USB CMSIS-DAP v2 探针，Keil、pyOCD、probe-rs、OpenOCD 按 USB 探针使用，其中 probe-rs 0.31 在 Windows 上看不到 usbip-win2 挂载的设备。
 
 | 系统 | 安装 | 挂载 | 卸载 |
 |---|---|---|---|

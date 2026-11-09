@@ -138,7 +138,7 @@ In the GUI, after connecting, Wi-Fi at the bottom of the connection area shows t
 
 ### USB/IP
 
-`xrdap share usbip` serves a USB/IP device on 127.0.0.1:3240 and prints the attach command. After a client attaches it, a USB CMSIS-DAP v2 probe with the product name `<probe product> CMSIS-DAP` appears, and Keil, pyOCD, probe-rs and OpenOCD use it as a USB probe.
+`xrdap share usbip` serves a USB/IP device on 127.0.0.1:3240 and prints the attach command. After a client attaches it, a USB CMSIS-DAP v2 probe with the product name `<probe product> CMSIS-DAP` appears, and Keil, pyOCD, probe-rs and OpenOCD use it as a USB probe; on Windows, probe-rs 0.31 does not see devices attached by usbip-win2.
 
 | System | Install | Attach | Detach |
 |---|---|---|---|
