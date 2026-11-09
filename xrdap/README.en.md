@@ -8,7 +8,7 @@ Host-side Rust library for XRDAP probes: open a probe (USB, serial, TCP), read a
 
 ```toml
 [dependencies]
-xrdap = { git = "https://github.com/Jiu-xiao/XRDAP-Host", tag = "v0.6.0" }
+xrdap = { git = "https://github.com/Jiu-xiao/XRDAP-Host", tag = "v0.6.1" }
 ```
 
 | feature | Default | Content |
