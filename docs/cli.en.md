@@ -128,7 +128,7 @@ xrdap wifi set -p COM3 SSID --password-stdin < password.txt
 
 `status` shows the saved SSID, whether the probe is connected, its IP address and the signal strength (dBm), plus what last cleared the credentials (board button, serial console `wifi clear`, 0x86 clear command or NVS repair), the reset reason of this boot (power-on, software restart, watchdog, crash, brownout or other), and whether NVS was damaged and rebuilt at this boot.
 
-`set` saves the SSID (1 to 32 bytes) and the password (8 to 63 bytes), e.g. `xrdap wifi set -p COM3 SSID PASSWORD`; the password is omitted for an open network. `--password-stdin` reads one line from standard input as the password, removes the line ending and keeps everything else, so the password stays out of the shell history and the process list; over TCP (Wi-Fi) the password crosses the LAN in plaintext. `xrdap wifi clear -p COM3` clears the credentials; the request carries a confirm byte. After a successful `set` or `clear` the probe restarts about 0.5 s after its reply, and the connection is lost.
+`set` saves the SSID (1 to 32 bytes) and the password (8 to 63 bytes), e.g. `xrdap wifi set -p COM3 SSID PASSWORD`; the password is omitted for an open network. `--password-stdin` reads one line from standard input as the password, removes the line ending and keeps everything else, so the password stays out of the shell history and the process list; without a redirection, the password is typed after the command is entered and ended with Enter. PowerShell has no `<` redirection; there the command is `Get-Content password.txt | xrdap wifi set -p COM3 SSID --password-stdin`. `--password-stdin` and a password argument cannot be used together; over TCP (Wi-Fi) the password crosses the LAN in plaintext. `xrdap wifi clear -p COM3` clears the credentials; the request carries a confirm byte. After a successful `set` or `clear` the probe restarts about 0.5 s after its reply, and the connection is lost.
 
 Once configured, `xrdap list` shows the probe's LAN address `xrdap-xxxxxx.local`, and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
 
@@ -138,7 +138,7 @@ In the GUI, after connecting, Wi-Fi at the bottom of the connection area shows t
 
 ### USB/IP
 
-`xrdap share usbip` serves a USB/IP device on 127.0.0.1:3240 and prints the attach command. After a client attaches it, a USB CMSIS-DAP v2 probe with the product name `<probe product> CMSIS-DAP` appears, and Keil, pyOCD, probe-rs and OpenOCD use it as a USB probe.
+`xrdap share usbip` serves a USB/IP device on 127.0.0.1:3240 and prints the attach command. After a client attaches it, a USB CMSIS-DAP v2 probe with the product name `<probe product> CMSIS-DAP` appears, and Keil, pyOCD, probe-rs and OpenOCD use it as a USB probe; on Windows, probe-rs 0.31 does not see devices attached by usbip-win2.
 
 | System | Install | Attach | Detach |
 |---|---|---|---|
@@ -178,4 +178,4 @@ openocd -c "adapter driver cmsis-dap; cmsis-dap backend tcp; cmsis-dap tcp host 
 
 ### OpenOCD versions
 
-Over USB or USB/IP, OpenOCD uses its USB backend, and release 0.12.0 works. `cmsis-dap backend tcp` (`xrdap share openocd` and direct connections to Wi-Fi probes) is not in 0.12.0 and needs OpenOCD built from master. On Windows the build must include commit e89e73839d53: earlier master treats "no data yet" as an error on Windows, waits a dozen seconds at startup and repeats `error reading header`.
+Over USB or USB/IP, OpenOCD uses its USB backend, and release 0.12.0 works. `cmsis-dap backend tcp` (`xrdap share openocd` and direct connections to Wi-Fi probes) is not in 0.12.0 and needs OpenOCD built from master. On Windows the build must include commit e89e73839d53: a build without it treats "no data yet" as an error on Windows, waits a dozen seconds at startup and repeats `error reading header`, and reads and writes may fail. Without such a build, the probe is shared with `xrdap share usbip`, attached, and reached through the USB backend.
