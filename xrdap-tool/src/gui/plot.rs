@@ -143,6 +143,8 @@ impl PlotView {
         if charts.is_empty() {
             charts.push(1);
         }
+        // 图例默认放在曲线区右上角
+        let area = ui.available_rect_before_wrap();
         let buckets = (ui.available_width() as usize).max(100);
         let gap = ui.spacing().item_spacing.y;
         let height = ((ui.available_height() - gap * (charts.len() as f32 - 1.0))
@@ -224,7 +226,7 @@ impl PlotView {
                 self.cursor_a = Some(x);
             }
         }
-        let toggle = self.ui_legend(ui.ctx(), curves);
+        let toggle = self.ui_legend(ui.ctx(), curves, area);
         if let Some(x) = hover_x {
             egui::Tooltip::always_open(
                 ui.ctx().clone(),
@@ -248,9 +250,14 @@ impl PlotView {
         toggle
     }
 
-    /// 浮动的图例窗口：可拖动、可折叠、可调大小，曲线多时用滚轮查看；
+    /// 浮动的图例窗口：默认在曲线区右上角，可以拖动、收起、调大小，曲线多时用滚轮查看；
     /// 点击条目切换这条曲线画不画，关闭后可以在控制栏的“图例”按钮重新打开。
-    fn ui_legend(&mut self, ctx: &egui::Context, curves: &[Curve]) -> Option<u64> {
+    fn ui_legend(
+        &mut self,
+        ctx: &egui::Context,
+        curves: &[Curve],
+        area: egui::Rect,
+    ) -> Option<u64> {
         if !self.legend_open || curves.is_empty() {
             return None;
         }
@@ -258,27 +265,35 @@ impl PlotView {
         charts.sort_unstable();
         charts.dedup();
         let p = super::theme::Palette::of(ctx.theme());
-        // 标题栏底色取窗口 frame 的 fill；本主题的 widgets.open 是墨色，标题会看不清
-        let frame = egui::Frame::window(&ctx.style())
-            .fill(p.raised)
-            .stroke(egui::Stroke::new(1.0_f32, p.line))
-            .corner_radius(egui::CornerRadius::ZERO)
-            .shadow(egui::epaint::Shadow::NONE);
+        let fold = egui::Id::new("xrdap_legend_collapsed");
+        let mut collapsed = ctx
+            .data_mut(|d| d.get_persisted::<bool>(fold))
+            .unwrap_or(false);
         let mut open = self.legend_open;
         let mut toggle = None;
+        const WIDTH: f32 = 260.0;
         egui::Window::new("图例")
-            .id(egui::Id::new("plot_legend"))
-            .frame(frame)
-            .open(&mut open)
-            .default_pos(egui::pos2(
-                ctx.content_rect().right() - 360.0,
-                ctx.content_rect().top() + 96.0,
-            ))
-            .default_width(330.0)
-            .default_height(240.0)
-            .resizable(true)
-            .collapsible(true)
+            .id(egui::Id::new("xrdap_plot_legend"))
+            .title_bar(false)
+            .frame(super::theme::floating_frame(ctx))
+            .constrain_to(ctx.content_rect())
+            .default_pos(egui::pos2(area.right() - WIDTH - 24.0, area.top() + 8.0))
+            .default_width(WIDTH)
+            .default_height((area.height() - 16.0).clamp(120.0, 200.0))
+            .max_height(ctx.content_rect().height() - 48.0)
+            .resizable(!collapsed)
             .show(ctx, |ui| {
+                super::theme::floating_header(
+                    ui,
+                    "XRDAP / WATCH / LEGEND",
+                    "图例",
+                    &mut collapsed,
+                    &mut open,
+                );
+                if collapsed {
+                    return;
+                }
+                ui.add_space(4.0);
                 egui::ScrollArea::vertical()
                     .id_salt("legend_scroll")
                     .auto_shrink([false, false])
@@ -353,6 +368,7 @@ impl PlotView {
                         }
                     });
             });
+        ctx.data_mut(|d| d.insert_persisted(fold, collapsed));
         self.legend_open = open;
         toggle
     }

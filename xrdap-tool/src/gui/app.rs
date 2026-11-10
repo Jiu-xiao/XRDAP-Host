@@ -66,6 +66,8 @@ pub struct App {
     pub(super) vars: Vec<VarRow>,
     /// 打开着的成员树
     pub(super) tree: Option<VarTree>,
+    /// 左栏滚动区：内容顶边和可见高度，变量列表按它定高
+    pub(super) left_view: (f32, f32),
     pub(super) search: String,
     pub(super) expr: String,
     pub(super) user_only: bool,
@@ -159,6 +161,7 @@ impl App {
             syms: SymbolTable::new(),
             vars: Vec::new(),
             tree: None,
+            left_view: (0.0, 0.0),
             search: String::new(),
             expr: String::new(),
             user_only: get("xrdap.user_only").is_some_and(|v| v == "1"),
@@ -516,12 +519,20 @@ impl eframe::App for App {
             .default_width(320.0)
             .width_range(260.0..=520.0)
             .show(ctx, |ui| {
-                ui.add_space(8.0);
-                theme::card(ui, |ui| self.ui_connection(ui));
-                ui.add_space(8.0);
-                theme::card(ui, |ui| self.ui_elf(ui));
-                ui.add_space(8.0);
-                theme::card(ui, |ui| self.ui_vars(ui));
+                // 屏幕矮时整栏滚动；高度够时变量列表占满剩下的空间
+                let h = ui.available_height();
+                egui::ScrollArea::vertical()
+                    .id_salt("left")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        self.left_view = (ui.min_rect().top(), h);
+                        ui.add_space(8.0);
+                        theme::card(ui, |ui| self.ui_connection(ui));
+                        ui.add_space(8.0);
+                        theme::card(ui, |ui| self.ui_elf(ui));
+                        ui.add_space(8.0);
+                        theme::card(ui, |ui| self.ui_vars(ui));
+                    });
             });
         egui::CentralPanel::default().show(ctx, |ui| {
             self.ui_controls(ui);

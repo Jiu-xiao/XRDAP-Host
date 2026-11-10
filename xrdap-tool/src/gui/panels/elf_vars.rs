@@ -63,6 +63,7 @@ fn var_rows(syms: &SymbolTable) -> Vec<VarRow> {
             addr: v.addr,
             ty: syms.name_of(v.ty),
             ty_id: v.ty,
+            expandable: !node_children(syms, &node_ty(syms, v.ty)).is_empty(),
             size: syms.size_of(v.ty),
             system: is_system_var(&v.name, &v.unit),
         })
@@ -193,40 +194,103 @@ fn node_children(syms: &SymbolTable, ty: &NodeTy) -> Vec<(String, NodeTy, bool)>
     out
 }
 
+/// 成员树里类型名那一列的宽度。
+const TYPE_COL: f32 = 130.0;
+
+/// 成员树和筛选结果的一行：名字占剩下的宽度，类型名一列，最右边“+”把它加进监视表。
+/// `add` 是“+”的提示；为 None 时这一行不能添加（位域，或采样中）。返回是否点了“+”。
+fn tree_row(ui: &mut egui::Ui, label: &str, hover: &str, tyname: &str, add: Option<&str>) -> bool {
+    let mut clicked = false;
+    let h = ui.spacing().interact_size.y;
+    // 右边留出滚动条的宽度：浮动的滚动条盖在内容上，会挡住“+”
+    let bar = ui.spacing().scroll.bar_width + ui.spacing().scroll.bar_outer_margin + 4.0;
+    ui.allocate_ui_with_layout(
+        egui::vec2((ui.available_width() - bar).max(0.0), h),
+        egui::Layout::right_to_left(egui::Align::Center),
+        |ui| {
+            let slot = egui::vec2(18.0, h);
+            match add {
+                Some(tip) => {
+                    let plus = egui::Button::new("+").frame(false);
+                    clicked = ui.add_sized(slot, plus).on_hover_text(tip).clicked();
+                }
+                None => {
+                    ui.allocate_space(slot);
+                }
+            }
+            ui.allocate_ui_with_layout(
+                egui::vec2(TYPE_COL, h),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_width(TYPE_COL);
+                    ui.add(
+                        egui::Label::new(RichText::new(tyname).weak().small())
+                            .truncate()
+                            .selectable(false),
+                    );
+                },
+            );
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), h),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.add(egui::Label::new(label).truncate().selectable(false))
+                        .on_hover_text(hover);
+                },
+            );
+        },
+    );
+    clicked
+}
+
 /// 画树时的上下文：符号表、能否添加（采样时不能），以及这一帧点中的表达式。
 struct TreeCtx<'a> {
     syms: &'a SymbolTable,
     editable: bool,
     add: Option<String>,
+    /// 可展开那一行里展开三角占的宽度，叶子空出同样宽度让名字对齐；画根节点时量出来
+    toggle_w: f32,
 }
 
 impl TreeCtx<'_> {
     /// 画成员树的这一层。`path` 是从根变量算起的完整表达式。
     fn node(&mut self, ui: &mut egui::Ui, path: &str, label: &str, ty: NodeTy, depth: usize) {
+        let tyname = node_name(self.syms, &ty);
         let children = node_children(self.syms, &ty);
+        let toggle_w = self.toggle_w;
         if children.is_empty() || depth >= MAX_DEPTH {
+            let tip = format!("添加 {path}");
             ui.horizontal(|ui| {
-                if self.editable && ui.small_button("添加").clicked() {
+                ui.add_space(toggle_w);
+                if tree_row(
+                    ui,
+                    label,
+                    path,
+                    &tyname,
+                    self.editable.then_some(tip.as_str()),
+                ) {
                     self.add = Some(path.to_string());
                 }
-                ui.add(egui::Label::new(label).truncate())
-                    .on_hover_text(format!("{path}  {}", node_name(self.syms, &ty)));
-                ui.label(RichText::new(node_name(self.syms, &ty)).weak().small());
             });
             return;
         }
-        egui::CollapsingHeader::new(label)
-            .id_salt(("var_tree_node", path))
-            .default_open(depth == 0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if self.editable && ui.small_button("添加全部").clicked() {
-                        self.add = Some(path.to_string());
-                    }
-                    ui.label(RichText::new(node_name(self.syms, &ty)).weak().small());
-                    ui.label(RichText::new(path).weak().small())
-                        .on_hover_text("添加时用的表达式");
-                });
+        let tip = format!("添加 {path} 的全部成员");
+        let id = ui.make_persistent_id(("var_tree_node", path));
+        let left = ui.cursor().left();
+        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, depth == 0)
+            .show_header(ui, |ui| {
+                self.toggle_w = ui.cursor().left() - left;
+                if tree_row(
+                    ui,
+                    label,
+                    path,
+                    &tyname,
+                    self.editable.then_some(tip.as_str()),
+                ) {
+                    self.add = Some(path.to_string());
+                }
+            })
+            .body(|ui| {
                 if let NodeTy::Arr { dims, .. } = &ty {
                     if let Some(n) = dims.first().copied().flatten() {
                         if n > MAX_ARRAY_ROWS {
@@ -244,8 +308,8 @@ impl TreeCtx<'_> {
                     let child_label = suffix.trim_start_matches('.').to_string();
                     if bit {
                         ui.horizontal(|ui| {
-                            ui.label(&child_label);
-                            ui.label(RichText::new("位域，不能单独读").weak().small());
+                            ui.add_space(toggle_w);
+                            tree_row(ui, &child_label, "位域，不能单独读", "位域", None);
                         });
                         continue;
                     }
@@ -313,34 +377,31 @@ impl App {
         let editable = !self.sampling && !self.starting;
         let mut open = tree.open;
         let mut add: Option<String> = None;
-        let title = format!("成员：{}", tree.path);
-        // 标题栏底色取窗口 frame 的 fill；不给 frame 时用 widgets.open.weak_bg_fill，
-        // 本主题把展开态画成墨色，标题就看不清了。
-        let p = theme::Palette::of(ctx.theme());
-        let frame = egui::Frame::window(&ctx.style())
-            .fill(p.raised)
-            .stroke(egui::Stroke::new(1.0_f32, p.line))
-            .corner_radius(egui::CornerRadius::ZERO)
-            .shadow(egui::epaint::Shadow::NONE);
-        egui::Window::new(title)
+        let fold = egui::Id::new("var_tree_collapsed");
+        let mut collapsed = ctx
+            .data_mut(|d| d.get_persisted::<bool>(fold))
+            .unwrap_or(false);
+        egui::Window::new("成员")
             .id(egui::Id::new("var_tree"))
-            .frame(frame)
-            .open(&mut open)
+            .title_bar(false)
+            .frame(theme::floating_frame(ctx))
             .default_width(430.0)
             .default_height(460.0)
-            .resizable(true)
+            .max_height(ctx.content_rect().height() - 48.0)
+            .resizable(!collapsed)
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("筛选");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut tree.filter)
-                            .hint_text("路径里含这段文字的成员，例如 ins_info")
-                            .desired_width(fill_width(ui)),
-                    );
-                });
+                theme::floating_header(ui, "XRDAP / ELF / TREE", "成员", &mut collapsed, &mut open);
+                if collapsed {
+                    return;
+                }
                 let head = format!("0x{:08X}  {}", tree.addr, self.syms.name_of(tree.ty));
                 ui.label(RichText::new(head).weak().small());
-                ui.separator();
+                ui.add(
+                    egui::TextEdit::singleline(&mut tree.filter)
+                        .hint_text("筛选：路径里含这段文字的成员，例如 ins_info")
+                        .desired_width(fill_width(ui)),
+                );
+                ui.add_space(4.0);
                 egui::ScrollArea::vertical()
                     .id_salt("var_tree_scroll")
                     .auto_shrink([false, false])
@@ -352,6 +413,7 @@ impl App {
                                 syms: &self.syms,
                                 editable,
                                 add: None,
+                                toggle_w: ui.spacing().icon_width + ui.spacing().item_spacing.x,
                             };
                             cx.node(ui, &tree.path, &tree.path, root, 0);
                             add = cx.add;
@@ -380,20 +442,15 @@ impl App {
                             }
                             let truncated = m.rows.len() >= MAX_MATCHES;
                             for (path, tyname, leaf) in &m.rows {
-                                let leaf = *leaf;
-                                ui.horizontal(|ui| {
-                                    if editable && ui.small_button("添加").clicked() {
-                                        add = Some(path.clone());
-                                    }
-                                    let hint = if leaf {
-                                        ""
-                                    } else {
-                                        "（结构体，添加会展开全部成员）"
-                                    };
-                                    ui.add(egui::Label::new(path.as_str()).truncate())
-                                        .on_hover_text(format!("{path}  {tyname}{hint}"));
-                                    ui.label(RichText::new(tyname.as_str()).weak().small());
-                                });
+                                let tip = if *leaf {
+                                    format!("添加 {path}")
+                                } else {
+                                    format!("添加 {path} 的全部成员")
+                                };
+                                if tree_row(ui, path, path, tyname, editable.then_some(tip.as_str()))
+                                {
+                                    add = Some(path.clone());
+                                }
                             }
                             if truncated {
                                 ui.label(
@@ -416,6 +473,7 @@ impl App {
                         }
                     });
             });
+        ctx.data_mut(|d| d.insert_persisted(fold, collapsed));
         if add.is_some() {
             open = true;
         }
@@ -608,17 +666,18 @@ impl App {
                 .map(|(i, _)| i)
                 .collect();
             let row_h = ui.spacing().interact_size.y;
+            // 左栏在滚动区里，可用高度没有上限：列表取左栏剩下的可见高度，至少 200
+            let (top, view_h) = self.left_view;
+            let list_h = (view_h - (ui.cursor().top() - top) - 28.0).max(200.0);
             egui::ScrollArea::vertical()
                 .id_salt("vars")
+                .min_scrolled_height(list_h)
+                .max_height(list_h)
                 .auto_shrink([false, false])
                 .show_rows(ui, row_h, hits.len(), |ui, range| {
                     for &i in &hits[range] {
                         let v = &self.vars[i];
                         ui.horizontal(|ui| {
-                            if ui.small_button("树").clicked() {
-                                open_tree =
-                                    Some((xrdap::expr::name_expr(&v.name), v.addr, v.ty_id));
-                            }
                             if ui.small_button("添加").clicked() {
                                 add = Some(xrdap::expr::name_expr(&v.name));
                             }
@@ -630,6 +689,22 @@ impl App {
                             ui.label(&v.name)
                                 .on_hover_text(format!("0x{:08X}  {}  {size}{kind}", v.addr, v.ty));
                             ui.label(RichText::new(&v.ty).weak().small());
+                            if v.expandable {
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let more = egui::Button::new(RichText::new("成员").small())
+                                            .frame(false);
+                                        if ui.add(more).on_hover_text("打开成员树").clicked() {
+                                            open_tree = Some((
+                                                xrdap::expr::name_expr(&v.name),
+                                                v.addr,
+                                                v.ty_id,
+                                            ));
+                                        }
+                                    },
+                                );
+                            }
                         });
                     }
                 });

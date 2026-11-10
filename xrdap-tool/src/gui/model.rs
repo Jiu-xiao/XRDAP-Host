@@ -74,6 +74,8 @@ pub(super) struct VarRow {
     pub(super) ty: String,
     /// 类型在符号表里的编号，展开成员树时用
     pub(super) ty_id: xrdap::types::TypeId,
+    /// 是结构体或数组，可以打开成员树
+    pub(super) expandable: bool,
     pub(super) size: Option<u64>,
     /// 定义在 HAL、CMSIS、RTOS、C 库等第三方代码里
     pub(super) system: bool,

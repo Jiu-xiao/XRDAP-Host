@@ -371,6 +371,52 @@ pub(super) fn section(ui: &mut egui::Ui, path: &str, title: &str) {
     ui.label(RichText::new(title).text_style(TextStyle::Heading));
 }
 
+/// 浮动窗口（成员树、图例）的外框：和卡片一样的 `paper-raised` 底、1px `line` 边框、直角、无阴影。
+/// 窗口不用 egui 自带的标题栏，标题由 [`floating_header`] 画。
+pub(super) fn floating_frame(ctx: &egui::Context) -> egui::Frame {
+    let p = Palette::of(ctx.theme());
+    egui::Frame::window(&ctx.style())
+        .fill(p.raised)
+        .stroke(stroke(1.0, p.line))
+        .corner_radius(CornerRadius::ZERO)
+        .shadow(Shadow::NONE)
+        .inner_margin(Margin::same(SPACE_4 as i8 - 4))
+}
+
+/// 浮动窗口的标题，和卡片里的区块标题一样：上面 PathLabel，下面标题；右边收起和关闭。
+/// 拖动标题移动窗口。`collapsed` 和 `open` 按点击更新。
+pub(super) fn floating_header(
+    ui: &mut egui::Ui,
+    path: &str,
+    title: &str,
+    collapsed: &mut bool,
+    open: &mut bool,
+) {
+    ui.horizontal(|ui| {
+        ui.style_mut().interaction.selectable_labels = false;
+        ui.vertical(|ui| {
+            path_label(ui, path);
+            ui.label(RichText::new(title).text_style(TextStyle::Heading));
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            let p = Palette::current(ui);
+            let icon =
+                |t: &str| egui::Button::new(RichText::new(t).color(p.ink_muted)).frame(false);
+            if ui.add(icon("×")).on_hover_text("关闭").clicked() {
+                *open = false;
+            }
+            let (t, tip) = if *collapsed {
+                ("+", "展开")
+            } else {
+                ("−", "收起")
+            };
+            if ui.add(icon(t)).on_hover_text(tip).clicked() {
+                *collapsed = !*collapsed;
+            }
+        });
+    });
+}
+
 fn mono_bold(ui: &egui::Ui, size: f32) -> FontId {
     let has = ui
         .fonts(|f| f.families())
