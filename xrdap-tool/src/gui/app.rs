@@ -14,7 +14,7 @@ use xrdap::watch::{HostFrame, Stats};
 use xrdap::ItemResult;
 use xrdap::WifiStatus;
 
-use super::model::{Csv, Found, ShareState, VarRow, Watch};
+use super::model::{Csv, Found, ShareState, VarRow, VarTree, Watch};
 use super::panels::{ElfLoaded, SavedWatch};
 use super::plot::PlotView;
 use super::theme::{self, Choice};
@@ -64,6 +64,8 @@ pub struct App {
     pub(super) restore: Vec<SavedWatch>,
     pub(super) syms: SymbolTable,
     pub(super) vars: Vec<VarRow>,
+    /// 打开着的成员树
+    pub(super) tree: Option<VarTree>,
     pub(super) search: String,
     pub(super) expr: String,
     pub(super) user_only: bool,
@@ -156,6 +158,7 @@ impl App {
             restore: Vec::new(),
             syms: SymbolTable::new(),
             vars: Vec::new(),
+            tree: None,
             search: String::new(),
             expr: String::new(),
             user_only: get("xrdap.user_only").is_some_and(|v| v == "1"),
@@ -531,6 +534,7 @@ impl eframe::App for App {
             ui.separator();
             self.ui_plot(ui);
         });
+        self.ui_tree(ctx);
         if self.sampling || self.starting || self.connecting {
             ctx.request_repaint_after(Duration::from_millis(33));
         }
