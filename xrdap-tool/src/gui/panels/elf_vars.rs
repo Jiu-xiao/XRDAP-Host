@@ -8,7 +8,7 @@ use xrdap::expr::Resolver;
 use xrdap::types::{Member, ScalarKind, SymbolTable, Type, TypeId};
 
 use crate::gui::app::App;
-use crate::gui::model::{is_system_var, VarRow, VarTree, Watch, KEEP_S, MAX_POINTS};
+use crate::gui::model::{is_system_var, TreeMatches, VarRow, VarTree, Watch, KEEP_S, MAX_POINTS};
 use crate::gui::plot::MAX_CHARTS;
 use crate::gui::series::Series;
 use crate::gui::theme;
@@ -84,18 +84,10 @@ enum NodeTy {
     },
 }
 
-/// 展开 typedef、const/volatile 之类不改变访问的包装，得到真正的类型。
-fn effective(syms: &SymbolTable, mut id: TypeId) -> TypeId {
-    for _ in 0..32 {
-        match syms.get(id) {
-            Type::Qualified { target: Some(t) } => id = *t,
-            Type::Typedef {
-                target: Some(t), ..
-            } => id = *t,
-            _ => return id,
-        }
-    }
-    id
+/// 展开 typedef、const/volatile 之类不改变访问的包装，得到真正的类型；只有声明的结构体换成
+/// 别的编译单元里的完整定义，和读写变量时一样。
+fn effective(syms: &SymbolTable, id: TypeId) -> TypeId {
+    syms.complete(id)
 }
 
 /// 一个变量或成员的类型，数组转成 [`NodeTy::Arr`]。
@@ -141,6 +133,10 @@ fn push_members(
 ) {
     for m in members {
         if let Some(n) = &m.name {
+            // 编译器生成的成员（虚函数表指针 _vptr.Port）名字里有点，写不成表达式
+            if n.contains('.') {
+                continue;
+            }
             out.push((format!(".{n}"), node_ty(syms, m.ty), m.bit_size.is_some()));
         } else if depth < 8 {
             if let Type::Struct {
@@ -260,7 +256,8 @@ impl TreeCtx<'_> {
     }
 }
 
-/// 筛选时把匹配的节点和它的后代平铺成列表，路径里含 `needle` 的才收。
+/// 筛选时把匹配的节点和它的后代平铺成列表，路径里含 `needle` 的才收。数组只搜前
+/// [`MAX_ARRAY_ROWS`] 个元素，遇到更长的数组时把 `clipped` 置为 true。
 fn collect_matches(
     syms: &SymbolTable,
     path: &str,
@@ -268,9 +265,20 @@ fn collect_matches(
     needle: &str,
     depth: usize,
     out: &mut Vec<(String, String, bool)>,
+    clipped: &mut bool,
 ) {
     if out.len() >= MAX_MATCHES || depth >= MAX_DEPTH {
         return;
+    }
+    if let NodeTy::Arr { dims, .. } = ty {
+        if dims
+            .first()
+            .copied()
+            .flatten()
+            .is_some_and(|n| n > MAX_ARRAY_ROWS)
+        {
+            *clipped = true;
+        }
     }
     let children = node_children(syms, ty);
     let bit_leaf = children.is_empty();
@@ -291,6 +299,7 @@ fn collect_matches(
             needle,
             depth + 1,
             out,
+            clipped,
         );
     }
 }
@@ -347,13 +356,31 @@ impl App {
                             cx.node(ui, &tree.path, &tree.path, root, 0);
                             add = cx.add;
                         } else {
-                            let mut rows = Vec::new();
-                            collect_matches(&self.syms, &tree.path, &root, &needle, 0, &mut rows);
-                            if rows.is_empty() {
+                            if tree.matches.as_ref().is_none_or(|m| m.needle != needle) {
+                                let mut rows = Vec::new();
+                                let mut clipped = false;
+                                collect_matches(
+                                    &self.syms,
+                                    &tree.path,
+                                    &root,
+                                    &needle,
+                                    0,
+                                    &mut rows,
+                                    &mut clipped,
+                                );
+                                tree.matches = Some(TreeMatches {
+                                    needle: needle.clone(),
+                                    rows,
+                                    clipped,
+                                });
+                            }
+                            let Some(m) = &tree.matches else { return };
+                            if m.rows.is_empty() {
                                 ui.label(RichText::new("没有匹配的成员").weak());
                             }
-                            let truncated = rows.len() >= MAX_MATCHES;
-                            for (path, tyname, leaf) in rows {
+                            let truncated = m.rows.len() >= MAX_MATCHES;
+                            for (path, tyname, leaf) in &m.rows {
+                                let leaf = *leaf;
                                 ui.horizontal(|ui| {
                                     if editable && ui.small_button("添加").clicked() {
                                         add = Some(path.clone());
@@ -363,15 +390,24 @@ impl App {
                                     } else {
                                         "（结构体，添加会展开全部成员）"
                                     };
-                                    ui.add(egui::Label::new(&path).truncate())
+                                    ui.add(egui::Label::new(path.as_str()).truncate())
                                         .on_hover_text(format!("{path}  {tyname}{hint}"));
-                                    ui.label(RichText::new(&tyname).weak().small());
+                                    ui.label(RichText::new(tyname.as_str()).weak().small());
                                 });
                             }
                             if truncated {
                                 ui.label(
                                     RichText::new(format!(
                                         "只列出前 {MAX_MATCHES} 项，缩小筛选范围"
+                                    ))
+                                    .weak()
+                                    .small(),
+                                );
+                            }
+                            if m.clipped {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "超过 {MAX_ARRAY_ROWS} 个元素的数组只搜了前 {MAX_ARRAY_ROWS} 个"
                                     ))
                                     .weak()
                                     .small(),
@@ -605,6 +641,7 @@ impl App {
                 ty,
                 open: true,
                 filter: String::new(),
+                matches: None,
             });
         }
         if let Some(name) = add {
@@ -647,11 +684,49 @@ mod tree_tests {
         let v = &syms.vars["motor"][0];
         let root = node_ty(&syms, v.ty);
         let mut rows = Vec::new();
-        collect_matches(&syms, "motor", &root, "pid", 0, &mut rows);
+        let mut clipped = false;
+        collect_matches(&syms, "motor", &root, "pid", 0, &mut rows, &mut clipped);
+        assert!(!clipped);
         assert!(rows.iter().any(|(p, _, _)| p == "motor[1].pid"));
         assert!(rows
             .iter()
             .all(|(p, _, _)| p.to_lowercase().contains("pid")));
+    }
+
+    /// 变量的类型在它的编译单元里只有声明时，换成别的编译单元里的完整定义展开，和读写时一样。
+    #[test]
+    fn declaration_only_type_expands() {
+        let mut syms = fixture("decl.elf");
+        let v = &syms.vars["port"][0];
+        let root = node_ty(&syms, v.ty);
+        let kids: Vec<String> = node_children(&syms, &root)
+            .into_iter()
+            .map(|(s, _, _)| s)
+            .collect();
+        assert_eq!(kids, [".rx", ".tx", ".buf"]);
+        let mut rows = Vec::new();
+        let mut clipped = false;
+        collect_matches(&syms, "port", &root, "buf", 0, &mut rows, &mut clipped);
+        assert!(rows.iter().any(|(p, _, _)| p == "port.buf[3]"), "{rows:?}");
+        for (p, _, _) in &rows {
+            xrdap::expr::Resolver::new(&mut syms)
+                .resolve_all(p)
+                .unwrap_or_else(|e| panic!("{p}: {e}"));
+        }
+    }
+
+    /// 超过展开上限的数组在筛选时只搜前面的元素，并且说明。
+    #[test]
+    fn long_array_is_clipped() {
+        let syms = fixture("types.elf");
+        let long = NodeTy::Arr {
+            elem: syms.vars["motor"][0].ty,
+            dims: vec![Some(MAX_ARRAY_ROWS + 1)],
+        };
+        let mut rows = Vec::new();
+        let mut clipped = false;
+        collect_matches(&syms, "x", &long, "zzz", 0, &mut rows, &mut clipped);
+        assert!(clipped && rows.is_empty());
     }
 
     /// 函数作用域的 static 也能从根变量展开，路径带函数名。

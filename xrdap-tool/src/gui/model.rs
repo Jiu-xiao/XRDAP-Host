@@ -53,6 +53,18 @@ pub(super) struct VarTree {
     pub(super) open: bool,
     /// 只显示路径里含这段文字的节点
     pub(super) filter: String,
+    /// 上次筛选的结果；筛选文字不变时不再遍历整棵树
+    pub(super) matches: Option<TreeMatches>,
+}
+
+/// 成员树按一段文字筛选出的节点。
+pub(super) struct TreeMatches {
+    /// 筛选用的文字（小写）
+    pub(super) needle: String,
+    /// （表达式，类型名，是否叶子）
+    pub(super) rows: Vec<(String, String, bool)>,
+    /// 有数组超过展开上限，只搜了前面的元素
+    pub(super) clipped: bool,
 }
 
 pub(super) struct VarRow {
