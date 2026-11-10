@@ -219,3 +219,30 @@ fn struct_expansion_skips_bitfields() {
     assert_eq!(all.len(), 6);
     assert_eq!(all[5].direct_addr(), Some(0x2000_00BC));
 }
+
+/// 函数作用域的 static 变量有固定地址，应该和文件作用域的 static 一样出现在变量表里，
+/// 名字带上函数名区分作用域；普通局部变量在栈上，没有固定地址，不应该出现。
+#[test]
+fn function_scope_statics() {
+    let mut s = xrdap::elf::load(&fixture("statics.elf")).unwrap();
+    let t = resolve(&mut s, "statics_touch::func_static");
+    assert_eq!(t.direct_addr(), Some(0x2000_0000));
+    assert_eq!(t.ty.size, 4);
+    let z = resolve(&mut s, "statics_touch::func_zero");
+    assert_eq!(z.direct_addr(), Some(0x2000_0008));
+    // 函数限定的完整名字能找到，不带限定的短名字不应该有
+    assert!(!s.vars.contains_key("func_static"));
+    assert!(s.vars.contains_key("touched"));
+}
+
+/// statics.c 的 DWARF 5 版本解析结果和 DWARF 4 版本一致。
+#[test]
+fn statics_dwarf5_matches_dwarf4() {
+    let mut d4 = xrdap::elf::load(&fixture("statics.elf")).unwrap();
+    let mut d5 = xrdap::elf::load(&fixture("statics-dwarf5.elf")).unwrap();
+    for e in ["statics_touch::func_static", "statics_touch::func_zero"] {
+        let (a, b) = (resolve(&mut d4, e), resolve(&mut d5, e));
+        assert_eq!((a.location(), a.ty.size), (b.location(), b.ty.size), "{e}");
+        assert_eq!(a.ty.kind, b.ty.kind, "{e}");
+    }
+}

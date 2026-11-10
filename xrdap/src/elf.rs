@@ -146,6 +146,7 @@ fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
         syms,
         parent: HashMap::new(),
         found: Vec::new(),
+        defs: HashMap::new(),
     };
     for i in 0..units.len() {
         loader.index_unit(i)?;
@@ -154,6 +155,7 @@ fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
     loader.collect_vars(|addr| {
         (addr != 0 || zero_symbol) && alloc.iter().any(|&(lo, hi)| (lo..hi).contains(&addr))
     })?;
+    loader.complete_declarations()?;
     Ok(loader.syms)
 }
 
@@ -167,6 +169,8 @@ struct Loader<'a, 'd> {
     parent: HashMap<usize, usize>,
     /// 有固定地址的变量：(编译单元, DIE)
     found: Vec<(usize, UnitOffset)>,
+    /// 有名字的 struct/class/union 完整定义：名字 -> (编译单元, DIE)，第一个为准
+    defs: HashMap<String, (usize, UnitOffset)>,
 }
 
 /// 一个 DIE 里本程序关心的属性。
@@ -519,6 +523,20 @@ impl<'a, 'd> Loader<'a, 'd> {
                     }
                 }
             }
+            if matches!(
+                tag,
+                gimli::DW_TAG_structure_type | gimli::DW_TAG_class_type | gimli::DW_TAG_union_type
+            ) && !matches!(
+                entry.attr_value(gimli::DW_AT_declaration),
+                Some(AttributeValue::Flag(true))
+            ) {
+                if let Some(name) = entry
+                    .attr_value(gimli::DW_AT_name)
+                    .and_then(|v| self.string(unit, v))
+                {
+                    self.defs.entry(name).or_insert((unit, entry.offset()));
+                }
+            }
             stack.push((depth, if is_scope { Some(key) } else { None }));
         }
         Ok(())
@@ -563,6 +581,37 @@ impl<'a, 'd> Loader<'a, 'd> {
             (false, true) => prefix,
             (false, false) => format!("{prefix}::{base}"),
         }))
+    }
+
+    /// 变量用到的类型里只有声明的 struct/class/union（GCC 在没有定义虚函数的编译单元里只写声明），
+    /// 从别的编译单元读出同名的完整定义，[`SymbolTable::complete`] 用它展开成员。完整定义的成员
+    /// 也可能只有声明，所以重复到没有新的为止。
+    fn complete_declarations(&mut self) -> Result<()> {
+        loop {
+            let missing: Vec<String> = self
+                .syms
+                .types
+                .iter()
+                .filter_map(|t| match t {
+                    Type::Struct {
+                        declaration: true,
+                        name: Some(n),
+                        ..
+                    } if !self.syms.tags.contains_key(n) && self.defs.contains_key(n) => {
+                        Some(n.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            if missing.is_empty() {
+                return Ok(());
+            }
+            for name in missing {
+                if let Some((unit, off)) = self.defs.remove(&name) {
+                    self.type_at(unit, off)?;
+                }
+            }
+        }
     }
 
     /// 把找到的变量加进符号表。跳过只是声明的、地址不在目标上的（`placed` 判断）、沿声明也找不到

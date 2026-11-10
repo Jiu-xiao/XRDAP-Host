@@ -13,18 +13,25 @@ impl App {
         let curves: Vec<Curve> = self
             .watches
             .iter()
-            .filter(|w| w.show)
             .map(|w| Curve {
+                id: w.id,
                 name: &w.target.name,
                 color: p.channel(w.channel),
                 chart: w.chart,
                 series: &w.series,
                 float: matches!(w.target.ty.kind, ScalarKind::Float),
+                show: w.show,
             })
             .collect();
         self.plot.ui_cursors(ui, &curves);
         let t_last = self.t_last.unwrap_or(0.0);
-        self.plot
+        let toggle = self
+            .plot
             .ui_plots(ui, &curves, !self.paused, t_last, self.window_s);
+        if let Some(id) = toggle {
+            if let Some(w) = self.watches.iter_mut().find(|w| w.id == id) {
+                w.show = !w.show;
+            }
+        }
     }
 }

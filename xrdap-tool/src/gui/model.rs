@@ -42,11 +42,40 @@ pub(super) struct Watch {
     pub(super) changed_at: Option<Instant>,
 }
 
+/// 变量面板里打开的一棵成员树。
+pub(super) struct VarTree {
+    /// 根变量的表达式，也是窗口标题
+    pub(super) path: String,
+    /// 根的变量地址，悬停时显示
+    pub(super) addr: u64,
+    /// 根的类型
+    pub(super) ty: xrdap::types::TypeId,
+    pub(super) open: bool,
+    /// 只显示路径里含这段文字的节点
+    pub(super) filter: String,
+    /// 上次筛选的结果；筛选文字不变时不再遍历整棵树
+    pub(super) matches: Option<TreeMatches>,
+}
+
+/// 成员树按一段文字筛选出的节点。
+pub(super) struct TreeMatches {
+    /// 筛选用的文字（小写）
+    pub(super) needle: String,
+    /// （表达式，类型名，是否叶子）
+    pub(super) rows: Vec<(String, String, bool)>,
+    /// 有数组超过展开上限，只搜了前面的元素
+    pub(super) clipped: bool,
+}
+
 pub(super) struct VarRow {
     pub(super) name: String,
     pub(super) lower: String,
     pub(super) addr: u64,
     pub(super) ty: String,
+    /// 类型在符号表里的编号，展开成员树时用
+    pub(super) ty_id: xrdap::types::TypeId,
+    /// 是结构体或数组，可以打开成员树
+    pub(super) expandable: bool,
     pub(super) size: Option<u64>,
     /// 定义在 HAL、CMSIS、RTOS、C 库等第三方代码里
     pub(super) system: bool,
