@@ -89,7 +89,7 @@ pub enum Cmd {
         no_target: bool,
     },
 
-    /// 列出 ELF 里的全局变量
+    /// 列出 ELF 里的变量
     #[command(help_template = TEMPLATE, disable_help_flag = true, next_help_heading = "选项")]
     Vars {
         /// 目标程序的 ELF（带 -g 调试信息）

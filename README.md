@@ -41,7 +41,7 @@ xrdap info -p COM3
 
 ## 命令行读写与采样
 
-`vars` 列出 ELF 中的全局变量，`read` 读变量，`write` 写入后读回，`watch` 让探针按固定周期采样，结果打印到终端或写入 CSV。采样由探针定时，周期不受 USB 或 Wi-Fi 往返延迟的影响。
+`vars` 列出 ELF 中的变量，`read` 读变量，`write` 写入后读回，`watch` 让探针按固定周期采样，结果打印到终端或写入 CSV。采样由探针定时，周期不受 USB 或 Wi-Fi 往返延迟的影响。
 
 ```
 xrdap vars --elf app.elf motor
