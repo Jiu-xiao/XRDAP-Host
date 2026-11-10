@@ -1,9 +1,11 @@
 //! 从 ELF 读全局变量的地址和 DWARF 类型，得到 [`SymbolTable`]。
-//! 只处理有固定地址（`DW_OP_addr`）的变量：全局变量和文件内的 static 变量。
+//! 只处理有固定地址（`DW_OP_addr`）的变量：全局变量、文件内和函数内的 static 变量。
+//! 函数里的普通局部变量在栈上（DW_OP_fbreg 或 location list），没有固定地址，不处理。
 //!
 //! Read the addresses of global variables and the DWARF types from an ELF file into a
 //! [`SymbolTable`]. Only variables with a fixed address (`DW_OP_addr`) are handled: global
-//! variables and file-scope static variables.
+//! variables, file-scope statics and function-scope statics. Ordinary locals live on the
+//! stack (`DW_OP_fbreg` or a location list) and have no fixed address, so they are skipped.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -456,6 +458,24 @@ impl<'a, 'd> Loader<'a, 'd> {
                         .clone()
                         .unwrap_or_else(|| "(anonymous namespace)".into());
                     self.scan_scope(unit, c, &format!("{prefix}{ns}::"), unit_name)?;
+                }
+                // 函数和语句块里的 static 变量同样有固定地址（DW_OP_addr），
+                // 例如 XRobotMain 里生成的模块对象；非 static 的局部变量是 fbreg
+                // 或 location list，下面的 exprloc_address 会返回 None，自然跳过。
+                //
+                // Statics in functions and blocks have a fixed address (DW_OP_addr) too,
+                // e.g. the module objects generated inside XRobotMain; non-static locals
+                // use fbreg or a location list, so exprloc_address below returns None and
+                // they are skipped.
+                gimli::DW_TAG_subprogram => {
+                    let scoped = match &d.name {
+                        Some(n) => format!("{prefix}{n}::"),
+                        None => prefix.to_string(),
+                    };
+                    self.scan_scope(unit, c, &scoped, unit_name)?;
+                }
+                gimli::DW_TAG_lexical_block => {
+                    self.scan_scope(unit, c, prefix, unit_name)?;
                 }
                 gimli::DW_TAG_variable => {
                     let Some(addr) = d.location else { continue };
