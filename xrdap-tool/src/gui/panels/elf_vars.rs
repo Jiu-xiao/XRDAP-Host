@@ -580,7 +580,8 @@ impl App {
                         let v = &self.vars[i];
                         ui.horizontal(|ui| {
                             if ui.small_button("树").clicked() {
-                                open_tree = Some((v.name.clone(), v.addr, v.ty_id));
+                                open_tree =
+                                    Some((xrdap::expr::name_expr(&v.name), v.addr, v.ty_id));
                             }
                             if ui.small_button("添加").clicked() {
                                 add = Some(xrdap::expr::name_expr(&v.name));
