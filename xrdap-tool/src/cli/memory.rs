@@ -28,7 +28,7 @@ pub fn cmd_vars(elf: &Path, pattern: Option<&str>, out: &mut dyn Write) -> CliRe
             out,
             "0x{:08X}  {:<24} {}，{}",
             v.addr,
-            v.name,
+            xrdap::expr::name_expr(&v.name),
             syms.name_of(v.ty),
             size
         )?;

@@ -13,7 +13,7 @@ Each command accepts only the options it uses, written after the command; `xrdap
 | (no command) | Opens the GUI | |
 | `list` | Lists probes | `--ask-serial` |
 | `info` | Probe information; connects the target to read DPIDR and the core type | probe options, `--clock`, `--no-target` |
-| `vars [text]` | Lists the global variables in the ELF whose names contain the text | `--elf` (required) |
+| `vars [text]` | Lists the variables in the ELF whose names contain the text | `--elf` (required) |
 | `read var...` | Reads variables | probe options, `--clock`, `--elf` |
 | `write var=value...` | Writes variables and reads them back | probe options, `--clock`, `--elf` |
 | `watch var[@div[:phase]]...` | Periodic sampling on the probe | probe options, `--clock`, `--elf`, `--period`, `--csv`, `--duration`, `--no-overwrite`, `--all` |
@@ -77,6 +77,8 @@ One connection (USB, serial or TCP) uses the probe at a time, and keeping to tha
 ## Variable syntax
 
 Variables are written as `counter`, `state.speed`, `motor[1].pid->out`, `*ptr`, `p->q->x`, with type casts such as `(uint32_t***)p`, or as a raw address with a type, e.g. `0x20000010:u32`. Types are `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, common C type names (`uint32_t`, `int`, `float` and others) and type names from the ELF, optionally followed by `*`. Variable names and the ELF's types come from the ELF given with `--elf`; without `--elf` only raw addresses are available.
+
+The variables in the ELF are global variables, static members of namespaces and classes, and static variables at file and function scope. Their names carry the scope, e.g. `motor::speed`, `Ctrl::pid` and `tick::count` (a static variable in function `tick`). An expression can give the full name or only the last components of it, e.g. `speed`; when these match one variable, that variable is used, and when they match several, `xrdap` reports an error that lists the full names. Names containing `<>`, spaces or parentheses (static members of templates, variables in anonymous namespaces and lambdas) are written in single quotes, e.g. `'Holder<3>::v'`, and `vars` lists them that way.
 
 `read` and `watch` expand structs and arrays into their members; each item of `write` targets one numeric variable. Values: integers in decimal, `0x` hexadecimal or `0b` binary, floating-point numbers as decimals, enumerations by name, and `bool` as `true`, `false`, `1` or `0`. After writing, `xrdap` reads the variable back and shows the value read.
 

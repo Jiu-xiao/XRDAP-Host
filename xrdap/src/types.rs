@@ -216,14 +216,14 @@ pub enum Type {
     Unknown(String),
 }
 
-/// 一个全局变量。
+/// 一个有固定地址的变量。
 ///
-/// A global variable.
+/// A variable with a fixed address.
 #[derive(Debug, Clone)]
 pub struct Variable {
-    /// 变量名。
+    /// 带作用域的变量名，例如 `counter`、`motor::speed`、`tick::count`。
     ///
-    /// Variable name.
+    /// Variable name with its scope, e.g. `counter`, `motor::speed`, `tick::count`.
     pub name: String,
     /// 变量地址。
     ///
@@ -540,31 +540,48 @@ impl SymbolTable {
             .or_else(|| self.builtin(name))
     }
 
-    /// 找一个变量。重名时报错并列出各个定义。
+    /// 找一个变量。先按全名找；找不到、ELF 符号表里也没有这个名字时，按名字末尾的几段找，
+    /// 例如 `speed` 找到 `motor::speed`，`pid` 找到 `Ctrl::pid`。对应多个地址时报错并列出各个定义。
     ///
-    /// Find a variable. A duplicate name is an error that lists the definitions.
+    /// Find a variable. The full name is tried first; when it is not found and the ELF symbol
+    /// table has no such name either, the last components of the names are matched, so `speed`
+    /// finds `motor::speed` and `pid` finds `Ctrl::pid`. More than one address is an error that
+    /// lists the definitions.
     pub(crate) fn lookup_var(&self, name: &str) -> Result<Option<&Variable>> {
-        let Some(list) = self.vars.get(name) else {
-            return Ok(None);
+        let mut found: Vec<&Variable> = match self.vars.get(name) {
+            Some(list) => list.iter().collect(),
+            None if self.elf_symbols.contains_key(name) => return Ok(None),
+            None => self.vars_ending_with(name).collect(),
         };
-        let mut uniq: Vec<&Variable> = Vec::new();
-        for v in list {
-            if !uniq.iter().any(|u| u.addr == v.addr) {
-                uniq.push(v);
-            }
-        }
-        if uniq.len() > 1 {
-            let places = uniq
+        found.sort_by(|a, b| (a.addr, &a.name).cmp(&(b.addr, &b.name)));
+        found.dedup_by_key(|v| v.addr);
+        if found.len() > 1 {
+            let places = found
                 .iter()
-                .map(|v| format!("{}（0x{:08X}）", v.unit, v.addr))
+                .map(|v| format!("{}（{}，0x{:08X}）", v.name, v.unit, v.addr))
                 .collect::<Vec<_>>()
                 .join("、");
             return Err(Error::usage(format!(
-                "{name} 在多个编译单元里都有定义：{places}。请直接写地址，例如 0x{:08X}:u32",
-                uniq[0].addr
+                "{name} 有多个定义：{places}。请写带作用域的全名，或直接写地址，例如 0x{:08X}:u32",
+                found[0].addr
             )));
         }
-        Ok(uniq.first().copied())
+        Ok(found.first().copied())
+    }
+
+    /// 有没有叫这个名字的变量（全名，或名字末尾的几段）。
+    ///
+    /// Whether a variable has this name (its full name, or the last components of it).
+    pub(crate) fn has_var(&self, name: &str) -> bool {
+        self.vars.contains_key(name) || self.vars_ending_with(name).next().is_some()
+    }
+
+    fn vars_ending_with<'s>(&'s self, name: &str) -> impl Iterator<Item = &'s Variable> {
+        let suffix = format!("::{name}");
+        self.vars
+            .iter()
+            .filter(move |(k, _)| k.ends_with(&suffix))
+            .flat_map(|(_, list)| list)
     }
 }
 
