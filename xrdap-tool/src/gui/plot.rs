@@ -1,7 +1,7 @@
 //! 曲线区：按变量分到 1 到 4 张图（时间轴联动），可以归一化，悬停读数，A/B 游标测时间差。
 
 use eframe::egui::{self, Color32, RichText};
-use egui_plot::{Legend, Line, Plot, PlotPoints, VLine};
+use egui_plot::{Line, Plot, PlotPoints, VLine};
 
 use super::series::Series;
 
@@ -9,6 +9,8 @@ pub const MAX_CHARTS: u8 = 4;
 
 /// 一条要画的曲线。
 pub struct Curve<'a> {
+    /// 监视项的编号，图例里点击切换显示时用
+    pub id: u64,
     pub name: &'a str,
     pub color: Color32,
     /// 画在第几张图（1 起）
@@ -16,14 +18,28 @@ pub struct Curve<'a> {
     pub series: &'a Series,
     /// 浮点变量按小数显示，其余按整数显示
     pub float: bool,
+    /// 是否画这条曲线；图例里隐藏的曲线仍然列出，点击可以再显示
+    pub show: bool,
 }
 
-#[derive(Default)]
 pub struct PlotView {
     /// 每条曲线按当前窗口里的最小、最大值缩放到 0 到 1
     pub normalize: bool,
     pub cursor_a: Option<f64>,
     pub cursor_b: Option<f64>,
+    /// 浮动的图例窗口是否显示；窗口的位置、大小和折叠状态由 egui 记忆保存
+    pub legend_open: bool,
+}
+
+impl Default for PlotView {
+    fn default() -> Self {
+        Self {
+            normalize: false,
+            cursor_a: None,
+            cursor_b: None,
+            legend_open: true,
+        }
+    }
 }
 
 pub fn fmt_value(v: f64, float: bool) -> String {
@@ -93,7 +109,7 @@ impl PlotView {
                     ui.strong("B");
                     ui.strong("B − A");
                     ui.end_row();
-                    for c in curves {
+                    for c in curves.iter().filter(|c| c.show) {
                         let va = self.cursor_a.and_then(|t| c.series.value_at(t));
                         let vb = self.cursor_b.and_then(|t| c.series.value_at(t));
                         let show = |v: Option<f64>| v.map_or("-".into(), |v| fmt_value(v, c.float));
@@ -112,6 +128,7 @@ impl PlotView {
     }
 
     /// 画图。follow 为 true 时 X 轴跟着最新数据走，显示 [t_last - window, t_last]。
+    /// 返回图例里点击的监视项编号，调用方用它切换这条曲线画不画。
     pub fn ui_plots(
         &mut self,
         ui: &mut egui::Ui,
@@ -119,8 +136,8 @@ impl PlotView {
         follow: bool,
         t_last: f64,
         window: f64,
-    ) {
-        let mut charts: Vec<u8> = curves.iter().map(|c| c.chart).collect();
+    ) -> Option<u64> {
+        let mut charts: Vec<u8> = curves.iter().filter(|c| c.show).map(|c| c.chart).collect();
         charts.sort_unstable();
         charts.dedup();
         if charts.is_empty() {
@@ -141,7 +158,6 @@ impl PlotView {
         for (k, &chart) in charts.iter().enumerate() {
             let mut plot = Plot::new(("plot", chart))
                 .height(height)
-                .legend(Legend::default())
                 .link_axis(link, egui::Vec2b::new(true, false))
                 .link_cursor(link, egui::Vec2b::new(true, false))
                 .allow_drag(!follow)
@@ -169,7 +185,7 @@ impl PlotView {
                     let b = p.plot_bounds();
                     (b.min()[0], b.max()[0])
                 };
-                for c in curves.iter().filter(|c| c.chart == chart) {
+                for c in curves.iter().filter(|c| c.show && c.chart == chart) {
                     let mut pts = c.series.decimated(x0, x1, buckets);
                     if normalize {
                         let (lo, hi) = pts
@@ -208,6 +224,7 @@ impl PlotView {
                 self.cursor_a = Some(x);
             }
         }
+        let toggle = self.ui_legend(ui.ctx(), curves);
         if let Some(x) = hover_x {
             egui::Tooltip::always_open(
                 ui.ctx().clone(),
@@ -219,7 +236,7 @@ impl PlotView {
             .show(|ui| {
                 ui.strong(format!("t = {x:.4} s"));
                 egui::Grid::new("hover_grid").show(ui, |ui| {
-                    for c in curves {
+                    for c in curves.iter().filter(|c| c.show) {
                         ui.label(RichText::new(c.name).color(c.color));
                         let v = c.series.value_at(x);
                         ui.monospace(v.map_or("-".into(), |v| fmt_value(v, c.float)));
@@ -228,6 +245,116 @@ impl PlotView {
                 });
             });
         }
+        toggle
+    }
+
+    /// 浮动的图例窗口：可拖动、可折叠、可调大小，曲线多时用滚轮查看；
+    /// 点击条目切换这条曲线画不画，关闭后可以在控制栏的“图例”按钮重新打开。
+    fn ui_legend(&mut self, ctx: &egui::Context, curves: &[Curve]) -> Option<u64> {
+        if !self.legend_open || curves.is_empty() {
+            return None;
+        }
+        let mut charts: Vec<u8> = curves.iter().map(|c| c.chart).collect();
+        charts.sort_unstable();
+        charts.dedup();
+        let p = super::theme::Palette::of(ctx.theme());
+        // 标题栏底色取窗口 frame 的 fill；本主题的 widgets.open 是墨色，标题会看不清
+        let frame = egui::Frame::window(&ctx.style())
+            .fill(p.raised)
+            .stroke(egui::Stroke::new(1.0_f32, p.line))
+            .corner_radius(egui::CornerRadius::ZERO)
+            .shadow(egui::epaint::Shadow::NONE);
+        let mut open = self.legend_open;
+        let mut toggle = None;
+        egui::Window::new("图例")
+            .id(egui::Id::new("plot_legend"))
+            .frame(frame)
+            .open(&mut open)
+            .default_pos(egui::pos2(
+                ctx.content_rect().right() - 360.0,
+                ctx.content_rect().top() + 96.0,
+            ))
+            .default_width(330.0)
+            .default_height(240.0)
+            .resizable(true)
+            .collapsible(true)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("legend_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        let multi = charts.len() > 1;
+                        for &chart in &charts {
+                            if multi {
+                                ui.label(RichText::new(format!("图 {chart}")).strong());
+                            }
+                            for c in curves.iter().filter(|c| c.chart == chart) {
+                                // 整行（色块、名字、右侧空白）都要能点。文字直接画 galley，
+                                // 不用 Label：可选的 Label 会自己抢走点击，整行就点不动。
+                                let row_h = ui.spacing().interact_size.y.max(18.0);
+                                let (rect, resp) = ui.allocate_exact_size(
+                                    egui::vec2(ui.available_width(), row_h),
+                                    egui::Sense::click(),
+                                );
+                                if resp.hovered() {
+                                    ui.painter().rect_filled(rect, 0.0, p.sunken);
+                                }
+                                let color = if c.show { c.color } else { p.ink_muted };
+                                let sq = egui::Rect::from_center_size(
+                                    egui::pos2(rect.left() + 7.0, rect.center().y),
+                                    egui::vec2(10.0, 10.0),
+                                );
+                                if c.show {
+                                    ui.painter().rect_filled(sq, 1.0, c.color);
+                                } else {
+                                    ui.painter().rect_stroke(
+                                        sq,
+                                        1.0,
+                                        egui::Stroke::new(1.0_f32, p.ink_muted),
+                                        egui::StrokeKind::Inside,
+                                    );
+                                }
+                                let font = egui::TextStyle::Body.resolve(ui.style());
+                                let wrap = egui::text::TextWrapping {
+                                    max_width: (rect.width() - 22.0).max(1.0),
+                                    max_rows: 1,
+                                    break_anywhere: true,
+                                    overflow_character: Some('…'),
+                                };
+                                let galley = ui.fonts_mut(|f| {
+                                    let mut job = egui::text::LayoutJob::simple(
+                                        c.name.to_string(),
+                                        font.clone(),
+                                        color,
+                                        wrap.max_width,
+                                    );
+                                    job.wrap = wrap;
+                                    f.layout_job(job)
+                                });
+                                let pos = egui::pos2(
+                                    rect.left() + 16.0,
+                                    rect.center().y - galley.size().y / 2.0,
+                                );
+                                ui.painter().galley(pos, galley, color);
+                                if resp
+                                    .on_hover_text(format!(
+                                        "{}\n点击{}这条曲线",
+                                        c.name,
+                                        if c.show { "隐藏" } else { "显示" }
+                                    ))
+                                    .clicked()
+                                {
+                                    toggle = Some(c.id);
+                                }
+                            }
+                            if multi {
+                                ui.add_space(4.0);
+                            }
+                        }
+                    });
+            });
+        self.legend_open = open;
+        toggle
     }
 }
 

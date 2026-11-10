@@ -164,6 +164,8 @@ impl App {
             ui.toggle_value(&mut self.paused, "暂停跟随")
                 .on_hover_text("暂停后可以拖动、缩放；数据照常接收");
             clear = ui.button("清空曲线").clicked();
+            ui.toggle_value(&mut self.plot.legend_open, "图例")
+                .on_hover_text("浮动的曲线图例：可拖动、折叠、调整大小，滚轮查看长列表");
         });
         if start {
             self.start();
