@@ -402,7 +402,7 @@ impl SymbolTable {
     ///
     /// Replace a declaration-only struct with the complete definition of the same name, if
     /// another compilation unit has one.
-    pub(crate) fn complete(&self, id: TypeId) -> TypeId {
+    pub fn complete(&self, id: TypeId) -> TypeId {
         let id = self.strip(id);
         if let Type::Struct {
             declaration: true,

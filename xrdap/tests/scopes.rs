@@ -155,3 +155,16 @@ fn listed_names_resolve() {
         assert_eq!(base(&mut s, &expr), addr, "{expr}");
     }
 }
+
+/// 变量的类型在它的编译单元里只有声明（GCC 在没有定义虚函数的编译单元里只写类声明）时，
+/// 用别的编译单元里的完整定义：知道大小，能读成员，能展开。
+#[test]
+fn declaration_only_type_uses_full_definition() {
+    let mut s = load("decl.elf");
+    let ty = s.vars["port"][0].ty;
+    assert_eq!(s.size_of(ty), Some(16));
+    assert_eq!(base(&mut s, "port.tx"), addr_of(&s, "port") + 8);
+    // 虚函数表指针、rx、tx、buf 的 4 个元素
+    let all = Resolver::new(&mut s).resolve_all("port").unwrap();
+    assert_eq!(all.len(), 7, "{all:?}");
+}

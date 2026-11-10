@@ -2,7 +2,8 @@
 # 重新生成测试用的 ELF。需要 Arm GNU Toolchain（arm-none-eabi-gcc 14.2）。
 # types.c 编两次：types.elf 用 DWARF 4，types-dwarf5.elf 用 DWARF 5，覆盖结构体、数组、
 # 指针、浮点、位域、联合、枚举等类型。statics.c 同样编两次：statics.elf 和 statics-dwarf5.elf，
-# 覆盖函数作用域的 static 变量。scopes.cpp 编成三个 ELF：scopes.elf（普通）、scopes-lto.elf
+# 覆盖函数作用域的 static 变量。decl-a.cpp 和 decl-b.cpp 编成 decl.elf：变量的类型在定义它的编译
+# 单元里只有声明，完整定义在另一个编译单元。scopes.cpp 编成三个 ELF：scopes.elf（普通）、scopes-lto.elf
 # （-flto）、scopes-gz.elf（压缩调试段），覆盖命名空间、类的静态成员、函数内的 static 变量和被
 # --gc-sections 丢掉的变量。调试信息里的路径都换成相对路径，ELF 不带编译机器的目录。
 set -e
@@ -35,3 +36,6 @@ for kind in plain lto gz; do
     -Wall -Wextra -Werror -T types.ld -o "$out" scopes.cpp scopes-nodebug.o -lgcc
 done
 rm -f scopes-nodebug.o
+"$CXX" $arch -O0 -g -gdwarf-4 -ffreestanding -fno-exceptions -fno-rtti -nostdlib -nostartfiles \
+  -ffile-prefix-map="$here"=. -ffile-prefix-map="$toolchain"=toolchain \
+  -Wall -Wextra -Werror -T types.ld -o decl.elf decl-a.cpp decl-b.cpp -lgcc
