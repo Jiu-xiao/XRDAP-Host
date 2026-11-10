@@ -1,4 +1,4 @@
-//! 左下：ELF 文件和全局变量搜索、添加到监视表。ELF 在后台线程里读，界面不卡。
+//! 左下：ELF 文件和变量搜索、添加到监视表。ELF 在后台线程里读，界面不卡。
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
@@ -431,11 +431,7 @@ impl App {
         keep.append(&mut self.restore);
         match loaded {
             Ok((syms, vars)) => {
-                self.log(format!(
-                    "读入 {}：{} 个全局变量",
-                    path.display(),
-                    vars.len()
-                ));
+                self.log(format!("读入 {}：{} 个变量", path.display(), vars.len()));
                 self.syms = syms;
                 self.vars = vars;
                 // 类型编号跟着旧符号表，换 ELF 后不能再拿它展开
@@ -560,7 +556,7 @@ impl App {
             });
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
-                    .hint_text(format!("在 {} 个全局变量里搜索", self.vars.len()))
+                    .hint_text(format!("在 {} 个变量里搜索", self.vars.len()))
                     .desired_width(fill_width(ui)),
             );
             ui.checkbox(&mut self.user_only, "只看自己的变量")
@@ -587,7 +583,7 @@ impl App {
                                 open_tree = Some((v.name.clone(), v.addr, v.ty_id));
                             }
                             if ui.small_button("添加").clicked() {
-                                add = Some(v.name.clone());
+                                add = Some(xrdap::expr::name_expr(&v.name));
                             }
                             let size = v
                                 .size

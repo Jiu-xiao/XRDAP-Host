@@ -8,7 +8,7 @@ XRDAP 探针的电脑端 Rust 库：打开探针（USB、串口、TCP），按�
 
 ```toml
 [dependencies]
-xrdap = { git = "https://github.com/Jiu-xiao/XRDAP-Host", tag = "v0.6.1" }
+xrdap = { git = "https://github.com/Jiu-xiao/XRDAP-Host", tag = "v0.6.2" }
 ```
 
 | feature | 默认 | 内容 |

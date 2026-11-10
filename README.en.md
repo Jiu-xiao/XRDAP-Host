@@ -41,7 +41,7 @@ The screenshots are connected to the simulated probe served by `cargo run -p xrd
 
 ## Reading, writing and sampling on the command line
 
-`vars` lists the global variables in the ELF, `read` reads variables, `write` writes and reads back, and `watch` has the probe sample at a fixed period and prints the result or writes it to CSV. The probe times the sampling, so the period does not depend on USB or Wi-Fi round trips.
+`vars` lists the variables in the ELF, `read` reads variables, `write` writes and reads back, and `watch` has the probe sample at a fixed period and prints the result or writes it to CSV. The probe times the sampling, so the period does not depend on USB or Wi-Fi round trips.
 
 ```
 xrdap vars --elf app.elf motor

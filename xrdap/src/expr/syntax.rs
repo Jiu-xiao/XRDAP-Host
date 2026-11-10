@@ -42,6 +42,17 @@ fn tokenize(s: &str) -> Result<Vec<Tok>> {
                 }
             }
             out.push(Tok::Ident(c[start..i].iter().collect()));
+        } else if ch == '\'' {
+            // 带引号的名字：模板、匿名命名空间、lambda 里的变量，名字里有 <>、空格、括号
+            let start = i + 1;
+            let Some(len) = c[start..].iter().position(|&x| x == '\'') else {
+                return Err(Error::usage(format!("表达式 {s} 里的引号没有配对")));
+            };
+            if len == 0 {
+                return Err(Error::usage(format!("表达式 {s} 里有空的名字 ''")));
+            }
+            out.push(Tok::Ident(c[start..start + len].iter().collect()));
+            i = start + len + 1;
         } else if ch.is_ascii_digit() {
             let start = i;
             while i < c.len() && (c[i].is_ascii_alphanumeric() || c[i] == '_') {
@@ -170,7 +181,7 @@ impl Parser<'_> {
         if matches!(words[0], "struct" | "union" | "enum" | "class") {
             return true;
         }
-        if words.len() == 1 && self.syms.vars.contains_key(words[0]) {
+        if words.len() == 1 && self.syms.has_var(words[0]) {
             return false;
         }
         self.syms.lookup_type(&words.join(" ")).is_some()
