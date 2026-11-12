@@ -4,6 +4,8 @@
 
 XRDAP-Host is the host tool `xrdap` for the XR-DAP family of debug probes ([XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP), [XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8), [XRDAP-CH32](https://github.com/Jiu-xiao/XRDAP-CH32)), for Windows and Linux. `xrdap` reads and writes target MCU memory by variable name, has the probe sample variables at a fixed period, plots them live and exports CSV; variable addresses and types come from the debug information in the ELF. It also shares the probe with Keil, pyOCD, probe-rs and OpenOCD, controls the target core and configures the probe's Wi-Fi. The tool is a single executable: run without arguments it opens the GUI, run with a command it works as a command-line tool.
 
+An introduction video of the XR-DAP family is on [YouTube](https://youtu.be/H6S_sdkS8vs).
+
 The same functions are available to other programs as the Rust library `xrdap`, see [xrdap/README.en.md](xrdap/README.en.md). The protocol between probe and host is XRDAP-Core's [`docs/protocol.en.md`](https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.en.md); `xrdap` uses protocol version 2 of its XR vendor extension and asks for a firmware update when the probe firmware reports another version.
 
 ## Download
