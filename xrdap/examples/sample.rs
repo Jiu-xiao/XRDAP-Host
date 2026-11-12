@@ -17,7 +17,13 @@ use xrdap::watch::{Sampler, Var};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let Some(elf) = args.next() else {
-        eprintln!("用法：sample <ELF> <变量>...");
+        eprintln!(
+            "{}",
+            xrdap::lang::tr(
+                "usage: sample <ELF> <VAR>...",
+                "用法：sample <ELF> <变量>..."
+            )
+        );
         std::process::exit(2);
     };
     let mut syms = xrdap::elf::load(&PathBuf::from(elf))?;
@@ -41,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
     let mut sampler = Sampler::start(&mut probe, vars, 1000, false)
-        .map_err(|e| format!("开始采样失败：{e:?}"))?;
+        .map_err(|e| xrdap::trf!("Starting sampling failed: {e:?}", "开始采样失败：{e:?}"))?;
 
     let end = Instant::now() + Duration::from_secs(1);
     let mut frames = Vec::new();
@@ -67,11 +73,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let s = sampler.stats();
     println!(
-        "{} 帧，跳拍 {}，丢帧 {}，缺帧 {}",
-        frames.len(),
-        s.skipped,
-        s.dropped,
-        s.missing
+        "{}",
+        xrdap::trf!(
+            "{} frames, skipped ticks {}, dropped frames {}, frame gaps {}",
+            "{} 帧，跳拍 {}，丢帧 {}，缺帧 {}",
+            frames.len(),
+            s.skipped,
+            s.dropped,
+            s.missing
+        )
     );
     Ok(())
 }

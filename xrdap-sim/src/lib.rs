@@ -406,13 +406,15 @@ impl Transport for Link {
     }
 
     fn recv(&mut self, _timeout: Duration) -> xrdap::Result<Vec<u8>> {
-        self.out
-            .pop_front()
-            .ok_or_else(|| xrdap::Error::Timeout("模拟探针没有响应".into()))
+        self.out.pop_front().ok_or_else(|| {
+            xrdap::Error::Timeout(
+                xrdap::lang::tr("the simulated probe does not respond", "模拟探针没有响应").into(),
+            )
+        })
     }
 
     fn describe(&self) -> String {
-        "模拟探针".into()
+        xrdap::lang::tr("simulated probe", "模拟探针").into()
     }
 
     /// 控制口，按 USB 的规则（协议文档 3.7.1 节）：固件没有控制口、请求为空或超过 EP0 的 OUT 缓冲

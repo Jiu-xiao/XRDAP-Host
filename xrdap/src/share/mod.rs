@@ -53,7 +53,8 @@ use std::time::Duration;
 pub use usbip::DeviceInfo;
 
 use crate::dap::Probe;
-use crate::{Error, Result};
+use crate::lang::tr;
+use crate::{trf, Error, Result};
 use link::{is_normal_end, Link};
 
 /// 把客户端的 DAP 请求转给探针：发出去不等应答，应答按发出的顺序收（[`Probe::forward_send`]）。
@@ -97,7 +98,7 @@ impl Forward for ProbeForward<'_> {
 
 /// 探针读写出错（超时、断开）时结束这个客户端，原因经 [`Event::Idle`] 报告
 fn probe_error(e: Error) -> io::Error {
-    io::Error::other(format!("探针：{e}"))
+    io::Error::other(trf!("Probe: {e}", "探针：{e}"))
 }
 
 /// 探针报的 DAP 包数；没报或读不出时按 1 个，一问一答。
@@ -197,7 +198,10 @@ impl Share {
         let (listener, addr) = match bound {
             Ok(b) => b,
             Err(e) => {
-                let msg = format!("监听 {listen} 失败：{e}");
+                let msg = trf!(
+                    "Listening on {listen} failed: {e}",
+                    "监听 {listen} 失败：{e}"
+                );
                 return Err((probe, Error::Io(msg)));
             }
         };
@@ -227,10 +231,21 @@ impl Share {
         };
         let thread = match spawned {
             Ok(t) => t,
-            Err(e) => return Err((probe, Error::Io(format!("创建共享线程失败：{e}")))),
+            Err(e) => {
+                return Err((
+                    probe,
+                    Error::Io(trf!(
+                        "Creating the share thread failed: {e}",
+                        "创建共享线程失败：{e}"
+                    )),
+                ))
+            }
         };
         if let Err(mpsc::SendError(probe)) = handoff.send(probe) {
-            return Err((probe, Error::Io("共享线程没有启动".into())));
+            return Err((
+                probe,
+                Error::Io(tr("The share thread did not start", "共享线程没有启动").into()),
+            ));
         }
         Ok(Self {
             protocol,
@@ -254,7 +269,7 @@ impl Share {
     /// line.
     pub fn attach_hint(&self) -> String {
         let host = if self.addr.ip().is_unspecified() {
-            "<本机 IP>".to_string()
+            tr("<this computer's IP>", "<本机 IP>").to_string()
         } else {
             self.addr.ip().to_string()
         };
@@ -410,6 +425,7 @@ mod tests {
     /// 建不了共享线程时不 panic，探针交还给调用方。
     #[test]
     fn spawn_failure_returns_the_probe() {
+        crate::lang::set_chinese(true);
         let link = Script::default();
         let probe = Probe::new(Box::new(link.clone()), Duration::from_secs(2));
         // 栈大到系统给不出来，建线程失败
@@ -442,6 +458,7 @@ mod tests {
     /// 探针不应答时断开这个客户端，并报告原因；不回假的 0xFF。
     #[test]
     fn probe_failure_ends_client_with_reason() {
+        crate::lang::set_chinese(true);
         let link = Script::default();
         let (share, events) = share(&link);
         let mut c = client(&share);

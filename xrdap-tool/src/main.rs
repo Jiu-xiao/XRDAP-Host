@@ -11,7 +11,7 @@ fn main() {
     if cli.cmd.is_none() {
         hide_own_console();
         if let Err(e) = xrdap_tool::gui::run() {
-            eprintln!("错误：{e}");
+            eprintln!("{}", xrdap::trf!("Error: {e}", "错误：{e}"));
             std::process::exit(1);
         }
         return;
@@ -30,7 +30,7 @@ fn main() {
     let mut out = std::io::stdout();
     let mut err = std::io::stderr();
     if let Err(e) = cli::run(cli, &mut out, &mut err, &stop) {
-        eprintln!("错误：{e}");
+        eprintln!("{}", xrdap::trf!("Error: {e}", "错误：{e}"));
         std::process::exit(1);
     }
 }

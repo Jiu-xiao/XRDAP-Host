@@ -1,6 +1,8 @@
 //! 探针的 Wi-Fi：当前状态，保存或清除热点参数（经探针的控制口或 DAP 命令 0x86，不用另开串口终端）。
 
 use eframe::egui::{self, RichText};
+use xrdap::lang::tr;
+use xrdap::trf;
 
 use super::super::app::App;
 use super::super::theme;
@@ -23,9 +25,15 @@ impl App {
             .id_salt("wifi")
             .show(ui, |ui| {
                 match &self.wifi {
-                    None => ui.label(RichText::new("读取中").weak()),
+                    None => ui.label(RichText::new(tr("Reading", "读取中")).weak()),
                     Some(Err(e)) => {
-                        theme::fail(ui, format!("读不到（固件不支持或读取失败）：{e}"));
+                        theme::fail(
+                            ui,
+                            trf!(
+                                "Not available (firmware without support or read failed): {e}",
+                                "读不到（固件不支持或读取失败）：{e}"
+                            ),
+                        );
                         ui.label("")
                     }
                     Some(Ok(st)) => {
@@ -34,14 +42,14 @@ impl App {
                     }
                 };
                 egui::Grid::new("wifi_form").num_columns(2).show(ui, |ui| {
-                    ui.label("热点");
+                    ui.label(tr("SSID", "热点"));
                     ui.add(egui::TextEdit::singleline(&mut self.wifi_ssid).desired_width(160.0));
                     ui.end_row();
-                    ui.label("密码");
+                    ui.label(tr("Password", "密码"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.wifi_password)
                             .password(true)
-                            .hint_text("开放网络不填")
+                            .hint_text(tr("Empty for an open network", "开放网络不填"))
                             .desired_width(160.0),
                     );
                     ui.end_row();
@@ -50,22 +58,26 @@ impl App {
                     ui.horizontal(|ui| {
                         let ssid_ok = !self.wifi_ssid.trim().is_empty();
                         if ui
-                            .add_enabled(ssid_ok, egui::Button::new("保存并重启"))
-                            .on_hover_text(
+                            .add_enabled(ssid_ok, egui::Button::new(tr("Save and restart", "保存并重启")))
+                            .on_hover_text(tr(
+                                "The probe restarts about 0.5 s after saving the credentials, and the current connection is lost.\nOver TCP (Wi-Fi) the password crosses the LAN in plaintext",
                                 "探针保存热点参数后约 0.5 秒重启，当前连接会断开。\n                                 经 TCP（Wi-Fi）连接时，密码以明文经过局域网",
-                            )
+                            ))
                             .clicked()
                         {
                             cmd = Some(self.wifi_set_cmd());
                         }
                         if ui
-                            .button("清除")
-                            .on_hover_text("清除热点参数，探针重启后不再连 Wi-Fi")
+                            .button(tr("Clear", "清除"))
+                            .on_hover_text(tr(
+                                "Clear the credentials; after restarting the probe no longer joins Wi-Fi",
+                                "清除热点参数，探针重启后不再连 Wi-Fi",
+                            ))
                             .clicked()
                         {
                             cmd = Some(Cmd::WifiApply(WifiChange::Clear));
                         }
-                        if ui.button("刷新").clicked() {
+                        if ui.button(tr("Refresh", "刷新")).clicked() {
                             cmd = Some(Cmd::WifiStatus);
                         }
                         if self.wifi_busy {

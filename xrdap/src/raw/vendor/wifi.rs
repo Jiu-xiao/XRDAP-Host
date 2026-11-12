@@ -9,7 +9,8 @@
 use std::net::Ipv4Addr;
 
 use super::{hex, STATUS_ARG, STATUS_OK, STATUS_RESOURCE};
-use crate::{Error, Result};
+use crate::lang::tr;
+use crate::{trf, Error, Result};
 
 /// 命令字节：Wi-Fi 配置。
 ///
@@ -58,12 +59,18 @@ pub const CONTROL_UNSUPPORTED: u8 = 0xF2;
 /// Meaning of a 0x86 status.
 pub fn status_text(status: u8) -> &'static str {
     match status {
-        STATUS_OK => "成功",
-        STATUS_ARG => "参数非法（热点名或密码长度不对）",
-        STATUS_RESOURCE => "探针保存设置失败",
-        CONTROL_BAD_REQUEST => "控制口请求格式不对",
-        CONTROL_UNSUPPORTED => "探针没有这个设置操作",
-        _ => "未定义的状态",
+        STATUS_OK => tr("success", "成功"),
+        STATUS_ARG => tr(
+            "invalid argument (wrong SSID or password length)",
+            "参数非法（热点名或密码长度不对）",
+        ),
+        STATUS_RESOURCE => tr("the probe failed to save the settings", "探针保存设置失败"),
+        CONTROL_BAD_REQUEST => tr("malformed control port request", "控制口请求格式不对"),
+        CONTROL_UNSUPPORTED => tr(
+            "the probe has no such setting operation",
+            "探针没有这个设置操作",
+        ),
+        _ => tr("undefined status", "未定义的状态"),
     }
 }
 
@@ -112,20 +119,28 @@ impl WifiStatus {
     /// One-line description, e.g. `热点 lab，已连接，IP 192.0.2.10，信号 -40 dBm`.
     pub fn describe(&self) -> String {
         if self.ssid.is_empty() {
-            return "没有保存热点参数".into();
+            return tr("No Wi-Fi credentials saved", "没有保存热点参数").into();
         }
         if !self.started {
-            return format!(
+            return trf!(
+                "SSID {}, Wi-Fi not started (credentials just saved take effect after a restart)",
                 "热点 {}，Wi-Fi 没有启动（刚保存的参数重启后生效）",
                 self.ssid
             );
         }
         if !self.connected {
-            return format!("热点 {}，还没有连上，正在重连", self.ssid);
+            return trf!(
+                "SSID {}, not connected yet, reconnecting",
+                "热点 {}，还没有连上，正在重连",
+                self.ssid
+            );
         }
-        format!(
+        trf!(
+            "SSID {}, connected, IP {}, signal {} dBm",
             "热点 {}，已连接，IP {}，信号 {} dBm",
-            self.ssid, self.ip, self.rssi
+            self.ssid,
+            self.ip,
+            self.rssi
         )
     }
 
@@ -134,12 +149,12 @@ impl WifiStatus {
     /// What last cleared the credentials (protocol section 3.7).
     pub fn last_clear_text(&self) -> &'static str {
         match self.last_clear {
-            0 => "没有清除过或不知道",
-            1 => "板上按键",
-            2 => "串口命令行 wifi clear",
-            3 => "0x86 清除命令",
-            4 => "NVS 修复",
-            _ => "未定义",
+            0 => tr("never cleared, or unknown", "没有清除过或不知道"),
+            1 => tr("board button", "板上按键"),
+            2 => tr("serial console wifi clear", "串口命令行 wifi clear"),
+            3 => tr("0x86 clear command", "0x86 清除命令"),
+            4 => tr("NVS repair", "NVS 修复"),
+            _ => tr("undefined", "未定义"),
         }
     }
 
@@ -148,13 +163,13 @@ impl WifiStatus {
     /// Reset reason of this boot (protocol section 3.7).
     pub fn reset_reason_text(&self) -> &'static str {
         match self.reset_reason {
-            1 => "上电",
-            2 => "软件重启",
-            3 => "看门狗",
-            4 => "程序崩溃",
-            5 => "欠压",
-            6 => "其他",
-            _ => "不知道",
+            1 => tr("power-on", "上电"),
+            2 => tr("software restart", "软件重启"),
+            3 => tr("watchdog", "看门狗"),
+            4 => tr("crash", "程序崩溃"),
+            5 => tr("brownout", "欠压"),
+            6 => tr("other", "其他"),
+            _ => tr("unknown", "不知道"),
         }
     }
 
@@ -164,11 +179,15 @@ impl WifiStatus {
     /// whether NVS was rebuilt.
     pub fn history(&self) -> String {
         let nvs = if self.nvs_rebuilt {
-            "；本次启动时 NVS 损坏，已擦除重建"
+            tr(
+                "; NVS was damaged at this boot and has been erased and rebuilt",
+                "；本次启动时 NVS 损坏，已擦除重建",
+            )
         } else {
             ""
         };
-        format!(
+        trf!(
+            "Credentials last cleared by: {}; reset reason of this boot: {}{nvs}",
             "最近一次清除热点参数：{}；本次启动原因：{}{nvs}",
             self.last_clear_text(),
             self.reset_reason_text()
@@ -189,10 +208,16 @@ pub fn status_request() -> Vec<u8> {
 pub fn set_request(ssid: &str, password: &str) -> Result<Vec<u8>> {
     let (s, p) = (ssid.as_bytes(), password.as_bytes());
     if s.is_empty() || s.len() > 32 {
-        return Err(Error::usage("热点名要 1 到 32 个字节"));
+        return Err(Error::usage(tr(
+            "The SSID must be 1 to 32 bytes",
+            "热点名要 1 到 32 个字节",
+        )));
     }
     if !p.is_empty() && !(8..=63).contains(&p.len()) {
-        return Err(Error::usage("密码要 8 到 63 个字节，开放网络不填"));
+        return Err(Error::usage(tr(
+            "The password must be 8 to 63 bytes, empty for an open network",
+            "密码要 8 到 63 个字节，开放网络不填",
+        )));
     }
     let mut req = vec![CMD_WIFI, OP_SET, s.len() as u8];
     req.extend_from_slice(s);
@@ -215,7 +240,8 @@ pub fn parse_status(resp: &[u8]) -> Result<WifiStatus> {
     parse_reply(resp)?;
     let n = resp.get(8).copied().unwrap_or(0) as usize;
     if resp.len() < 11 + n {
-        return Err(Error::protocol(format!(
+        return Err(Error::protocol(trf!(
+            "Wi-Fi status response is too short: {}",
             "Wi-Fi 状态响应太短：{}",
             hex(resp)
         )));
@@ -245,7 +271,10 @@ pub fn parse_reply(resp: &[u8]) -> Result<()> {
             text: status_text(*status),
         }),
         // 没有 0x86 的探针按 CMSIS-DAP 回 FF（协议文档 3.1 节）
-        _ => Err(Error::protocol("探针不支持 Wi-Fi 配置命令（0x86）")),
+        _ => Err(Error::protocol(tr(
+            "The probe does not support the Wi-Fi configuration command (0x86)",
+            "探针不支持 Wi-Fi 配置命令（0x86）",
+        ))),
     }
 }
 
@@ -256,6 +285,7 @@ mod tests {
     /// 协议文档 3.8 的 0x86 例子。
     #[test]
     fn protocol_examples() {
+        crate::lang::set_chinese(true);
         assert_eq!(status_request(), [0x86, 0x00]);
         assert_eq!(
             set_request("lab", "12345678").unwrap(),

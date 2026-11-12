@@ -4,6 +4,8 @@
 
 This page is the reference of the host tool `xrdap`: commands and options, how probes and variables are written, the sampling output and counters, Wi-Fi configuration, and the clients and OpenOCD versions used when the probe is shared with other debug tools. The GUI uses the same probe and variable syntax and the same CSV format.
 
+`xrdap` prints in Chinese or English, by the same rule as the `xrobot` and `libxr` tools: the first non-empty of the environment variables `XR_LANG`, `LANGUAGE`, `LC_ALL`, `LC_MESSAGES` and `LANG` decides, and a value starting with `zh` selects Chinese, any other value English. When none is set, Windows follows the system display language and other systems use English. `XR_LANG=en` selects English regardless of the other variables. This page shows the English output.
+
 ## Commands and options
 
 Each command accepts only the options it uses, written after the command; `xrdap <command> -h` shows all parameters of that command.
@@ -86,7 +88,7 @@ The variables in the ELF are global variables, static members of namespaces and 
 
 ### Divider and phase
 
-The probe has one tick per period. A `watch` variable written as `var@div` is sampled every `div` ticks, and `var@div:phase` also sets the phase: the variable is sampled on the ticks where `(tick + phase) % div == 0`. The divider is 1 to 65535 and the phase is smaller than the divider; `xrdap` staggers the phases of divided variables without a phase. The number of variables in one sampling is limited by the probe; `xrdap info` shows the limit (每次最多 N 个条目, at most N items).
+The probe has one tick per period. A `watch` variable written as `var@div` is sampled every `div` ticks, and `var@div:phase` also sets the phase: the variable is sampled on the ticks where `(tick + phase) % div == 0`. The divider is 1 to 65535 and the phase is smaller than the divider; `xrdap` staggers the phases of divided variables without a phase. The number of variables in one sampling is limited by the probe; `xrdap info` shows the limit (`At most N items per request`).
 
 ### Output
 
@@ -94,7 +96,7 @@ Without `--csv`, `watch` prints at most one line per 0.1 s: the probe time (seco
 
 ### CSV
 
-`watch --csv` and 录制 CSV… (record CSV) in the GUI write the same format. The first line is the header `host_time,t,sample_tick,<variables...>`, then one line per frame:
+`watch --csv` and Record CSV… in the GUI write the same format. The first line is the header `host_time,t,sample_tick,<variables...>`, then one line per frame:
 
 | Column | Contents |
 |---|---|
@@ -111,11 +113,11 @@ Whether sampling keeps its period is judged from run-time counters. `watch` prin
 
 | Counter | Command line | GUI | Meaning |
 |---|---|---|---|
-| Skipped ticks | 探针跳过节拍 | 跳拍 | Ticks the probe had no time to sample and skipped |
-| Dropped frames | 缓冲丢帧 | 探针丢帧 | Frames overwritten or dropped when the buffer was full |
-| Buffer fill | | 缓冲 x/y 字节 | Bytes in the probe's buffer not yet read |
-| Frame number gaps | 帧序号缺口 | 缺帧 | Gaps the host finds in the tick numbers: ticks with a due variable whose frame was not received; skipped ticks and dropped frames both cause them |
-| Failed values | 读取失败的值 | 失败值 | Values the probe failed to read from the target, `ERR` in the CSV |
+| Skipped ticks | `skipped ticks` | `skipped ticks` | Ticks the probe had no time to sample and skipped |
+| Dropped frames | `dropped frames` | `dropped frames` | Frames overwritten or dropped when the buffer was full |
+| Buffer fill | | `buffer x/y bytes` | Bytes in the probe's buffer not yet read |
+| Frame number gaps | `frame number gaps` | `frame gaps` | Gaps the host finds in the tick numbers: ticks with a due variable whose frame was not received; skipped ticks and dropped frames both cause them |
+| Failed values | `failed values` | `failed values` | Values the probe failed to read from the target, `ERR` in the CSV |
 
 When skipped ticks grow, SWD cannot read one tick's variables in time, and `xrdap` advises a longer period, a divider on slow variables or fewer variables. When dropped frames grow or the buffer is more than three quarters full, the host reads too slowly or the link lacks bandwidth, and `xrdap` advises dividers or fewer variables. The command line gives this advice during sampling and at the end; the GUI shows it below the statistics line. Writing variables and reading the core state while sampling share SWD with the sampling and add skipped ticks as well.
 
@@ -134,7 +136,7 @@ xrdap wifi set -p COM3 SSID --password-stdin < password.txt
 
 Once configured, `xrdap list` shows the probe's LAN address `xrdap-xxxxxx.local`, and `-p xrdap-xxxxxx.local` connects over Wi-Fi.
 
-In the GUI, after connecting, Wi-Fi at the bottom of the connection area shows the current state; with 热点 (SSID) and 密码 (password) filled in, 保存并重启 (save and restart) saves them; 清除 (clear) clears the credentials and 刷新 (refresh) reads the state again. After 保存并重启 the GUI empties the password field.
+In the GUI, after connecting, Wi-Fi at the bottom of the connection area shows the current state; with SSID and Password filled in, Save and restart saves them; Clear clears the credentials and Refresh reads the state again. After Save and restart the GUI empties the password field.
 
 ## Use with other debug tools
 
@@ -158,11 +160,11 @@ usbip attach -r 127.0.0.1 -b 1-1
 openocd -f interface/cmsis-dap.cfg -f target/stm32f4x.cfg
 ```
 
-One client is served at a time. After the debug tool exits the device stays attached until `usbip detach`; stopping the share (Ctrl-C, or unchecking 共享为 USB DAP in the GUI) unplugs it. When a client disconnects while the probe is sampling, `xrdap` stops sampling. When the probe fails (timeout, disconnect), `xrdap` disconnects that client, shows the reason and waits for the next client.
+One client is served at a time. After the debug tool exits the device stays attached until `usbip detach`; stopping the share (Ctrl-C, or unchecking Share as USB DAP in the GUI) unplugs it. When a client disconnects while the probe is sampling, `xrdap` stops sampling. When the probe fails (timeout, disconnect), `xrdap` disconnects that client, shows the reason and waits for the next client.
 
 To serve another computer on the LAN, add `--listen 0.0.0.0:3240`; that computer runs `usbip attach -r <this computer's IP> -b 1-1`. With a port other than 3240 the attach command printed by `xrdap` carries `--tcp-port`.
 
-共享为 USB DAP (share as USB DAP) in the GUI shares the connected probe on 127.0.0.1:3240. While sharing, the client uses the probe; unchecking it returns the probe to the GUI for reading, writing and sampling.
+Share as USB DAP in the GUI shares the connected probe on 127.0.0.1:3240. While sharing, the client uses the probe; unchecking it returns the probe to the GUI for reading, writing and sampling.
 
 ### OpenOCD's TCP backend
 

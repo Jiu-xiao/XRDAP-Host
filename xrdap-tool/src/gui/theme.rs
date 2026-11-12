@@ -3,6 +3,8 @@
 //! pass / fail / blocked 只和文字结论一起出现。另有几个规范里的小部件：主按钮（左上、右下切角）、
 //! 卡片（右上切角）、PathLabel、Tag 和带文字的状态。
 
+use xrdap::lang::tr;
+
 use eframe::egui::{
     self, epaint, Color32, CornerRadius, FontFamily, FontId, Margin, Response, RichText, Sense,
     Shadow, Stroke, TextStyle, Theme, Vec2, WidgetText,
@@ -227,9 +229,9 @@ impl Choice {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Choice::System => "跟随系统",
-            Choice::Light => "亮",
-            Choice::Dark => "暗",
+            Choice::System => tr("System", "跟随系统"),
+            Choice::Light => tr("Light", "亮"),
+            Choice::Dark => tr("Dark", "暗"),
         }
     }
 
@@ -402,13 +404,17 @@ pub(super) fn floating_header(
             let p = Palette::current(ui);
             let icon =
                 |t: &str| egui::Button::new(RichText::new(t).color(p.ink_muted)).frame(false);
-            if ui.add(icon("×")).on_hover_text("关闭").clicked() {
+            if ui
+                .add(icon("×"))
+                .on_hover_text(tr("Close", "关闭"))
+                .clicked()
+            {
                 *open = false;
             }
             let (t, tip) = if *collapsed {
-                ("+", "展开")
+                ("+", tr("Expand", "展开"))
             } else {
-                ("−", "收起")
+                ("−", tr("Collapse", "收起"))
             };
             if ui.add(icon(t)).on_hover_text(tip).clicked() {
                 *collapsed = !*collapsed;

@@ -8,8 +8,10 @@ use xrdap::addr::Spec;
 use xrdap::cortex::{self, AfterReset, CoreStatus};
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
+use xrdap::lang::tr;
 use xrdap::open::{self, OpenOptions};
 use xrdap::share::{Event as ShareEvent, Protocol, Share};
+use xrdap::trf;
 use xrdap::watch::{HostFrame, Sampler, Stats, Var};
 use xrdap::WifiStatus;
 use xrdap::{item_status_text, Item, ItemResult};
@@ -126,7 +128,9 @@ fn failed(op: Op, msg: impl Into<String>) -> Event {
     }
 }
 
-const NOT_CONNECTED: &str = "还没有连接";
+fn not_connected() -> &'static str {
+    tr("Not connected yet", "还没有连接")
+}
 const TIMEOUT: Duration = Duration::from_millis(2000);
 
 fn open(conn: &Conn) -> Result<Probe, String> {
@@ -150,8 +154,8 @@ fn items_of(targets: &[Target]) -> Vec<Item> {
 fn write_target(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
     let (ok, text) = match target.write(probe, bytes) {
         Ok(()) => match target.read(probe) {
-            Ok(v) => (true, format!("读回 {}", target.ty.format(&v))),
-            Err(e) => (true, format!("读回失败：{e}")),
+            Ok(v) => (true, trf!("read back {}", "读回 {}", target.ty.format(&v))),
+            Err(e) => (true, trf!("read back failed: {e}", "读回失败：{e}")),
         },
         Err(xrdap::Error::Item { status, .. }) => (false, item_status_text(status, &target.chain)),
         Err(e) => (false, e.to_string()),
@@ -166,7 +170,7 @@ fn write_target(probe: &mut Probe, target: &Target, bytes: &[u8]) -> Event {
 fn read_targets(probe: &mut Probe, tag: u64, targets: &[Target]) -> Event {
     match probe.read(&items_of(targets)) {
         Ok(r) => Event::ReadDone(tag, r),
-        Err(e) => failed(Op::Read, format!("读取失败：{e}")),
+        Err(e) => failed(Op::Read, trf!("Read failed: {e}", "读取失败：{e}")),
     }
 }
 
@@ -198,7 +202,10 @@ fn wifi_apply(probe: &mut Probe, change: &WifiChange, send: &impl Fn(Event)) -> 
             true
         }
         Err(e) => {
-            send(failed(Op::Wifi, format!("配置 Wi-Fi 失败：{e}")));
+            send(failed(
+                Op::Wifi,
+                trf!("Configuring Wi-Fi failed: {e}", "配置 Wi-Fi 失败：{e}"),
+            ));
             false
         }
     }
@@ -264,7 +271,13 @@ pub fn run(
                     let mut p = s.stop();
                     send(Event::ShareStopped);
                     if let Err(e) = p.connect(clock) {
-                        send(failed(Op::Share, format!("重新连接目标失败：{e}")));
+                        send(failed(
+                            Op::Share,
+                            trf!(
+                                "Reconnecting the target failed: {e}",
+                                "重新连接目标失败：{e}"
+                            ),
+                        ));
                     }
                     send(poll_core(&mut p));
                     probe = Some(p);
@@ -281,7 +294,10 @@ pub fn run(
                 }
                 other => {
                     share = Some(s);
-                    let msg = "正在共享为 USB DAP，先停止共享";
+                    let msg = tr(
+                        "Sharing as USB DAP; stop sharing first",
+                        "正在共享为 USB DAP，先停止共享",
+                    );
                     send(match other {
                         Cmd::Core(c) => Event::Core {
                             cmd: Some(c),
@@ -303,7 +319,12 @@ pub fn run(
                         Ok(s) => {
                             send(Event::Sharing {
                                 attach: s.attach_hint(),
-                                device: format!("{}（{}）", s.device().product, s.device().serial),
+                                device: trf!(
+                                    "{} ({})",
+                                    "{}（{}）",
+                                    s.device().product,
+                                    s.device().serial
+                                ),
                             });
                             share = Some(s);
                         }
@@ -313,13 +334,15 @@ pub fn run(
                         }
                     }
                 }
-                None => send(failed(Op::Share, NOT_CONNECTED)),
+                None => send(failed(Op::Share, not_connected())),
             },
             Cmd::Connect(conn, c) => {
                 probe = None;
                 clock = c;
                 match open(&conn).and_then(|mut p| {
-                    let t = p.connect(c).map_err(|e| format!("连接目标失败：{e}"))?;
+                    let t = p.connect(c).map_err(|e| {
+                        trf!("Connecting the target failed: {e}", "连接目标失败：{e}")
+                    })?;
                     Ok((p, t))
                 }) {
                     Ok((mut p, t)) => {
@@ -329,7 +352,10 @@ pub fn run(
                         });
                         match cortex::info(&mut p) {
                             Ok(i) => send(Event::CoreInfo(i.describe())),
-                            Err(e) => send(Event::CoreInfo(format!("读不到 CPUID（{e}）"))),
+                            Err(e) => send(Event::CoreInfo(trf!(
+                                "Cannot read CPUID ({e})",
+                                "读不到 CPUID（{e}）"
+                            ))),
                         }
                         send(poll_core(&mut p));
                         send(wifi_status(&mut p));
@@ -344,14 +370,14 @@ pub fn run(
             }
             Cmd::Read(tag, targets) => match probe.as_mut() {
                 Some(p) => send(read_targets(p, tag, &targets)),
-                None => send(failed(Op::Read, NOT_CONNECTED)),
+                None => send(failed(Op::Read, not_connected())),
             },
             Cmd::Write(target, bytes) => match probe.as_mut() {
                 Some(p) => send(write_target(p, &target, &bytes)),
                 None => send(Event::WriteDone {
                     name: target.name,
                     ok: false,
-                    text: NOT_CONNECTED.into(),
+                    text: not_connected().into(),
                 }),
             },
             Cmd::Stop => send(Event::Stopped),
@@ -364,12 +390,12 @@ pub fn run(
                 Some(p) => send(core_cmd(p, c)),
                 None => send(Event::Core {
                     cmd: Some(c),
-                    status: Err(NOT_CONNECTED.into()),
+                    status: Err(not_connected().into()),
                 }),
             },
             Cmd::WifiStatus => match probe.as_mut() {
                 Some(p) => send(wifi_status(p)),
-                None => send(Event::WifiStatus(Err(NOT_CONNECTED.into()))),
+                None => send(Event::WifiStatus(Err(not_connected().into()))),
             },
             Cmd::WifiApply(change) => match probe.as_mut() {
                 Some(p) => {
@@ -379,7 +405,7 @@ pub fn run(
                         send(Event::Disconnected);
                     }
                 }
-                None => send(failed(Op::Wifi, NOT_CONNECTED)),
+                None => send(failed(Op::Wifi, not_connected())),
             },
             Cmd::Start {
                 targets,
@@ -388,7 +414,7 @@ pub fn run(
                 stop_on_full,
             } => {
                 let Some(p) = probe.as_mut() else {
-                    send(failed(Op::Sample, NOT_CONNECTED));
+                    send(failed(Op::Sample, not_connected()));
                     continue;
                 };
                 let vars = targets
@@ -404,7 +430,10 @@ pub fn run(
                 let mut sampler = match Sampler::start(p, vars, period_us, stop_on_full) {
                     Ok(s) => s,
                     Err(e) => {
-                        send(failed(Op::Sample, format!("开始采样失败：{e}")));
+                        send(failed(
+                            Op::Sample,
+                            trf!("Starting sampling failed: {e}", "开始采样失败：{e}"),
+                        ));
                         continue;
                     }
                 };
@@ -442,12 +471,18 @@ pub fn run(
                             }
                             if remaining == 0 {
                                 if !sampler.sampling_on_probe() {
-                                    break Some("探针上的采样已经停止（会话结束）".into());
+                                    break Some(
+                                        tr(
+                                            "Sampling on the probe has stopped (session ended)",
+                                            "探针上的采样已经停止（会话结束）",
+                                        )
+                                        .into(),
+                                    );
                                 }
                                 std::thread::sleep(interval);
                             }
                         }
-                        Err(e) => break Some(format!("采样中断：{e}")),
+                        Err(e) => break Some(trf!("Sampling interrupted: {e}", "采样中断：{e}")),
                     }
                 };
                 match sampler.stop() {
@@ -496,6 +531,7 @@ mod tests {
 
     #[test]
     fn share_blocks_other_commands_and_gives_probe_back() {
+        xrdap::lang::set_chinese(true);
         let (cmd_tx, ev_rx, worker) = start();
         cmd_tx.send(Cmd::Share(true)).unwrap();
         match next(&ev_rx, |e| {
@@ -571,6 +607,7 @@ mod tests {
     /// 协议文档 3.1：另一条链路正在采样时，连接失败并显示探针正在采样。
     #[test]
     fn connect_reports_sampling_on_another_link() {
+        xrdap::lang::set_chinese(true);
         let sim = xrdap_sim::Sim::new();
         let mut other = Probe::new(Box::new(sim.link()), TIMEOUT);
         other.connect(4_000_000).unwrap();

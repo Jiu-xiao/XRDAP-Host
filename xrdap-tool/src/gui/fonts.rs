@@ -7,6 +7,8 @@ use std::sync::Arc;
 use eframe::egui::{self, FontFamily};
 
 use super::theme::{BOLD, MONO_BOLD};
+use xrdap::lang::tr;
+use xrdap::trf;
 
 const SANS: &[&str] = &[
     "C:/Windows/Fonts/msyh.ttc",
@@ -93,9 +95,13 @@ pub fn install(ctx: &egui::Context) -> Installed {
     }
     ctx.set_fonts(fonts);
     let summary = if used.is_empty() {
-        "没有找到系统字体，中文会显示成方框".into()
+        tr(
+            "No system font found; Chinese text shows as boxes",
+            "没有找到系统字体，中文会显示成方框",
+        )
+        .into()
     } else {
-        format!("字体：{}", used.join("，"))
+        trf!("Fonts: {}", "字体：{}", used.join(tr(", ", "，")))
     };
     Installed { summary, families }
 }

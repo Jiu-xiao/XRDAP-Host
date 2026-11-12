@@ -5,6 +5,7 @@
 
 use std::fmt;
 
+use crate::lang::tr;
 use crate::types::SymbolTable;
 use crate::{Error, Result};
 
@@ -46,10 +47,16 @@ fn tokenize(s: &str) -> Result<Vec<Tok>> {
             // 带引号的名字：模板、匿名命名空间、lambda 里的变量，名字里有 <>、空格、括号
             let start = i + 1;
             let Some(len) = c[start..].iter().position(|&x| x == '\'') else {
-                return Err(Error::usage(format!("表达式 {s} 里的引号没有配对")));
+                return Err(Error::usage(crate::trf!(
+                    "Unmatched quote in expression {s}",
+                    "表达式 {s} 里的引号没有配对"
+                )));
             };
             if len == 0 {
-                return Err(Error::usage(format!("表达式 {s} 里有空的名字 ''")));
+                return Err(Error::usage(crate::trf!(
+                    "Empty name '' in expression {s}",
+                    "表达式 {s} 里有空的名字 ''"
+                )));
             }
             out.push(Tok::Ident(c[start..start + len].iter().collect()));
             i = start + len + 1;
@@ -61,7 +68,9 @@ fn tokenize(s: &str) -> Result<Vec<Tok>> {
             let text: String = c[start..i].iter().collect();
             let v = crate::types::parse_int(&text)
                 .filter(|v| *v >= 0 && *v <= u64::MAX as i128)
-                .ok_or_else(|| Error::usage(format!("{text} 不是整数")))?;
+                .ok_or_else(|| {
+                    Error::usage(crate::trf!("{text} is not an integer", "{text} 不是整数"))
+                })?;
             out.push(Tok::Num(v as u64));
         } else {
             let tok = match ch {
@@ -76,7 +85,12 @@ fn tokenize(s: &str) -> Result<Vec<Tok>> {
                     i += 1;
                     Tok::Arrow
                 }
-                _ => return Err(Error::usage(format!("表达式 {s} 里有不认识的字符 '{ch}'"))),
+                _ => {
+                    return Err(Error::usage(crate::trf!(
+                        "Unknown character '{ch}' in expression {s}",
+                        "表达式 {s} 里有不认识的字符 '{ch}'"
+                    )))
+                }
             };
             i += 1;
             out.push(tok);
@@ -149,7 +163,11 @@ impl Parser<'_> {
     }
 
     fn err(&self, what: &str) -> Error {
-        Error::usage(format!("表达式 {} 写得不对：{what}", self.text))
+        Error::usage(crate::trf!(
+            "Bad expression {}: {what}",
+            "表达式 {} 写得不对：{what}",
+            self.text
+        ))
     }
 
     fn expect(&mut self, tok: Tok, what: &str) -> Result<()> {
@@ -194,7 +212,7 @@ impl Parser<'_> {
             self.pos += 1;
         }
         if words.is_empty() {
-            return Err(self.err("这里要写类型名"));
+            return Err(self.err(tr("a type name is expected here", "这里要写类型名")));
         }
         let mut stars = 0;
         while self.peek() == Some(&Tok::Star) {
@@ -217,7 +235,7 @@ impl Parser<'_> {
                 self.pos += 1;
                 if self.looks_like_type() {
                     let t = self.type_spec()?;
-                    self.expect(Tok::RP, "类型转换少了 ')'")?;
+                    self.expect(Tok::RP, tr("the type cast lacks ')'", "类型转换少了 ')'"))?;
                     Ok(Expr::Cast(t, Box::new(self.expr()?)))
                 } else {
                     self.pos -= 1;
@@ -241,10 +259,13 @@ impl Parser<'_> {
             }
             Some(Tok::LP) => {
                 let e = self.expr()?;
-                self.expect(Tok::RP, "少了 ')'")?;
+                self.expect(Tok::RP, tr("missing ')'", "少了 ')'"))?;
                 Ok(Expr::Paren(Box::new(e)))
             }
-            _ => Err(self.err("这里要写变量名、地址或 '('")),
+            _ => Err(self.err(tr(
+                "a variable name, an address or '(' is expected here",
+                "这里要写变量名、地址或 '('",
+            ))),
         }
     }
 
@@ -254,19 +275,34 @@ impl Parser<'_> {
             match self.peek() {
                 Some(Tok::Dot) => {
                     self.pos += 1;
-                    e = Expr::Member(Box::new(e), self.ident("'.' 后面要写成员名")?);
+                    e = Expr::Member(
+                        Box::new(e),
+                        self.ident(tr(
+                            "a member name is expected after '.'",
+                            "'.' 后面要写成员名",
+                        ))?,
+                    );
                 }
                 Some(Tok::Arrow) => {
                     self.pos += 1;
-                    e = Expr::Arrow(Box::new(e), self.ident("'->' 后面要写成员名")?);
+                    e = Expr::Arrow(
+                        Box::new(e),
+                        self.ident(tr(
+                            "a member name is expected after '->'",
+                            "'->' 后面要写成员名",
+                        ))?,
+                    );
                 }
                 Some(Tok::LBr) => {
                     self.pos += 1;
                     let i = match self.next() {
                         Some(Tok::Num(i)) => i,
-                        _ => return Err(self.err("下标要写非负整数")),
+                        _ => {
+                            return Err(self
+                                .err(tr("an index is a non-negative integer", "下标要写非负整数")))
+                        }
                     };
-                    self.expect(Tok::RBr, "少了 ']'")?;
+                    self.expect(Tok::RBr, tr("missing ']'", "少了 ']'"))?;
                     e = Expr::Index(Box::new(e), i);
                 }
                 _ => return Ok(e),
@@ -278,7 +314,7 @@ impl Parser<'_> {
 pub(super) fn parse(text: &str, syms: &SymbolTable) -> Result<Expr> {
     let toks = tokenize(text)?;
     if toks.is_empty() {
-        return Err(Error::usage("表达式是空的"));
+        return Err(Error::usage(tr("The expression is empty", "表达式是空的")));
     }
     let mut p = Parser {
         toks,
@@ -288,7 +324,7 @@ pub(super) fn parse(text: &str, syms: &SymbolTable) -> Result<Expr> {
     };
     let e = p.expr()?;
     if p.pos != p.toks.len() {
-        return Err(p.err("后面多了内容"));
+        return Err(p.err(tr("unexpected text at the end", "后面多了内容")));
     }
     Ok(e)
 }

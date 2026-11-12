@@ -2,6 +2,7 @@
 //!
 //! Evaluate the syntax tree against the type table to get a [`Target`].
 
+use crate::lang::tr;
 use crate::raw::vendor::MAX_DEPTH;
 use crate::types::{Member, SymbolTable, Type, TypeId};
 use crate::{Error, Result};
@@ -79,8 +80,9 @@ impl<'a> Resolver<'a> {
         let (loc, ty) = match v {
             Val::L { loc, ty } => (loc, ty),
             Val::C { .. } => {
-                return Err(Error::usage(format!(
-                    "{text} 是一个常数，不是变量。直接读地址要写成 {text}:u32 这样的形式"
+                return Err(Error::usage(crate::trf!(
+"{text} is a constant, not a variable. To read an address directly, write it like {text}:u32",
+"{text} 是一个常数，不是变量。直接读地址要写成 {text}:u32 这样的形式"
                 )))
             }
         };
@@ -105,19 +107,26 @@ impl<'a> Resolver<'a> {
                         .filter_map(|m| m.name.clone())
                         .take(8)
                         .collect();
-                    format!("，可以写 {name}.成员（成员有 {}）", names.join("、"))
+                    crate::trf!(
+                        "; write {name}.MEMBER (members: {})",
+                        "，可以写 {name}.成员（成员有 {}）",
+                        names.join(tr(", ", "、"))
+                    )
                 }
-                Type::Array { .. } => format!("，可以写 {name}[下标]"),
+                Type::Array { .. } => crate::trf!("; write {name}[INDEX]", "，可以写 {name}[下标]"),
                 _ => String::new(),
             };
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::trf!(
+                "{name} has type {tname}, not a value that can be read or written directly{hint}",
                 "{name} 的类型是 {tname}，不是能直接读写的数值{hint}"
             )));
         };
         if !matches!(vt.size, 1 | 2 | 4 | 8) {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::trf!(
+                "{name} has type {} of {} bytes; the probe accesses only 1, 2, 4 or 8 bytes",
                 "{name} 的类型 {} 有 {} 字节，探针只能按 1/2/4/8 字节访问",
-                vt.name, vt.size
+                vt.name,
+                vt.size
             )));
         }
         let (base, derefs, final_off) = self.encode_loc(name, loc)?;
@@ -134,7 +143,8 @@ impl<'a> Resolver<'a> {
 
     fn expand(&mut self, name: &str, loc: &Loc, ty: TypeId, out: &mut Vec<Target>) -> Result<()> {
         if out.len() > self.expand_limit {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::trf!(
+                "Expanding gives more than {} variables; give specific members",
                 "展开后超过 {} 个变量，请写具体的成员",
                 self.expand_limit
             )));
@@ -150,9 +160,10 @@ impl<'a> Resolver<'a> {
                     let mut l = loc.clone();
                     l.fin += m.offset as i64;
                     match (&m.name, m.bit_size) {
-                        (Some(n), Some(bits)) => {
-                            self.notes.push(format!("跳过位域 {name}.{n}（{bits} 位）"))
-                        }
+                        (Some(n), Some(bits)) => self.notes.push(crate::trf!(
+                            "Skipped bit field {name}.{n} ({bits} bits)",
+                            "跳过位域 {name}.{n}（{bits} 位）"
+                        )),
                         (None, _) => self.expand(name, &l, m.ty, out)?,
                         (Some(n), None) => self.expand(&format!("{name}.{n}"), &l, m.ty, out)?,
                     }
@@ -162,7 +173,10 @@ impl<'a> Resolver<'a> {
             Type::Array { .. } => {
                 let (elem, count, stride) = self.array_step(full)?;
                 let Some(count) = count else {
-                    return Err(Error::usage(format!("{name} 是长度未知的数组，请写下标")));
+                    return Err(Error::usage(crate::trf!(
+                        "{name} is an array of unknown length; give an index",
+                        "{name} 是长度未知的数组，请写下标"
+                    )));
                 };
                 for i in 0..count {
                     let mut l = loc.clone();
@@ -181,18 +195,25 @@ impl<'a> Resolver<'a> {
     /// 把求出的位置变成条目字段：第一级偏移并进 base，其余偏移必须放得进 i16。
     fn encode_loc(&self, name: &str, loc: &Loc) -> Result<(u32, Vec<i16>, i16)> {
         if loc.derefs.len() > MAX_DEPTH {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::trf!(
+                "{name} goes through {} levels of pointers; the probe supports at most {MAX_DEPTH}",
                 "{name} 要经过 {} 级指针，探针最多支持 {MAX_DEPTH} 级",
                 loc.derefs.len()
             )));
         }
         let to_u32 = |v: i128| -> Result<u32> {
-            u32::try_from(v).map_err(|_| Error::usage(format!("{name} 的地址 0x{v:X} 超出 32 位")))
+            u32::try_from(v).map_err(|_| {
+                Error::usage(crate::trf!(
+                    "The address 0x{v:X} of {name} exceeds 32 bits",
+                    "{name} 的地址 0x{v:X} 超出 32 位"
+                ))
+            })
         };
         let to_i16 = |v: i64| -> Result<i16> {
             i16::try_from(v).map_err(|_| {
-                Error::usage(format!(
-                    "{name} 在指针之后的偏移 {v} 超出 -32768..32767，探针的条目放不下"
+                Error::usage(crate::trf!(
+"The offset {v} of {name} after a pointer is outside -32768..32767 and does not fit in a probe item",
+"{name} 在指针之后的偏移 {v} 超出 -32768..32767，探针的条目放不下"
                 ))
             })
         };
@@ -210,7 +231,8 @@ impl<'a> Resolver<'a> {
 
     fn type_of(&mut self, spec: &TypeSpec) -> Result<TypeId> {
         let mut id = self.syms.lookup_type(&spec.words).ok_or_else(|| {
-            Error::usage(format!(
+            Error::usage(crate::trf!(
+                "Unknown type {} (use u8/u16/u32/u64/i8../f32/f64 or a type name from the ELF)",
                 "不认识类型 {}（可以用 u8/u16/u32/u64/i8../f32/f64，或 ELF 里的类型名）",
                 spec.words
             ))
@@ -223,9 +245,12 @@ impl<'a> Resolver<'a> {
 
     /// 内置类型（u8 到 u64、i8 到 i64、f32、f64）
     fn builtin(&self, name: &str) -> Result<TypeId> {
-        self.syms
-            .builtin(name)
-            .ok_or_else(|| Error::usage(format!("没有内置类型 {name}")))
+        self.syms.builtin(name).ok_or_else(|| {
+            Error::usage(crate::trf!(
+                "No built-in type {name}",
+                "没有内置类型 {name}"
+            ))
+        })
     }
 
     fn eval(&mut self, e: &Expr) -> Result<Val> {
@@ -285,7 +310,8 @@ impl<'a> Resolver<'a> {
         }
         if let Some(&(addr, size)) = self.syms.elf_symbols.get(name) {
             if matches!(size, 1 | 2 | 4 | 8) {
-                self.notes.push(format!(
+                self.notes.push(crate::trf!(
+                    "{name} has no DWARF type information; treated as u{} by its symbol size",
                     "{name} 没有 DWARF 类型信息，按符号大小当作 u{} 处理",
                     size * 8
                 ));
@@ -300,13 +326,15 @@ impl<'a> Resolver<'a> {
                     ty,
                 });
             }
-            return Err(Error::usage(format!(
-                "{name} 没有 DWARF 类型信息，符号大小 {size} 字节，请写成 0x{addr:08X}:u32 这样的形式"
+            return Err(Error::usage(crate::trf!(
+"{name} has no DWARF type information and its symbol is {size} bytes; write it like 0x{addr:08X}:u32",
+"{name} 没有 DWARF 类型信息，符号大小 {size} 字节，请写成 0x{addr:08X}:u32 这样的形式"
             )));
         }
         if self.syms.vars.is_empty() && self.syms.elf_symbols.is_empty() {
-            return Err(Error::usage(format!(
-                "找不到变量 {name}：没有加载 ELF 符号表；也可以直接写地址，例如 0x20000000:u32"
+            return Err(Error::usage(crate::trf!(
+"Variable {name} not found: no ELF symbol table is loaded; an address can be given directly, e.g. 0x20000000:u32",
+"找不到变量 {name}：没有加载 ELF 符号表；也可以直接写地址，例如 0x20000000:u32"
             )));
         }
         let mut similar: Vec<&String> = self
@@ -320,16 +348,20 @@ impl<'a> Resolver<'a> {
         let hint = if similar.is_empty() {
             String::new()
         } else {
-            format!(
+            crate::trf!(
+                "; similar names: {}",
                 "，相近的有 {}",
                 similar
                     .iter()
                     .map(|s| s.as_str())
                     .collect::<Vec<_>>()
-                    .join("、")
+                    .join(tr(", ", "、"))
             )
         };
-        Err(Error::usage(format!("ELF 里找不到变量 {name}{hint}")))
+        Err(Error::usage(crate::trf!(
+            "Variable {name} not found in the ELF{hint}",
+            "ELF 里找不到变量 {name}{hint}"
+        )))
     }
 
     fn deref(&mut self, v: Val, text: &str) -> Result<Val> {
@@ -344,7 +376,8 @@ impl<'a> Resolver<'a> {
                 return self.index(v, 0, text);
             }
             _ => {
-                return Err(Error::usage(format!(
+                return Err(Error::usage(crate::trf!(
+                    "{text} has type {}, not a pointer, and cannot be dereferenced",
                     "{text} 的类型是 {}，不是指针，不能解引用",
                     self.syms.name_of(ty)
                 )))
@@ -353,13 +386,17 @@ impl<'a> Resolver<'a> {
         let target = match target {
             Some(t) if !matches!(self.syms.get(self.syms.strip(t)), Type::Void) => t,
             _ => {
-                return Err(Error::usage(format!(
+                return Err(Error::usage(crate::trf!(
+                    "{text} is a void pointer; cast it first, e.g. *(u32*){text}",
                     "{text} 是 void 指针，要先转换类型，例如 *(u32*){text}"
                 )))
             }
         };
         if matches!(self.syms.get(self.syms.strip(target)), Type::Function) {
-            return Err(Error::usage(format!("{text} 是函数指针，不能解引用")));
+            return Err(Error::usage(crate::trf!(
+                "{text} is a function pointer and cannot be dereferenced",
+                "{text} 是函数指针，不能解引用"
+            )));
         }
         match v {
             Val::C { value, .. } => Ok(Val::L {
@@ -373,7 +410,8 @@ impl<'a> Resolver<'a> {
             }),
             Val::L { mut loc, .. } => {
                 if size != 4 {
-                    return Err(Error::usage(format!(
+                    return Err(Error::usage(crate::trf!(
+                        "{text} is a {size}-byte pointer; the probe supports only 32-bit pointers",
                         "{text} 是 {size} 字节的指针，探针只支持 32 位指针"
                     )));
                 }
@@ -405,7 +443,10 @@ impl<'a> Resolver<'a> {
 
     fn member(&mut self, v: Val, name: &str, text: &str) -> Result<Val> {
         let Val::L { mut loc, ty } = v else {
-            return Err(Error::usage(format!("常数没有成员 {name}")));
+            return Err(Error::usage(crate::trf!(
+                "A constant has no member {name}",
+                "常数没有成员 {name}"
+            )));
         };
         let full = self.syms.complete(ty);
         let shown = text.trim_end_matches("->");
@@ -413,12 +454,13 @@ impl<'a> Resolver<'a> {
         match self.syms.get(full) {
             Type::Struct {
                 declaration: true, ..
-            } => Err(Error::usage(format!(
+            } => Err(Error::usage(crate::trf!(
+                "{} {shown}, {}, is declaration only; the ELF has no definition of it",
                 "{shown} {} {} 只有声明，ELF 里没有它的定义",
                 if sep.is_empty() {
-                    "指向的类型"
+                    tr("The type pointed to by", "指向的类型")
                 } else {
-                    "的类型"
+                    tr("The type of", "的类型")
                 },
                 self.syms.name_of(ty)
             ))),
@@ -426,27 +468,33 @@ impl<'a> Resolver<'a> {
                 let Some((off, m)) = self.find_member(members, name) else {
                     let names: Vec<String> =
                         members.iter().filter_map(|m| m.name.clone()).collect();
-                    return Err(Error::usage(format!(
+                    return Err(Error::usage(crate::trf!(
+                        "{} has no member {name} (members: {})",
                         "{} 没有成员 {name}（成员有 {}）",
                         self.syms.name_of(ty),
-                        names.join("、")
+                        names.join(tr(", ", "、"))
                     )));
                 };
                 if let Some(bits) = m.bit_size {
                     let hint = if loc.derefs.is_empty() {
                         let addr = loc.base as i64 + loc.fin + off as i64;
-                        format!("，它所在的字节可以写成 0x{addr:08X}:u8")
+                        crate::trf!(
+                            "; the byte holding it can be written as 0x{addr:08X}:u8",
+                            "，它所在的字节可以写成 0x{addr:08X}:u8"
+                        )
                     } else {
                         String::new()
                     };
-                    return Err(Error::usage(format!(
-                        "{text}{sep}{name} 是 {bits} 位的位域。探针只能按 1/2/4/8 字节访问，不支持位域{hint}"
+                    return Err(Error::usage(crate::trf!(
+"{text}{sep}{name} is a {bits}-bit bit field. The probe accesses only 1, 2, 4 or 8 bytes and does not support bit fields{hint}",
+"{text}{sep}{name} 是 {bits} 位的位域。探针只能按 1/2/4/8 字节访问，不支持位域{hint}"
                     )));
                 }
                 loc.fin += off as i64;
                 Ok(Val::L { loc, ty: m.ty })
             }
-            _ => Err(Error::usage(format!(
+            _ => Err(Error::usage(crate::trf!(
+                "{shown} has type {}, not a struct, and has no member {name}",
                 "{shown} 的类型是 {}，不是结构体，没有成员 {name}",
                 self.syms.name_of(ty)
             ))),
@@ -467,7 +515,11 @@ impl<'a> Resolver<'a> {
             elem
         };
         let stride = self.syms.size_of(sub).ok_or_else(|| {
-            Error::usage(format!("数组元素 {} 的大小未知", self.syms.name_of(sub)))
+            Error::usage(crate::trf!(
+                "The size of array element {} is unknown",
+                "数组元素 {} 的大小未知",
+                self.syms.name_of(sub)
+            ))
         })?;
         Ok((sub, dims[0], stride))
     }
@@ -485,7 +537,8 @@ impl<'a> Resolver<'a> {
                 let (elem, count, stride) = self.array_step(full)?;
                 if let Some(n) = count {
                     if i >= n {
-                        return Err(Error::usage(format!(
+                        return Err(Error::usage(crate::trf!(
+                            "{text}[{i}] is out of bounds: {text} has only {n} elements",
                             "{text}[{i}] 越界：{text} 只有 {n} 个元素"
                         )));
                     }
@@ -500,13 +553,16 @@ impl<'a> Resolver<'a> {
                 };
                 if i > 0 {
                     let stride = self.syms.size_of(ty).ok_or_else(|| {
-                        Error::usage(format!("{text} 指向的类型大小未知，不能取下标"))
+                        Error::usage(crate::trf!(
+"The size of the type {text} points to is unknown, so it cannot be indexed",
+"{text} 指向的类型大小未知，不能取下标"))
                     })?;
                     loc.fin += (i * stride) as i64;
                 }
                 Ok(Val::L { loc, ty })
             }
-            _ => Err(Error::usage(format!(
+            _ => Err(Error::usage(crate::trf!(
+                "{text} has type {} and cannot be indexed",
                 "{text} 的类型是 {}，不能取下标",
                 self.syms.name_of(ty)
             ))),
@@ -518,17 +574,24 @@ impl<'a> Resolver<'a> {
         match v {
             Val::C { value, .. } => match to_scalar {
                 Some(_) => Ok(Val::C { value, ty: to }),
-                None => Err(Error::usage(format!("{text}：常数只能转换成指针或整数"))),
+                None => Err(Error::usage(crate::trf!(
+                    "{text}: a constant can be cast only to a pointer or an integer",
+                    "{text}：常数只能转换成指针或整数"
+                ))),
             },
             Val::L { loc, ty } => {
                 let from = self.syms.value_type(ty);
                 match (from, to_scalar) {
                     (Some(a), Some(b)) if a.size == b.size => Ok(Val::L { loc, ty: to }),
-                    (Some(a), Some(b)) => Err(Error::usage(format!(
-                        "{text}：{} 有 {} 字节，{} 有 {} 字节，只能在同样大小的类型之间转换",
+                    (Some(a), Some(b)) => Err(Error::usage(crate::trf!(
+"{text}: {} has {} bytes and {} has {} bytes; casts work only between types of the same size",
+"{text}：{} 有 {} 字节，{} 有 {} 字节，只能在同样大小的类型之间转换",
                         a.name, a.size, b.name, b.size
                     ))),
-                    _ => Err(Error::usage(format!("{text}：只能转换数值和指针"))),
+                    _ => Err(Error::usage(crate::trf!(
+                        "{text}: only values and pointers can be cast",
+                        "{text}：只能转换数值和指针"
+                    ))),
                 }
             }
         }

@@ -5,6 +5,8 @@ use std::sync::mpsc::channel;
 use eframe::egui::{self, RichText};
 use xrdap::cortex::{AfterReset, CoreState};
 use xrdap::discover::{self, Chip};
+use xrdap::lang::tr;
+use xrdap::trf;
 
 use crate::gui::app::App;
 use crate::gui::model::Found;
@@ -18,7 +20,9 @@ impl App {
             spec: self.probe_spec.trim().to_string(),
             baud: match self.baud.trim() {
                 "" => None,
-                b => Some(b.parse().map_err(|_| "波特率不是整数".to_string())?),
+                b => Some(b.parse().map_err(|_| {
+                    tr("The baud rate is not an integer", "波特率不是整数").to_string()
+                })?),
             },
         })
     }
@@ -34,11 +38,14 @@ impl App {
         match self.conn() {
             Ok(conn) => {
                 let which = if conn.spec.is_empty() {
-                    "自动选择的探针"
+                    tr("the automatically selected probe", "自动选择的探针")
                 } else {
                     &conn.spec
                 };
-                self.log(format!("连接 {which}，SWD {clock} Hz……"));
+                self.log(trf!(
+                    "Connecting {which}, SWD {clock} Hz...",
+                    "连接 {which}，SWD {clock} Hz……"
+                ));
                 self.connecting = true;
                 self.send(Cmd::Connect(conn, clock));
             }
@@ -74,19 +81,26 @@ impl App {
             }
         }
         ui.horizontal(|ui| {
-            ui.label("找到的探针");
+            ui.label(tr("Found probes", "找到的探针"));
             if self.finding.is_some() {
                 ui.add(egui::Spinner::new());
-            } else if ui.small_button("重新查找").clicked() {
+            } else if ui.small_button(tr("Search again", "重新查找")).clicked() {
                 self.start_finding();
             }
         });
         let mut chosen = None;
         if self.found.probes.is_empty() && self.finding.is_none() {
-            ui.label(RichText::new("USB 和局域网上没有找到").weak().small());
+            ui.label(
+                RichText::new(tr("None found on USB or the LAN", "USB 和局域网上没有找到"))
+                    .weak()
+                    .small(),
+            );
         }
         for p in &self.found.probes {
-            let name = p.serial.as_deref().unwrap_or("（没有序列号）");
+            let name = p
+                .serial
+                .as_deref()
+                .unwrap_or(tr("(no serial number)", "（没有序列号）"));
             let product = p.product.as_deref().unwrap_or("");
             for l in &p.links {
                 let text = format!("{product}  {}  ·  {}", short_serial(name), l.addr);
@@ -101,9 +115,12 @@ impl App {
         }
         if !self.found.others.is_empty() {
             ui.label(
-                RichText::new("其他串口（没有打开检查，点一下选用）")
-                    .weak()
-                    .small(),
+                RichText::new(tr(
+                    "Other serial ports (not opened to check; click one to use it)",
+                    "其他串口（没有打开检查，点一下选用）",
+                ))
+                .weak()
+                .small(),
             );
             ui.horizontal_wrapped(|ui| {
                 for s in &self.found.others {
@@ -123,7 +140,7 @@ impl App {
     }
 
     pub(crate) fn ui_connection(&mut self, ui: &mut egui::Ui) {
-        theme::section(ui, "XRDAP / PROBE", "连接");
+        theme::section(ui, "XRDAP / PROBE", tr("Connection", "连接"));
         if !self.connected && !self.connecting {
             self.ui_found(ui);
             ui.separator();
@@ -131,40 +148,43 @@ impl App {
         let editable = !self.connected && !self.connecting;
         ui.add_enabled_ui(editable, |ui| {
             ui.horizontal(|ui| {
-                ui.label("探针");
+                ui.label(tr("Probe", "探针"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.probe_spec)
-                        .hint_text("不填时自动选唯一的探针")
+                        .hint_text(tr("Empty: the only probe", "不填时自动选唯一的探针"))
                         .desired_width(fill_width(ui)),
                 )
-                .on_hover_text(
+                .on_hover_text(tr(
+                    "Serial number (in full or its last digits), usb, COM3, /dev/ttyUSB0, 192.0.2.10, \
+                     xrdap-aabbcc.local; the same forms as -p on the command line",
                     "序列号（全称或末尾几位）、usb、COM3、/dev/ttyUSB0、192.0.2.10、\
                      xrdap-aabbcc.local，和命令行的 -p 写法相同",
-                );
+                ));
             });
             ui.horizontal(|ui| {
-                ui.label("串口波特率");
+                ui.label(tr("Serial baud rate", "串口波特率"));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.baud)
-                        .hint_text("自动")
+                        .hint_text(tr("Auto", "自动"))
                         .desired_width(80.0),
                 )
-                .on_hover_text(
+                .on_hover_text(tr(
+                    "Empty: chosen by serial chip: CH343 and similar 4000000, CP2102 and CH340 921600, other chips try both",
                     "不填时按串口芯片自动选：CH343 等 4000000，CP2102、CH340 921600，其他芯片两个都试",
-                );
-                ui.label("SWD 时钟");
+                ));
+                ui.label(tr("SWD clock", "SWD 时钟"));
                 ui.add(egui::TextEdit::singleline(&mut self.clock).desired_width(60.0));
             });
         });
         ui.horizontal(|ui| {
             if self.connected {
-                if ui.button("断开").clicked() {
+                if ui.button(tr("Disconnect", "断开")).clicked() {
                     self.send(Cmd::Disconnect);
                 }
             } else if self.connecting {
                 ui.add(egui::Spinner::new());
-                ui.label("连接中……");
-            } else if theme::primary_button(ui, "连接").clicked() {
+                ui.label(tr("Connecting...", "连接中……"));
+            } else if theme::primary_button(ui, tr("Connect", "连接")).clicked() {
                 // 没连上时，“连接”是这个窗口唯一的主按钮
                 self.connect();
             }
@@ -191,13 +211,17 @@ impl App {
             let changed = ui
                 .add_enabled(
                     !self.share_busy,
-                    egui::Checkbox::new(&mut on, "共享为 USB DAP"),
+                    egui::Checkbox::new(&mut on, tr("Share as USB DAP", "共享为 USB DAP")),
                 )
-                .on_hover_text(
+                .on_hover_text(tr(
+                    "Serves a USB/IP device on port 3240 of this computer. Once attached with usbip, \
+                     Keil, pyOCD, probe-rs and OpenOCD use it as a USB CMSIS-DAP probe. While \
+                     sharing, this window cannot read or write variables or sample. Windows needs \
+                     usbip-win2 installed first.",
                     "在本机 3240 端口提供 USB/IP 设备。用 usbip 挂载后，Keil、pyOCD、probe-rs、\
                      OpenOCD 把它当 USB CMSIS-DAP 探针用。共享期间这里不能读写变量和采样。\
                      Windows 需要先安装 usbip-win2。",
-                )
+                ))
                 .changed();
             if self.share_busy {
                 ui.add(egui::Spinner::new());
@@ -214,7 +238,7 @@ impl App {
         let mut copy = false;
         ui.horizontal(|ui| {
             ui.label(RichText::new(&st.attach).monospace().small());
-            copy = ui.small_button("复制").clicked();
+            copy = ui.small_button(tr("Copy", "复制")).clicked();
         });
         if copy {
             ui.ctx().copy_text(st.attach.clone());
@@ -223,23 +247,29 @@ impl App {
             Some(peer) => {
                 ui.horizontal(|ui| {
                     theme::tag(ui, "IN USE", true);
-                    ui.label(format!("正被 {peer} 使用"));
+                    ui.label(trf!("In use by {peer}", "正被 {peer} 使用"));
                 });
             }
             None => {
-                ui.label(RichText::new("等待挂载（Linux 用 sudo 执行上面的命令）").weak());
+                ui.label(
+                    RichText::new(tr(
+                        "Waiting for attach (on Linux run the command above with sudo)",
+                        "等待挂载（Linux 用 sudo 执行上面的命令）",
+                    ))
+                    .weak(),
+                );
             }
         }
     }
 
     /// 内核型号、运行状态和停住、继续、复位按钮。
     fn ui_core(&mut self, ui: &mut egui::Ui) {
-        ui.label(format!("内核：{}", self.core_info));
+        ui.label(trf!("Core: {}", "内核：{}", self.core_info));
         match &self.core {
             None => {
-                ui.label(RichText::new("读取中").weak());
+                ui.label(RichText::new(tr("Reading", "读取中")).weak());
             }
-            Some(Err(e)) => theme::fail(ui, format!("读不到状态：{e}")),
+            Some(Err(e)) => theme::fail(ui, trf!("Cannot read the state: {e}", "读不到状态：{e}")),
             // 锁死是一个结论，用状态色；其余状态用墨色记号，停住时反相强调
             Some(Ok(s)) if s.state == CoreState::Lockup => theme::fail(ui, s.state.text()),
             Some(Ok(s)) => {
@@ -251,18 +281,25 @@ impl App {
         ui.add_enabled_ui(!self.core_busy, |ui| {
             ui.horizontal(|ui| {
                 if halted {
-                    if ui.button("继续").clicked() {
+                    if ui.button(tr("Resume", "继续")).clicked() {
                         cmd = Some(CoreCmd::Resume);
                     }
-                } else if ui.button("停住").clicked() {
+                } else if ui.button(tr("Halt", "停住")).clicked() {
                     cmd = Some(CoreCmd::Halt);
                 }
-                if ui.button("复位").on_hover_text("系统复位后运行").clicked() {
+                if ui
+                    .button(tr("Reset", "复位"))
+                    .on_hover_text(tr("System reset, then run", "系统复位后运行"))
+                    .clicked()
+                {
                     cmd = Some(CoreCmd::Reset(AfterReset::Run));
                 }
                 if ui
-                    .button("复位并停住")
-                    .on_hover_text("系统复位，停在复位向量，第一条指令之前")
+                    .button(tr("Reset and halt", "复位并停住"))
+                    .on_hover_text(tr(
+                        "System reset, stop at the reset vector before the first instruction",
+                        "系统复位，停在复位向量，第一条指令之前",
+                    ))
                     .clicked()
                 {
                     cmd = Some(CoreCmd::Reset(AfterReset::Halt));

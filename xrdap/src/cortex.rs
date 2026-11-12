@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::bytes::le_u32;
 use crate::dap::Probe;
+use crate::lang::tr;
 use crate::raw::vendor::Item;
 use crate::{Error, Result};
 
@@ -73,10 +74,10 @@ impl CoreState {
     /// A short description of the state.
     pub fn text(self) -> &'static str {
         match self {
-            CoreState::Running => "运行中",
-            CoreState::Sleeping => "睡眠（WFI/WFE）",
-            CoreState::Halted => "已停住",
-            CoreState::Lockup => "锁死（LOCKUP）",
+            CoreState::Running => tr("running", "运行中"),
+            CoreState::Sleeping => tr("sleeping (WFI/WFE)", "睡眠（WFI/WFE）"),
+            CoreState::Halted => tr("halted", "已停住"),
+            CoreState::Lockup => tr("locked up (LOCKUP)", "锁死（LOCKUP）"),
         }
     }
 }
@@ -247,7 +248,8 @@ pub fn halt(probe: &mut Probe) -> Result<CoreStatus> {
         s.state == CoreState::Halted
     })?;
     if s.state != CoreState::Halted {
-        return Err(Error::Target(format!(
+        return Err(Error::Target(crate::trf!(
+            "The core did not halt (DHCSR 0x{:08X}, {})",
             "内核没有停住（DHCSR 0x{:08X}，{}）",
             s.dhcsr,
             s.state.text()
@@ -317,15 +319,19 @@ fn reset_with_catch(probe: &mut Probe, after: AfterReset, demcr: u32) -> Result<
         }
         std::thread::sleep(Duration::from_millis(2));
     }
-    let s = last.ok_or_else(|| Error::Target("复位后读不到 DHCSR".into()))?;
+    let s = last.ok_or_else(|| {
+        Error::Target(tr("DHCSR cannot be read after the reset", "复位后读不到 DHCSR").into())
+    })?;
     if !seen {
-        return Err(Error::Target(format!(
+        return Err(Error::Target(crate::trf!(
+            "No reset was seen (DHCSR 0x{:08X})",
             "没有看到复位发生（DHCSR 0x{:08X}）",
             s.dhcsr
         )));
     }
     if after == AfterReset::Halt && s.state != CoreState::Halted {
-        return Err(Error::Target(format!(
+        return Err(Error::Target(crate::trf!(
+            "The core did not halt after the reset (DHCSR 0x{:08X})",
             "复位后内核没有停住（DHCSR 0x{:08X}）",
             s.dhcsr
         )));

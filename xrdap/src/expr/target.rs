@@ -113,7 +113,8 @@ impl Target {
         match e {
             Error::Item { status, .. } => Error::Item {
                 status,
-                text: format!(
+                text: crate::trf!(
+                    "{}: {}",
                     "{}：{}",
                     self.name,
                     vendor::item_status_text(status, &self.chain)

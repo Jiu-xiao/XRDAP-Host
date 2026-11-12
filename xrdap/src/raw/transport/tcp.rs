@@ -9,11 +9,12 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use super::Transport;
+use crate::lang::tr;
 use crate::raw::frame::{
     parse_tcp_header, tcp_frame, TCP_HEADER_LEN, TCP_TYPE_CONTROL_REQUEST,
     TCP_TYPE_CONTROL_RESPONSE, TCP_TYPE_REQUEST, TCP_TYPE_RESPONSE,
 };
-use crate::{Error, Result};
+use crate::{trf, Error, Result};
 
 /// 探针的 TCP DAP 端口。
 ///
@@ -37,9 +38,12 @@ impl TcpTransport {
     pub fn connect(addr: &str, timeout: Duration) -> Result<Self> {
         let full = with_default_port(addr);
         let mut last_err = None;
-        let addrs = full
-            .to_socket_addrs()
-            .map_err(|e| Error::Io(format!("解析地址 {full} 失败：{e}")))?;
+        let addrs = full.to_socket_addrs().map_err(|e| {
+            Error::Io(trf!(
+                "Resolving address {full} failed: {e}",
+                "解析地址 {full} 失败：{e}"
+            ))
+        })?;
         for sa in addrs {
             match TcpStream::connect_timeout(&sa, timeout) {
                 Ok(stream) => {
@@ -54,11 +58,14 @@ impl TcpTransport {
                 Err(e) => last_err = Some(e),
             }
         }
-        Err(Error::Io(format!(
+        Err(Error::Io(trf!(
+            "Cannot connect to {full}: {}",
             "连不上 {full}：{}",
-            last_err
-                .map(|e| e.to_string())
-                .unwrap_or_else(|| "没有可用的地址".into())
+            last_err.map(|e| e.to_string()).unwrap_or_else(|| tr(
+                "no usable address",
+                "没有可用的地址"
+            )
+            .into())
         )))
     }
 
@@ -68,8 +75,12 @@ impl TcpTransport {
             return Ok(None);
         };
         let header: &[u8; TCP_HEADER_LEN] = header.try_into().expect("长度已检查");
-        let len = parse_tcp_header(header, TCP_TYPE_RESPONSE)
-            .ok_or_else(|| Error::protocol(format!("TCP 响应帧头无效：{header:02X?}")))?;
+        let len = parse_tcp_header(header, TCP_TYPE_RESPONSE).ok_or_else(|| {
+            Error::protocol(trf!(
+                "Invalid TCP response frame header: {header:02X?}",
+                "TCP 响应帧头无效：{header:02X?}"
+            ))
+        })?;
         if self.buf.len() < TCP_HEADER_LEN + len {
             return Ok(None);
         }
@@ -83,7 +94,7 @@ impl Transport for TcpTransport {
     fn send(&mut self, request: &[u8]) -> Result<()> {
         self.stream
             .write_all(&tcp_frame(request, TCP_TYPE_REQUEST))
-            .map_err(|e| Error::Io(format!("TCP 发送失败：{e}")))
+            .map_err(|e| Error::Io(trf!("TCP send failed: {e}", "TCP 发送失败：{e}")))
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>> {
@@ -95,15 +106,26 @@ impl Transport for TcpTransport {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(Error::Timeout("等待 TCP 响应超时".into()));
+                return Err(Error::Timeout(
+                    tr("Timed out waiting for a TCP response", "等待 TCP 响应超时").into(),
+                ));
             }
             self.stream.set_read_timeout(Some(left))?;
             match self.stream.read(&mut chunk) {
-                Ok(0) => return Err(Error::Io("TCP 连接被对方关闭".into())),
+                Ok(0) => {
+                    return Err(Error::Io(
+                        tr("The peer closed the TCP connection", "TCP 连接被对方关闭").into(),
+                    ))
+                }
                 Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
                 Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {}
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
-                Err(e) => return Err(Error::Io(format!("TCP 接收失败：{e}"))),
+                Err(e) => {
+                    return Err(Error::Io(trf!(
+                        "TCP receive failed: {e}",
+                        "TCP 接收失败：{e}"
+                    )))
+                }
             }
         }
     }
@@ -118,14 +140,17 @@ impl Transport for TcpTransport {
         self.buf.clear();
         self.stream
             .write_all(&tcp_frame(request, TCP_TYPE_CONTROL_REQUEST))
-            .map_err(|e| Error::Io(format!("TCP 发送失败：{e}")))?;
+            .map_err(|e| Error::Io(trf!("TCP send failed: {e}", "TCP 发送失败：{e}")))?;
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut chunk = [0u8; 2048];
         loop {
             if let Some(header) = self.buf.get(..TCP_HEADER_LEN) {
                 let header: &[u8; TCP_HEADER_LEN] = header.try_into().expect("长度已检查");
                 let len = parse_tcp_header(header, TCP_TYPE_CONTROL_RESPONSE).ok_or_else(|| {
-                    Error::protocol(format!("TCP 控制应答帧头无效：{header:02X?}"))
+                    Error::protocol(trf!(
+                        "Invalid TCP control answer frame header: {header:02X?}",
+                        "TCP 控制应答帧头无效：{header:02X?}"
+                    ))
                 })?;
                 if self.buf.len() >= TCP_HEADER_LEN + len {
                     let answer = self.buf[TCP_HEADER_LEN..TCP_HEADER_LEN + len].to_vec();
@@ -135,15 +160,30 @@ impl Transport for TcpTransport {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(Error::Timeout("等待 TCP 控制口应答超时".into()));
+                return Err(Error::Timeout(
+                    tr(
+                        "Timed out waiting for the TCP control port answer",
+                        "等待 TCP 控制口应答超时",
+                    )
+                    .into(),
+                ));
             }
             self.stream.set_read_timeout(Some(left))?;
             match self.stream.read(&mut chunk) {
-                Ok(0) => return Err(Error::Io("TCP 连接被对方关闭".into())),
+                Ok(0) => {
+                    return Err(Error::Io(
+                        tr("The peer closed the TCP connection", "TCP 连接被对方关闭").into(),
+                    ))
+                }
                 Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
                 Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {}
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
-                Err(e) => return Err(Error::Io(format!("TCP 接收失败：{e}"))),
+                Err(e) => {
+                    return Err(Error::Io(trf!(
+                        "TCP receive failed: {e}",
+                        "TCP 接收失败：{e}"
+                    )))
+                }
             }
         }
     }

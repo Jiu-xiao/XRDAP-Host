@@ -44,6 +44,8 @@ fn addr(syms: &mut SymbolTable, name: &str) -> u32 {
 /// 协议文档 3.1：DAP_Connect 之前 READ 回 0x04。
 #[test]
 fn vendor_commands_need_connect() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (_sim, mut probe, mut syms) = setup();
     let counter = Item::direct(1, 4, addr(&mut syms, "counter"));
     let resp = probe
@@ -64,6 +66,8 @@ fn vendor_commands_need_connect() {
 /// 最终地址不对齐 0x2F、最后的读写出错 0x1F。
 #[test]
 fn read_item_status_per_protocol() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (_sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let t = targets(
@@ -120,6 +124,8 @@ fn read_item_status_per_protocol() {
 
 #[test]
 fn write_then_read_back() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let t = targets(
@@ -150,6 +156,8 @@ fn write_then_read_back() {
 /// 协议文档 3.4：一次 READ 最多 32 个条目，多的分成几次。
 #[test]
 fn many_items_split_into_several_reads() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let block = addr(&mut syms, "block[0]");
@@ -187,6 +195,8 @@ fn vars(list: &[SubItem]) -> Vec<Var> {
 /// 协议文档 3.5：第 k 拍的目标时间是开始时间 + k × 周期；`(k + phase) % div == 0` 的条目到期。
 #[test]
 fn sampling_with_divided_items() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     sim.add_counter(addr(&mut syms, "counter"), 4, 1000);
@@ -268,6 +278,8 @@ fn sampling_with_divided_items() {
 /// 协议文档 3.5：跳拍计数、丢帧计数，以及读取失败的条目在位图里置 1。
 #[test]
 fn sampling_counters_and_gaps() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     sim.skip_every(Some(10));
@@ -301,6 +313,8 @@ fn sampling_counters_and_gaps() {
 /// 只丢帧不跳拍时是读取跟不上。
 #[test]
 fn keeping_up_is_judged_from_counters() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     sim.set_ring_bytes(100);
@@ -318,6 +332,8 @@ fn keeping_up_is_judged_from_counters() {
 /// 协议文档第 2 节：TCP 帧；没有响应的命令（DAP_TransferAbort）不回帧。
 #[test]
 fn tcp_transport_round_trip() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, _, mut syms) = setup();
     let host = sim.serve_tcp().to_string();
     let t = xrdap::raw::transport::tcp::TcpTransport::connect(&host, TIMEOUT).unwrap();
@@ -337,6 +353,8 @@ fn tcp_transport_round_trip() {
 /// 时停在复位向量；S_RESET_ST 在复位后第一次读 DHCSR 时为 1。
 #[test]
 fn halt_resume_and_reset() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     use xrdap::cortex::{self, AfterReset, CoreState};
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
@@ -385,6 +403,8 @@ fn halt_resume_and_reset() {
 /// 连接，采样期间也能用。
 #[test]
 fn wifi_goes_through_the_control_port() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     assert!(probe.wifi_status().unwrap().ssid.is_empty());
     probe.wifi_set("lab", "12345678").unwrap();
@@ -413,6 +433,8 @@ fn tcp_probe(sim: &Sim) -> Probe {
 /// 协议文档第 2 节、3.7.1：TCP 上控制请求是帧类型 3，应答是类型 4，和 DAP 帧在同一条连接上。
 #[test]
 fn wifi_over_tcp_uses_control_frames() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, _, _) = setup();
     let mut probe = tcp_probe(&sim);
     probe.wifi_set("lab", "12345678").unwrap();
@@ -428,6 +450,8 @@ fn wifi_over_tcp_uses_control_frames() {
 /// 空请求是帧头无效，连接被关闭。
 #[test]
 fn tcp_transport_control_frames() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     use xrdap::raw::transport::{tcp::TcpTransport, Transport};
     let (sim, _, _) = setup();
     let host = sim.serve_tcp().to_string();
@@ -441,6 +465,8 @@ fn tcp_transport_control_frames() {
 /// 协议文档 3.7.1：探针没有 Wi-Fi 操作时（功能位 0x6F）应答状态 0xF2，不再试 0x86。
 #[test]
 fn wifi_on_a_probe_without_wifi_reports_no_such_operation() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, link, _) = setup();
     sim.set_features(0x6F);
     for mut probe in [link, tcp_probe(&sim)] {
@@ -459,6 +485,8 @@ fn wifi_on_a_probe_without_wifi_reports_no_such_operation() {
 /// 协议文档 3.4：INFO 的 bit5 为 0 的固件不发控制请求，走 0x86；TCP 上它收到类型 3 的帧会关连接。
 #[test]
 fn wifi_without_the_control_bit_uses_the_dap_command() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, _, _) = setup();
     sim.set_features(0x1F);
     let mut probe = tcp_probe(&sim);
@@ -472,6 +500,8 @@ fn wifi_without_the_control_bit_uses_the_dap_command() {
 /// 控制口。
 #[test]
 fn wifi_falls_back_to_the_dap_command_when_send_is_refused() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, _) = setup();
     sim.set_control_limit(64);
     let (ssid, password) = ("s".repeat(32), "p".repeat(63));
@@ -486,6 +516,8 @@ fn wifi_falls_back_to_the_dap_command_when_send_is_refused() {
 /// 协议文档 3.1：没有 0x86 的固件回 `FF`，报告不支持。
 #[test]
 fn wifi_on_old_firmware_without_wifi_is_reported() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, _) = setup();
     sim.set_features(0x0F);
     let e = probe.wifi_status().unwrap_err().to_string();
@@ -503,6 +535,8 @@ fn start_flags(sim: &Sim) -> u8 {
 /// 协议文档 3.4、3.5：探针报了 bit6 时 Sampler 要紧凑帧；到期条目、失败、跳拍、时间戳和值都解得对。
 #[test]
 fn sampler_uses_compact_frames_when_offered() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     sim.add_counter(addr(&mut syms, "counter"), 4, 1000);
@@ -564,6 +598,8 @@ fn sampler_uses_compact_frames_when_offered() {
 /// 每个回复的第 1 帧是完整帧。
 #[test]
 fn compact_frames_on_the_wire() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let t = targets(&mut syms, &["counter"]);
@@ -585,6 +621,8 @@ fn compact_frames_on_the_wire() {
 /// 协议文档 3.4：功能位没有 bit6 的探针不要紧凑帧，否则回 0x01；`--no-overwrite` 的 bit0 不受影响。
 #[test]
 fn sampler_uses_whole_frames_without_the_feature_bit() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     sim.set_features(0x1F);
     probe.connect(4_000_000).unwrap();
@@ -608,6 +646,8 @@ fn sampler_uses_whole_frames_without_the_feature_bit() {
 /// 复位只临时改 DEMCR.VC_CORERESET：复位成功、失败，复位后运行还是停住，DEMCR 都恢复原值。
 #[test]
 fn reset_always_restores_demcr() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     use xrdap::cortex::{self, AfterReset, DEMCR, DHCSR};
     let (sim, mut probe, _) = setup();
     probe.connect(4_000_000).unwrap();
@@ -627,6 +667,8 @@ fn reset_always_restores_demcr() {
 /// 协议文档 3.1：探针不仲裁。连接在一条链路上时，别的链路的命令照样执行。
 #[test]
 fn commands_from_any_link_run() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut a, mut syms) = setup();
     a.connect(4_000_000).unwrap();
     let mut b = Probe::new(Box::new(sim.link()), TIMEOUT);
@@ -644,6 +686,8 @@ fn commands_from_any_link_run() {
 /// 协议文档 3.1：一条链路丢了，连接在它上面才作废；不在它上面时什么也不发生。
 #[test]
 fn losing_a_link_ends_only_a_connection_on_it() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut a, mut syms) = setup();
     let read = vendor::read_request(&[Item::direct(1, 4, addr(&mut syms, "counter"))]);
     // 直接发 DAP_Connect：Probe 没有记下连接，丢弃时不发 DAP_Disconnect，只是链路丢了
@@ -660,6 +704,8 @@ fn losing_a_link_ends_only_a_connection_on_it() {
 /// 协议文档 3.1：DAP_Disconnect 结束任何链路上的连接，之后扩展命令要求重新 DAP_Connect。
 #[test]
 fn disconnect_from_any_link_ends_the_connection() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut a, mut syms) = setup();
     a.connect(4_000_000).unwrap();
     let read = vendor::read_request(&[Item::direct(1, 4, addr(&mut syms, "counter"))]);
@@ -675,6 +721,8 @@ fn disconnect_from_any_link_ends_the_connection() {
 /// 旧的连接和采样并重新连接；缓冲里的帧留着。同一条链路的 DAP_Disconnect 回 `FF`，不结束采样。
 #[test]
 fn connect_from_the_sampling_link_restarts() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let t = targets(&mut syms, &["counter"]);
@@ -696,6 +744,8 @@ fn connect_from_the_sampling_link_restarts() {
 /// 0x02，采样不受影响；DAP_Info 和厂商命令照常。开始采样的链路丢了，采样停下，别的链路才能连接。
 #[test]
 fn another_link_cannot_end_sampling_by_connecting() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut a, mut syms) = setup();
     a.connect(4_000_000).unwrap();
     let t = targets(&mut syms, &["counter"]);
@@ -719,6 +769,8 @@ fn another_link_cannot_end_sampling_by_connecting() {
 /// 协议文档 3.4：会话结束后采样停下，SUB_READ 回 0x02 但照样带缓冲里的帧。
 #[test]
 fn sampler_reads_frames_after_probe_stops() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let t = targets(&mut syms, &["counter"]);
@@ -736,6 +788,8 @@ fn sampler_reads_frames_after_probe_stops() {
 /// 条目失败按类别报告；本地能查出的错（值的长度不对、访问宽度非法）不发请求。
 #[test]
 fn item_errors_are_typed_and_checked_locally() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     use xrdap::Error;
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
@@ -764,6 +818,8 @@ fn item_errors_are_typed_and_checked_locally() {
 /// 条目数超过探针 INFO 报告的上限时在本地报错，不发 SUB_START；没给相位的分频条目被错开。
 #[test]
 fn sampler_checks_item_limit_and_spreads_phases() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, mut probe, mut syms) = setup();
     probe.connect(4_000_000).unwrap();
     let counter = targets(&mut syms, &["counter"]).remove(0);

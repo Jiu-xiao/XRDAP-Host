@@ -63,6 +63,8 @@ fn xrdap_to(
 
 #[test]
 fn info_shows_probe_and_target() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (_sim, host) = sim();
     let out = xrdap(&host, &["info"]).unwrap();
     assert!(out.contains("厂商扩展：版本 2"), "{out}");
@@ -72,6 +74,8 @@ fn info_shows_probe_and_target() {
 
 #[test]
 fn read_values_and_item_errors() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (_sim, host) = sim();
     let out = xrdap(
         &host,
@@ -103,6 +107,8 @@ fn read_values_and_item_errors() {
 
 #[test]
 fn read_types_and_raw() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (_sim, host) = sim();
     let elf = elf();
     let out = xrdap(
@@ -132,6 +138,8 @@ fn read_types_and_raw() {
 
 #[test]
 fn write_and_read_back() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, host) = sim();
     let elf = elf();
     let out = xrdap(
@@ -161,6 +169,8 @@ fn write_and_read_back() {
 
 #[test]
 fn watch_prints_and_writes_csv() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, host) = sim();
     sim.add_counter(addr_of("counter"), 4, 1000);
     let csv = std::env::temp_dir().join(format!("xrdap-test-{}.csv", std::process::id()));
@@ -226,6 +236,8 @@ fn watch_prints_and_writes_csv() {
 /// 协议文档 3.5：探针不估计耗时；跳拍时提示加长周期、加分频或减少变量。
 #[test]
 fn watch_warns_when_not_keeping_up() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, host) = sim();
     sim.skip_every(Some(5));
     let out = xrdap(
@@ -249,6 +261,8 @@ fn watch_warns_when_not_keeping_up() {
 /// 命令报告探针正在采样，它的采样不停。
 #[test]
 fn only_sampling_on_another_link_refuses_a_command() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, host) = sim();
     let mut other = xrdap::dap::Probe::new(Box::new(sim.link()), Duration::from_secs(2));
     other.connect(4_000_000).unwrap();
@@ -269,6 +283,8 @@ fn only_sampling_on_another_link_refuses_a_command() {
 /// 协议文档 3.7：wifi status 显示最近一次清除的来源和本次启动原因；清除带确认字节。
 #[test]
 fn wifi_status_shows_history() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, host) = sim();
     xrdap(&host, &["wifi", "set", "lab", "12345678"]).unwrap();
     xrdap(&host, &["wifi", "clear"]).unwrap();
@@ -280,6 +296,8 @@ fn wifi_status_shows_history() {
 
 #[test]
 fn watch_stops_on_ctrl_c() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, host) = sim();
     let mut probe = open(&Spec::parse(&host), &OpenOptions::default()).unwrap();
     probe.connect(4_000_000).unwrap();
@@ -327,6 +345,8 @@ fn watch_stops_on_ctrl_c() {
 
 #[test]
 fn no_command_means_gui() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let cli = Cli::try_parse_from(["xrdap"]).unwrap();
     assert!(cli.cmd.is_none());
 }
@@ -334,6 +354,8 @@ fn no_command_means_gui() {
 /// 每个子命令只收自己的选项，用不到的选项是参数错误。
 #[test]
 fn options_belong_to_their_commands() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let parse = |args: &[&str]| {
         Cli::try_parse_from(args)
             .map(|_| ())
@@ -377,6 +399,8 @@ fn options_belong_to_their_commands() {
 /// 只在要用的命令加载 --elf；info、halt 这些命令不看 ELF。
 #[test]
 fn commands_without_symbols_ignore_no_elf() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let (sim, host) = sim();
     assert!(xrdap(&host, &["halt"]).unwrap().contains("已停住"));
     assert!(sim.is_halted());
@@ -405,6 +429,8 @@ impl Write for Lines {
 
 #[test]
 fn share_openocd_answers_dap_info_until_stopped() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     use std::io::Read;
     use std::net::TcpStream;
 

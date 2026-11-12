@@ -42,13 +42,18 @@ pub fn parse_period(text: &str) -> Result<u32> {
     } else {
         (t.as_str(), 1.0)
     };
-    let v: f64 = num
-        .trim()
-        .parse()
-        .map_err(|_| Error::usage(format!("周期 {text} 写得不对，例如 1000、500us、2ms")))?;
+    let v: f64 = num.trim().parse().map_err(|_| {
+        Error::usage(crate::trf!(
+            "Bad period {text}; write e.g. 1000, 500us, 2ms",
+            "周期 {text} 写得不对，例如 1000、500us、2ms"
+        ))
+    })?;
     let us = (v * scale).round();
     if !(1.0..=u32::MAX as f64).contains(&us) {
-        return Err(Error::usage(format!("周期 {text} 超出范围")));
+        return Err(Error::usage(crate::trf!(
+            "Period {text} is out of range",
+            "周期 {text} 超出范围"
+        )));
     }
     Ok(us as u32)
 }
@@ -62,7 +67,8 @@ pub fn parse_spec(text: &str) -> Result<(String, u16, Option<u16>)> {
         return Ok((text.trim().to_string(), 1, None));
     };
     let bad = || {
-        Error::usage(format!(
+        Error::usage(crate::trf!(
+            "{text}: a divider is written as VAR@DIV or VAR@DIV:PHASE, e.g. speed@10",
             "{text}：分频要写成 变量@分频 或 变量@分频:相位，例如 speed@10"
         ))
     };
@@ -78,7 +84,10 @@ pub fn parse_spec(text: &str) -> Result<(String, u16, Option<u16>)> {
         Some(p) => {
             let p: u16 = p.trim().parse().map_err(|_| bad())?;
             if p >= div {
-                return Err(Error::usage(format!("{text}：相位要小于分频")));
+                return Err(Error::usage(crate::trf!(
+                    "{text}: the phase must be smaller than the divider",
+                    "{text}：相位要小于分频"
+                )));
             }
             Some(p)
         }
@@ -263,8 +272,16 @@ impl Lag {
     /// The explanation and advice for users.
     pub fn advice(self) -> &'static str {
         match self {
-            Lag::Swd => "探针跳过了节拍，SWD 跟不上：加长周期、给慢变量加分频，或者减少变量",
-            Lag::Read => "探针丢了帧或缓冲快满，读取跟不上：给变量加分频，或者减少变量",
+            Lag::Swd => crate::lang::tr(
+                "The probe skipped ticks, SWD cannot keep up: use a longer period, a divider on \
+                 slow variables, or fewer variables",
+                "探针跳过了节拍，SWD 跟不上：加长周期、给慢变量加分频，或者减少变量",
+            ),
+            Lag::Read => crate::lang::tr(
+                "The probe dropped frames or its buffer is nearly full, reading cannot keep up: \
+                 use dividers or fewer variables",
+                "探针丢了帧或缓冲快满，读取跟不上：给变量加分频，或者减少变量",
+            ),
         }
     }
 }
@@ -345,7 +362,8 @@ impl<'a> Sampler<'a> {
     ) -> Result<Self> {
         let info = probe.vendor_info()?;
         if vars.len() > info.max_items as usize {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(crate::trf!(
+                "The probe samples at most {} variables at a time, {} given",
                 "探针一次最多采样 {} 个变量，现在有 {} 个",
                 info.max_items,
                 vars.len()

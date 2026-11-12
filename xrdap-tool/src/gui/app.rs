@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, RichText};
 use xrdap::cortex::{AfterReset, CoreStatus};
+use xrdap::lang::tr;
 use xrdap::share::Event as ShareEvent;
+use xrdap::trf;
 use xrdap::types::SymbolTable;
 use xrdap::watch::{HostFrame, Stats};
 use xrdap::ItemResult;
@@ -289,7 +291,10 @@ impl App {
             Event::Connected { probe, target } => {
                 self.connecting = false;
                 self.connected = true;
-                self.log(format!("已连接：{probe}；{target}"));
+                self.log(trf!(
+                    "Connected: {probe}; {target}",
+                    "已连接：{probe}；{target}"
+                ));
                 self.probe_desc = probe;
                 self.target_desc = target;
             }
@@ -298,7 +303,10 @@ impl App {
             Event::Sharing { attach, device } => {
                 self.share_busy = false;
                 self.sampling = false;
-                self.log(format!("已共享为 USB DAP：{device}；挂载：{attach}"));
+                self.log(trf!(
+                    "Shared as USB DAP: {device}; attach: {attach}",
+                    "已共享为 USB DAP：{device}；挂载：{attach}"
+                ));
                 self.share = Some(ShareState {
                     attach,
                     device,
@@ -316,7 +324,7 @@ impl App {
             Event::ShareStopped => {
                 self.share_busy = false;
                 self.share = None;
-                self.log("已停止共享".into());
+                self.log(tr("Sharing stopped", "已停止共享").into());
             }
             Event::WifiStatus(status) => {
                 self.wifi_busy = false;
@@ -325,9 +333,17 @@ impl App {
             Event::WifiApplied { cleared } => {
                 self.wifi_busy = false;
                 self.log(if cleared {
-                    "已清除热点参数，探针重启后不再连 Wi-Fi".into()
+                    tr(
+                        "Wi-Fi credentials cleared; after restarting the probe no longer joins Wi-Fi",
+                        "已清除热点参数，探针重启后不再连 Wi-Fi",
+                    )
+                    .into()
                 } else {
-                    format!("已保存热点 {}，探针重启后连接", self.wifi_ssid)
+                    trf!(
+                        "Saved SSID {}; the probe joins it after restarting",
+                        "已保存热点 {}，探针重启后连接",
+                        self.wifi_ssid
+                    )
                 });
             }
             Event::Disconnected => {
@@ -336,7 +352,7 @@ impl App {
                 self.core_info.clear();
                 self.connected = false;
                 self.sampling = false;
-                self.log("已断开".into());
+                self.log(tr("Disconnected", "已断开").into());
             }
             Event::Failed { op, msg } => {
                 match op {
@@ -364,14 +380,14 @@ impl App {
         if let Some(cmd) = cmd {
             self.core_busy = false;
             let what = match cmd {
-                CoreCmd::Halt => "停住",
-                CoreCmd::Resume => "继续",
-                CoreCmd::Reset(AfterReset::Run) => "复位",
-                CoreCmd::Reset(AfterReset::Halt) => "复位并停住",
+                CoreCmd::Halt => tr("Halt", "停住"),
+                CoreCmd::Resume => tr("Resume", "继续"),
+                CoreCmd::Reset(AfterReset::Run) => tr("Reset", "复位"),
+                CoreCmd::Reset(AfterReset::Halt) => tr("Reset and halt", "复位并停住"),
             };
             match &status {
-                Ok(s) => self.log(format!("{what}：内核{}", s.state.text())),
-                Err(e) => self.log(format!("{what}失败：{e}")),
+                Ok(s) => self.log(trf!("{what}: core {}", "{what}：内核{}", s.state.text())),
+                Err(e) => self.log(trf!("{what} failed: {e}", "{what}失败：{e}")),
             }
         }
         self.core = Some(status);
@@ -397,12 +413,17 @@ impl App {
             w.note = if ok {
                 text.clone()
             } else {
-                format!("写入失败：{text}")
+                trf!("Write failed: {text}", "写入失败：{text}")
             };
         }
-        self.log(format!(
+        self.log(trf!(
+            "Write {name}: {}",
             "写 {name}：{}",
-            if ok { text } else { format!("失败，{text}") }
+            if ok {
+                text
+            } else {
+                trf!("failed, {text}", "失败，{text}")
+            }
         ));
     }
 
@@ -419,11 +440,18 @@ impl App {
         }
         let spread = phases.iter().filter(|(d, _)| *d > 1).count();
         let extra = if spread > 0 {
-            format!("，{spread} 个分频项已错开相位")
+            trf!(
+                ", phases of {spread} divided items staggered",
+                "，{spread} 个分频项已错开相位"
+            )
         } else {
             String::new()
         };
-        self.log(format!("开始采样：{} 个变量{extra}", self.run_ids.len()));
+        self.log(trf!(
+            "Sampling started: {} variables{extra}",
+            "开始采样：{} 个变量{extra}",
+            self.run_ids.len()
+        ));
     }
 
     fn on_stats(&mut self, s: Stats) {
@@ -442,7 +470,8 @@ impl App {
     fn on_stopped(&mut self) {
         if self.sampling {
             let s = self.stats;
-            self.log(format!(
+            self.log(trf!(
+                "Sampling stopped: {} frames, dropped frames {}, skipped ticks {}, frame gaps {}, failed values {}",
                 "停止采样：{} 帧，探针丢帧 {}，跳拍 {}，缺帧 {}，失败值 {}",
                 s.frames, s.dropped, s.skipped, s.missing, s.failed_values
             ));
@@ -474,7 +503,7 @@ impl App {
                         theme::choose(ui.ctx(), *c);
                     }
                 }
-                theme::path_label(ui, "主题");
+                theme::path_label(ui, tr("Theme", "主题"));
             });
         });
     }

@@ -32,6 +32,8 @@ fn resolve_err(syms: &mut SymbolTable, expr: &str) -> String {
 /// 同一份 types.c 的 DWARF 5 版本解析出的位置和类型与 DWARF 4 版本相同。
 #[test]
 fn dwarf5_matches_dwarf4() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let mut d4 = types_elf();
     let mut d5 = xrdap::elf::load(&fixture("types-dwarf5.elf")).unwrap();
     for e in [
@@ -51,6 +53,8 @@ fn dwarf5_matches_dwarf4() {
 
 #[test]
 fn pointer_chain_with_cast() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let mut s = types_elf();
     // chain_p1 声明为 uint32_t *，实际指向 chain_p2；三级要先转换类型
     let t = resolve(&mut s, "***(uint32_t***)chain_p1");
@@ -79,6 +83,8 @@ fn pointer_chain_with_cast() {
 
 #[test]
 fn struct_array_pointer_paths() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let mut s = types_elf();
     // pid_ctrl_t 20 字节，motor_t 32 字节，见 types.c
     let t = resolve(&mut s, "pids[1].out");
@@ -172,6 +178,8 @@ fn struct_array_pointer_paths() {
 
 #[test]
 fn clear_errors() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let mut s = types_elf();
     let e = resolve_err(&mut s, "motor[0].flags.ready");
     assert!(e.contains("位域"), "{e}");
@@ -196,6 +204,8 @@ fn clear_errors() {
 
 #[test]
 fn struct_expansion_skips_bitfields() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let mut s = types_elf();
     let mut r = Resolver::new(&mut s);
     let all = r.resolve_all("motor[0]").unwrap();
@@ -224,6 +234,8 @@ fn struct_expansion_skips_bitfields() {
 /// 名字带上函数名区分作用域；普通局部变量在栈上，没有固定地址，不应该出现。
 #[test]
 fn function_scope_statics() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let mut s = xrdap::elf::load(&fixture("statics.elf")).unwrap();
     let t = resolve(&mut s, "statics_touch::func_static");
     assert_eq!(t.direct_addr(), Some(0x2000_0000));
@@ -238,6 +250,8 @@ fn function_scope_statics() {
 /// statics.c 的 DWARF 5 版本解析结果和 DWARF 4 版本一致。
 #[test]
 fn statics_dwarf5_matches_dwarf4() {
+    // 这些测试核对中文输出
+    xrdap::lang::set_chinese(true);
     let mut d4 = xrdap::elf::load(&fixture("statics.elf")).unwrap();
     let mut d5 = xrdap::elf::load(&fixture("statics-dwarf5.elf")).unwrap();
     for e in ["statics_touch::func_static", "statics_touch::func_zero"] {

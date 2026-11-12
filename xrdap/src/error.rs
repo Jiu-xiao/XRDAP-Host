@@ -103,9 +103,10 @@ impl fmt::Display for Error {
             | Error::Usage(msg)
             | Error::Select(msg)
             | Error::Item { text: msg, .. } => f.write_str(msg),
-            Error::Status { cmd, status, text } => {
-                write!(f, "命令 0x{cmd:02X} 返回状态 0x{status:02X}：{text}")
-            }
+            Error::Status { cmd, status, text } => f.write_str(&crate::trf!(
+                "Command 0x{cmd:02X} returned status 0x{status:02X}: {text}",
+                "命令 0x{cmd:02X} 返回状态 0x{status:02X}：{text}"
+            )),
         }
     }
 }
@@ -115,7 +116,10 @@ impl std::error::Error for Error {}
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         if e.kind() == std::io::ErrorKind::TimedOut {
-            Error::Timeout(format!("等待响应超时：{e}"))
+            Error::Timeout(crate::trf!(
+                "Timed out waiting for a response: {e}",
+                "等待响应超时：{e}"
+            ))
         } else {
             Error::Io(e.to_string())
         }

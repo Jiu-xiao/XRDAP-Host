@@ -9,7 +9,8 @@
 pub mod wifi;
 
 use crate::bytes::{le_u16, le_u32, le_u48, le_u64};
-use crate::{Error, Result};
+use crate::lang::tr;
+use crate::{trf, Error, Result};
 
 /// 命令字节：INFO。
 ///
@@ -104,15 +105,22 @@ pub const SUB_FLAG_COMPACT: u8 = 0x02;
 /// Meaning of an overall status of commands 0x80 to 0x85.
 pub fn status_text(status: u8) -> &'static str {
     match status {
-        STATUS_OK => "成功",
-        STATUS_ARG => "参数非法",
-        STATUS_STATE => "当前状态不允许（已经在采样）",
-        STATUS_RESOURCE => {
-            "资源不足（条目超过 32 个、回复放不进剩余空间、用到超过 8 个 AP，或所有条目都到期的一帧放不进采样缓冲）"
-        }
-        STATUS_NO_TARGET => "没有连接目标（这次会话还没有 DAP_Connect，或读 AP 的 CSW 失败）",
-        STATUS_BUSY => "探针忙",
-        _ => "未定义的状态",
+        STATUS_OK => tr("success", "成功"),
+        STATUS_ARG => tr("invalid argument", "参数非法"),
+        STATUS_STATE => tr(
+            "not allowed in the current state (already sampling)",
+            "当前状态不允许（已经在采样）",
+        ),
+        STATUS_RESOURCE => tr(
+            "out of resources (more than 32 items, the reply does not fit into the space left, more than 8 APs used, or a frame with every item due does not fit into the sampling buffer)",
+            "资源不足（条目超过 32 个、回复放不进剩余空间、用到超过 8 个 AP，或所有条目都到期的一帧放不进采样缓冲）",
+        ),
+        STATUS_NO_TARGET => tr(
+            "target not connected (no DAP_Connect in this session yet, or reading the AP's CSW failed)",
+            "没有连接目标（这次会话还没有 DAP_Connect，或读 AP 的 CSW 失败）",
+        ),
+        STATUS_BUSY => tr("probe busy", "探针忙"),
+        _ => tr("undefined status", "未定义的状态"),
     }
 }
 
@@ -123,21 +131,34 @@ pub fn status_text(status: u8) -> &'static str {
 pub fn item_status_text(status: u8, chain: &[String]) -> String {
     let level = |k: u8| -> String {
         match chain.get(k as usize) {
-            Some(name) => format!("第 {} 级指针 {name} ", k + 1),
-            None => format!("第 {} 级指针", k + 1),
+            Some(name) => trf!("pointer level {} ({name})", "第 {} 级指针 {name} ", k + 1),
+            None => trf!("pointer level {}", "第 {} 级指针", k + 1),
         }
     };
     match status {
-        0x00 => "成功".into(),
-        0x10..=0x17 => format!(
+        0x00 => tr("success", "成功").into(),
+        0x10..=0x17 => trf!(
+            "SWD error (FAULT or timeout) while reading {}, the address may be invalid",
             "读{}时 SWD 出错（FAULT 或超时），地址可能无效",
             level(status - 0x10)
         ),
-        0x1F => "读写变量时 SWD 出错（FAULT、超时或粘滞错误），地址可能无效".into(),
-        0x20..=0x27 => format!("{}所在的地址没有 4 字节对齐", level(status - 0x20)),
-        0x2F => "变量地址没有按访问宽度对齐".into(),
-        0x30..=0x37 => format!("{}为空（NULL）", level(status - 0x30)),
-        other => format!("未定义的条目状态 0x{other:02X}"),
+        0x1F => tr(
+            "SWD error (FAULT, timeout or sticky error) while reading or writing the variable, the address may be invalid",
+            "读写变量时 SWD 出错（FAULT、超时或粘滞错误），地址可能无效",
+        )
+        .into(),
+        0x20..=0x27 => trf!(
+            "the address of {} is not 4-byte aligned",
+            "{}所在的地址没有 4 字节对齐",
+            level(status - 0x20)
+        ),
+        0x2F => tr(
+            "the variable address is not aligned to the access width",
+            "变量地址没有按访问宽度对齐",
+        )
+        .into(),
+        0x30..=0x37 => trf!("{} is NULL", "{}为空（NULL）", level(status - 0x30)),
+        other => trf!("undefined item status 0x{other:02X}", "未定义的条目状态 0x{other:02X}"),
     }
 }
 
@@ -216,10 +237,15 @@ impl Item {
     /// section 3.3.
     pub fn check(&self) -> Result<()> {
         if !matches!(self.size, 1 | 2 | 4 | 8) {
-            return Err(Error::usage(format!("访问宽度 {} 不是 1/2/4/8", self.size)));
+            return Err(Error::usage(trf!(
+                "Access width {} is not 1/2/4/8",
+                "访问宽度 {} 不是 1/2/4/8",
+                self.size
+            )));
         }
         if self.derefs.len() > MAX_DEPTH {
-            return Err(Error::usage(format!(
+            return Err(Error::usage(trf!(
+                "{} pointer levels needed, the probe supports at most {MAX_DEPTH}",
                 "要经过 {} 级指针，探针最多支持 {MAX_DEPTH} 级",
                 self.derefs.len()
             )));
@@ -258,12 +284,14 @@ impl SubItem {
 
 fn check_header(resp: &[u8], cmd: u8) -> Result<u8> {
     if resp.len() == 1 && resp[0] == 0xFF {
-        return Err(Error::protocol(format!(
+        return Err(Error::protocol(trf!(
+            "The probe does not support command 0x{cmd:02X} (it answered FF): the firmware has no vendor extension, or it is sampling",
             "探针不支持命令 0x{cmd:02X}（回了 FF）：固件没有厂商扩展，或正在采样"
         )));
     }
     if resp.len() < 2 || resp[0] != cmd {
-        return Err(Error::protocol(format!(
+        return Err(Error::protocol(trf!(
+            "Response of command 0x{cmd:02X} is malformed: {}",
             "命令 0x{cmd:02X} 的响应格式不对：{}",
             hex(resp)
         )));
@@ -338,7 +366,12 @@ impl VendorInfo {
     ///
     /// Names of the feature bits set in `features` (bit0 to bit3 only).
     pub fn feature_names(&self) -> Vec<&'static str> {
-        let names = ["READ", "WRITE", "采样", "8 字节访问"];
+        let names = [
+            "READ",
+            "WRITE",
+            tr("sampling", "采样"),
+            tr("8-byte access", "8 字节访问"),
+        ];
         (0..4)
             .filter(|i| self.features & (1 << i) != 0)
             .map(|i| names[i])
@@ -363,14 +396,23 @@ pub fn parse_info(resp: &[u8]) -> Result<VendorInfo> {
     match resp.get(2) {
         Some(&PROTOCOL_VERSION) => {}
         Some(v) => {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "The probe's vendor extension is protocol version {v}, this version of xrdap needs version {PROTOCOL_VERSION}; please update the probe firmware",
                 "探针的厂商扩展是协议版本 {v}，这个版本的 xrdap 需要版本 {PROTOCOL_VERSION}，请升级探针固件"
             )))
         }
-        None => return Err(Error::protocol(format!("INFO 响应太短：{}", hex(resp)))),
+        None => return Err(Error::protocol(trf!(
+            "INFO response is too short: {}",
+            "INFO 响应太短：{}",
+            hex(resp)
+        ))),
     }
     if resp.len() < 22 {
-        return Err(Error::protocol(format!("INFO 响应太短：{}", hex(resp))));
+        return Err(Error::protocol(trf!(
+            "INFO response is too short: {}",
+            "INFO 响应太短：{}",
+            hex(resp)
+        )));
     }
     Ok(VendorInfo {
         version: resp[2],
@@ -427,7 +469,8 @@ pub fn read_response_len(items: &[Item]) -> usize {
 pub fn parse_read(resp: &[u8], items: &[Item]) -> Result<Vec<ItemResult>> {
     require_ok(resp, CMD_READ)?;
     if resp.len() < 3 || resp[2] as usize != items.len() {
-        return Err(Error::protocol(format!(
+        return Err(Error::protocol(trf!(
+            "READ response has the wrong item count: {}",
             "READ 响应的条目数不对：{}",
             hex(resp)
         )));
@@ -437,11 +480,16 @@ pub fn parse_read(resp: &[u8], items: &[Item]) -> Result<Vec<ItemResult>> {
     for it in items {
         let size = it.size as usize;
         if resp.len() < pos + 3 + size {
-            return Err(Error::protocol(format!("READ 响应太短：{}", hex(resp))));
+            return Err(Error::protocol(trf!(
+                "READ response is too short: {}",
+                "READ 响应太短：{}",
+                hex(resp)
+            )));
         }
         let id = le_u16(resp, pos);
         if id != it.id {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "READ response has item id {id}, expected {}",
                 "READ 响应的条目 id 是 {id}，应为 {}",
                 it.id
             )));
@@ -474,7 +522,8 @@ pub fn write_request(items: &[(Item, Vec<u8>)]) -> Vec<u8> {
 pub fn parse_write(resp: &[u8], items: &[(Item, Vec<u8>)]) -> Result<Vec<ItemResult>> {
     require_ok(resp, CMD_WRITE)?;
     if resp.len() != 3 + 3 * items.len() || resp[2] as usize != items.len() {
-        return Err(Error::protocol(format!(
+        return Err(Error::protocol(trf!(
+            "WRITE response is malformed: {}",
             "WRITE 响应格式不对：{}",
             hex(resp)
         )));
@@ -586,7 +635,11 @@ pub fn parse_sub_read(resp: &[u8]) -> Result<SubRead> {
         status => return Err(status_error(CMD_SUB_READ, status)),
     };
     if resp.len() < SUB_READ_HEADER {
-        return Err(Error::protocol(format!("SUB_READ 响应太短：{}", hex(resp))));
+        return Err(Error::protocol(trf!(
+            "SUB_READ response is too short: {}",
+            "SUB_READ 响应太短：{}",
+            hex(resp)
+        )));
     }
     Ok(SubRead {
         sampling,
@@ -652,7 +705,7 @@ pub fn decode_frames(
     let mut pos = 0;
     let mut frames: Vec<Frame> = Vec::with_capacity(count as usize);
     for n in 0..count {
-        let short = || Error::protocol(format!("第 {n} 帧不完整"));
+        let short = || Error::protocol(trf!("Frame {n} is incomplete", "第 {n} 帧不完整"));
         let (tick, timestamp_us, has_bitmap) = match frames.last() {
             Some(prev) if compact => {
                 let h = varint(raw, &mut pos).ok_or_else(short)?;
@@ -678,7 +731,8 @@ pub fn decode_frames(
         let bitmap_len = if has_bitmap { due.len().div_ceil(8) } else { 0 };
         let values_len: usize = due.iter().map(|&i| items[i].item.size as usize).sum();
         if due.is_empty() || raw.len() < pos + bitmap_len + values_len {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "The length of frame {n} (k={tick}) does not match the item table",
                 "第 {n} 帧（k={tick}）长度与条目表对不上"
             )));
         }
@@ -706,7 +760,8 @@ pub fn decode_frames(
         });
     }
     if pos != raw.len() {
-        return Err(Error::protocol(format!(
+        return Err(Error::protocol(trf!(
+            "{} bytes left over after decoding the frames",
             "帧解码后多出 {} 字节",
             raw.len() - pos
         )));
@@ -806,6 +861,7 @@ mod tests {
     /// 协议文档 3.8 的 INFO 例子（版本 2）；版本 1 的探针不用。
     #[test]
     fn info_example() {
+        crate::lang::set_chinese(true);
         let info = parse_info(&unhex(
             "80 00 02 7F000000 2000 08 00400000 40420F0000000000",
         ))
@@ -843,6 +899,7 @@ mod tests {
 
     #[test]
     fn read_example() {
+        crate::lang::set_chinese(true);
         let item = Item {
             ap: 0,
             id: 1,

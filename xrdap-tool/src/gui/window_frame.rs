@@ -8,6 +8,7 @@ use eframe::egui::{
 };
 
 use super::theme::Palette;
+use xrdap::lang::tr;
 
 /// 窗口边缘可以按住改变大小的宽度。
 const EDGE: f32 = 5.0;
@@ -59,19 +60,19 @@ enum Glyph {
 /// 最小化、最大化（或还原）、关闭三个按钮。在从右到左的布局中调用，关闭在最右。
 pub(super) fn window_buttons(ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
-    if button(ui, Glyph::Close, "关闭").clicked() {
+    if button(ui, Glyph::Close, tr("Close", "关闭")).clicked() {
         ctx.send_viewport_cmd(ViewportCommand::Close);
     }
     let max = maximized(&ctx);
     let (glyph, tip) = if max {
-        (Glyph::Restore, "还原")
+        (Glyph::Restore, tr("Restore", "还原"))
     } else {
-        (Glyph::Maximize, "最大化")
+        (Glyph::Maximize, tr("Maximize", "最大化"))
     };
     if button(ui, glyph, tip).clicked() {
         ctx.send_viewport_cmd(ViewportCommand::Maximized(!max));
     }
-    if button(ui, Glyph::Minimize, "最小化").clicked() {
+    if button(ui, Glyph::Minimize, tr("Minimize", "最小化")).clicked() {
         ctx.send_viewport_cmd(ViewportCommand::Minimized(true));
     }
 }
