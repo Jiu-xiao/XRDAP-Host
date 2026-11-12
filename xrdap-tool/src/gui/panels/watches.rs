@@ -18,6 +18,18 @@ impl App {
         let row_h = ui.spacing().interact_size.y + 2.0;
         let watches = &mut self.watches;
         let max_h = ui.available_height();
+        // 后三列的宽度：当前值（初始宽度）、输入框、输入框加“写入”按钮、“删除”按钮和备注的最小宽度。
+        // 两个按钮的文字要完整显示，多出来的宽度由当前值一列和英文的输入框让出，
+        // 整张表的最小宽度和按钮文字被截断时一样
+        // Widths of the last three columns: the value (initial width), the field, the field with
+        // its Write button, and the minimum for the Delete button and the note. Both button texts
+        // show in full; the value column and, in English, the field give up the width for that, so
+        // the table's minimum width is what it was when the button texts were truncated
+        let (value_w, field_w, write_w, delete_w) = if xrdap::lang::chinese() {
+            (140.0, 90.0, 148.0, 52.0)
+        } else {
+            (126.0, 76.0, 146.0, 68.0)
+        };
         TableBuilder::new(ui)
             .id_salt("watches")
             .striped(true)
@@ -30,9 +42,9 @@ impl App {
             .column(Column::initial(70.0).at_least(40.0).clip(true))
             .column(Column::exact(50.0))
             .column(Column::exact(44.0))
-            .column(Column::initial(170.0).at_least(60.0).clip(true))
-            .column(Column::exact(130.0))
-            .column(Column::remainder().at_least(40.0).clip(true))
+            .column(Column::initial(value_w).at_least(60.0).clip(true))
+            .column(Column::exact(write_w))
+            .column(Column::remainder().at_least(delete_w).clip(true))
             .header(row_h, |mut h| {
                 for title in [
                     "",
@@ -120,16 +132,27 @@ impl App {
                         let r = ui.add(
                             egui::TextEdit::singleline(&mut w.write_text)
                                 .id_salt(("write", w.id))
-                                .desired_width(90.0),
+                                .desired_width(field_w),
                         );
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.small_button(tr("Write", "写入")).clicked() || enter {
+                        // 这个单元格里的按钮文字默认会被截成省略号（和列宽无关），所以指定完整显示
+                        // A button's text in this cell is truncated to an ellipsis by default, whatever
+                        // the column width, so it is told to show in full
+                        let write = egui::Button::new(tr("Write", "写入"))
+                            .small()
+                            .wrap_mode(egui::TextWrapMode::Extend);
+                        if ui.add(write).clicked() || enter {
                             writes.push(i);
                         }
                     });
                     row.col(|ui| {
                         if ui
-                            .add_enabled(!frozen, egui::Button::new(tr("Delete", "删除")).small())
+                            .add_enabled(
+                                !frozen,
+                                egui::Button::new(tr("Delete", "删除"))
+                                    .small()
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                            )
                             .on_hover_text(tr("Remove", "移除"))
                             .clicked()
                         {
