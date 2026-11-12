@@ -4,6 +4,8 @@
 
 XRDAP-Host 是 XR-DAP 系列调试探针（[XRDAP-ESP](https://github.com/Jiu-xiao/XRDAP-ESP)、[XRDAP-F103C8](https://github.com/Jiu-xiao/XRDAP-F103C8)、[XRDAP-CH32](https://github.com/Jiu-xiao/XRDAP-CH32)）的电脑端工具 `xrdap`，支持 Windows 和 Linux。`xrdap` 按变量名读写目标 MCU 的内存，让探针按固定周期采样变量，实时绘制曲线并导出 CSV，变量的地址和类型取自 ELF 中的调试信息；它还把探针共享给 Keil、pyOCD、probe-rs 和 OpenOCD，控制目标内核，配置探针的 Wi-Fi。工具是一个可执行文件：不带参数运行时打开图形界面，带命令运行时作为命令行工具。
 
+XR-DAP 系列的介绍视频见 [Bilibili](https://www.bilibili.com/video/BV17oWx6YEde/)。
+
 这些功能也以 Rust 库 `xrdap` 的形式提供给其他程序调用，见 [xrdap/README.md](xrdap/README.md)。探针与电脑之间的协议见 XRDAP-Core 的 [`docs/protocol.md`](https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md)；`xrdap` 使用其中协议版本 2 的 XR 厂商扩展，探针固件报告其他版本时提示升级固件。
 
 ## 下载
