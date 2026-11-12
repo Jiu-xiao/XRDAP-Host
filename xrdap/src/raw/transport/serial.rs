@@ -17,11 +17,12 @@ use std::time::{Duration, Instant};
 use serialport::{ClearBuffer, FlowControl, SerialPort};
 
 use super::Transport;
+use crate::lang::tr;
 use crate::raw::frame::{
     crc32, dap_from_payload, serial_control_frame, serial_request_frame, FrameParser,
     CTRL_RESP_TOPIC,
 };
-use crate::{Error, Result};
+use crate::{trf, Error, Result};
 
 /// 串口探针固件的波特率。
 ///
@@ -37,7 +38,7 @@ pub const SAFE_BAUD: u32 = 921_600;
 /// Serial port names on this system, sorted (COMx on Windows, /dev/ttyXXX on Linux).
 pub fn available_ports() -> Result<Vec<String>> {
     let mut ports: Vec<String> = serialport::available_ports()
-        .map_err(|e| Error::Io(format!("列串口失败：{e}")))?
+        .map_err(|e| Error::Io(trf!("Listing serial ports failed: {e}", "列串口失败：{e}")))?
         .into_iter()
         .map(|p| p.port_name)
         .collect();
@@ -66,14 +67,19 @@ impl SerialTransport {
             .dtr_on_open(false)
             .timeout(Duration::from_millis(100))
             .open()
-            .map_err(|e| Error::Io(format!("打不开 {name}：{e}")))?;
+            .map_err(|e| Error::Io(trf!("Cannot open {name}: {e}", "打不开 {name}：{e}")))?;
         Self::with_port(port, name)
     }
 
     /// 在已经打开的端口上建立传输：先把 DTR、RTS 都撤销（Linux 打开 tty 时内核会置位它们），
     /// 再丢掉接收缓冲里的旧数据。
     fn with_port(mut port: Box<dyn SerialPort>, name: &str) -> Result<Self> {
-        let err = |e: serialport::Error| Error::Io(format!("设置串口 {name} 失败：{e}"));
+        let err = |e: serialport::Error| {
+            Error::Io(trf!(
+                "Setting up serial port {name} failed: {e}",
+                "设置串口 {name} 失败：{e}"
+            ))
+        };
         port.write_data_terminal_ready(false).map_err(err)?;
         port.write_request_to_send(false).map_err(err)?;
         port.clear(ClearBuffer::Input).map_err(err)?;
@@ -91,7 +97,7 @@ impl Transport for SerialTransport {
         self.port
             .write_all(&serial_request_frame(request))
             .and_then(|()| self.port.flush())
-            .map_err(|e| Error::Io(format!("串口写失败：{e}")))
+            .map_err(|e| Error::Io(trf!("Serial write failed: {e}", "串口写失败：{e}")))
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<Vec<u8>> {
@@ -108,21 +114,35 @@ impl Transport for SerialTransport {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(Error::Timeout("等待串口响应超时".into()));
+                return Err(Error::Timeout(
+                    tr(
+                        "Timed out waiting for a serial response",
+                        "等待串口响应超时",
+                    )
+                    .into(),
+                ));
             }
-            self.port
-                .set_timeout(left)
-                .map_err(|e| Error::Io(format!("设置串口超时失败：{e}")))?;
+            self.port.set_timeout(left).map_err(|e| {
+                Error::Io(trf!(
+                    "Setting the serial timeout failed: {e}",
+                    "设置串口超时失败：{e}"
+                ))
+            })?;
             match self.port.read(&mut chunk) {
                 Ok(n) => self.ready.extend(self.parser.feed(&chunk[..n])),
                 Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::Interrupted) => {}
-                Err(e) => return Err(Error::Io(format!("串口读失败：{e}"))),
+                Err(e) => {
+                    return Err(Error::Io(trf!(
+                        "Serial read failed: {e}",
+                        "串口读失败：{e}"
+                    )))
+                }
             }
         }
     }
 
     fn describe(&self) -> String {
-        format!("串口 {}", self.name)
+        trf!("serial port {}", "串口 {}", self.name)
     }
 
     // 控制口:ctrl_req 帧,等 ctrl_resp 帧。一次只有一个请求在途,所以用一个只认 ctrl_resp 的
@@ -135,18 +155,27 @@ impl Transport for SerialTransport {
         self.port
             .write_all(&serial_control_frame(request))
             .and_then(|()| self.port.flush())
-            .map_err(|e| Error::Io(format!("串口写失败：{e}")))?;
+            .map_err(|e| Error::Io(trf!("Serial write failed: {e}", "串口写失败：{e}")))?;
         let mut parser = FrameParser::new(crc32(CTRL_RESP_TOPIC));
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut chunk = [0u8; 1024];
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(Error::Timeout("等待串口控制口应答超时".into()));
+                return Err(Error::Timeout(
+                    tr(
+                        "Timed out waiting for the control port answer on the serial port",
+                        "等待串口控制口应答超时",
+                    )
+                    .into(),
+                ));
             }
-            self.port
-                .set_timeout(left)
-                .map_err(|e| Error::Io(format!("设置串口超时失败：{e}")))?;
+            self.port.set_timeout(left).map_err(|e| {
+                Error::Io(trf!(
+                    "Setting the serial timeout failed: {e}",
+                    "设置串口超时失败：{e}"
+                ))
+            })?;
             match self.port.read(&mut chunk) {
                 Ok(n) => {
                     for payload in parser.feed(&chunk[..n]) {
@@ -156,7 +185,12 @@ impl Transport for SerialTransport {
                     }
                 }
                 Err(e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::Interrupted) => {}
-                Err(e) => return Err(Error::Io(format!("串口读失败：{e}"))),
+                Err(e) => {
+                    return Err(Error::Io(trf!(
+                        "Serial read failed: {e}",
+                        "串口读失败：{e}"
+                    )))
+                }
             }
         }
     }

@@ -99,7 +99,10 @@ const FALLBACK_WAIT: Duration = Duration::from_secs(2);
 
 /// 按 `bauds` 依次打开串口、等探针应答；最后一个波特率等满 `serial_wait`。
 fn open_serial(port: &str, bauds: &[u32], opts: &OpenOptions) -> Result<Probe> {
-    let mut last = Error::usage(format!("串口 {port} 没有可试的波特率"));
+    let mut last = Error::usage(crate::trf!(
+        "Serial port {port} has no baud rate to try",
+        "串口 {port} 没有可试的波特率"
+    ));
     for (i, &baud) in bauds.iter().enumerate() {
         let wait = if i + 1 == bauds.len() {
             opts.serial_wait
@@ -127,7 +130,12 @@ fn probes(opts: &OpenOptions) -> Vec<ProbeEntry> {
 }
 
 /// 自动选择和按序列号查找不打开的那部分串口
-const UNCHECKED: &str = "接在 USB 转串口芯片上的探针要直接指定串口";
+fn unchecked() -> &'static str {
+    crate::lang::tr(
+        "a probe behind a USB-serial chip has to be given by its serial port",
+        "接在 USB 转串口芯片上的探针要直接指定串口",
+    )
+}
 
 fn auto_addr(opts: &OpenOptions) -> Result<Addr> {
     // 只有一块 USB 探针时直接用，不用等局域网
@@ -137,10 +145,13 @@ fn auto_addr(opts: &OpenOptions) -> Result<Addr> {
     }
     match probes(opts).as_slice() {
         [one] => Ok(one.best().clone()),
-        [] => Err(Error::Select(format!(
-            "没有找到探针（USB、局域网、乐鑫 USB 串口都没有）；{UNCHECKED}"
+        [] => Err(Error::Select(crate::trf!(
+            "No probe found (none on USB, the LAN or Espressif USB serial ports); {}",
+            "没有找到探针（USB、局域网、乐鑫 USB 串口都没有）；{}",
+            unchecked()
         ))),
-        many => Err(Error::Select(format!(
+        many => Err(Error::Select(crate::trf!(
+            "Found {} probes: {}",
             "找到 {} 块探针：{}",
             many.len(),
             names(many)
@@ -153,10 +164,13 @@ fn addr_by_serial(sn: &str, opts: &OpenOptions) -> Result<Addr> {
     let hits: Vec<_> = probes.iter().filter(|p| p.matches(sn)).cloned().collect();
     match hits.as_slice() {
         [one] => Ok(one.best().clone()),
-        [] => Err(Error::Select(format!(
-            "没有找到序列号为 {sn} 的探针；{UNCHECKED}"
+        [] => Err(Error::Select(crate::trf!(
+            "No probe with serial number {sn} found; {}",
+            "没有找到序列号为 {sn} 的探针；{}",
+            unchecked()
         ))),
-        many => Err(Error::Select(format!(
+        many => Err(Error::Select(crate::trf!(
+            "Serial number {sn} matches {} probes: {}",
             "序列号 {sn} 对应 {} 块探针：{}",
             many.len(),
             names(many)
@@ -167,7 +181,14 @@ fn addr_by_serial(sn: &str, opts: &OpenOptions) -> Result<Addr> {
 fn names(probes: &[ProbeEntry]) -> String {
     probes
         .iter()
-        .map(|p| format!("{}（{}）", p.serial.as_deref().unwrap_or("?"), p.best()))
+        .map(|p| {
+            crate::trf!(
+                "{} ({})",
+                "{}（{}）",
+                p.serial.as_deref().unwrap_or("?"),
+                p.best()
+            )
+        })
         .collect::<Vec<_>>()
-        .join("，")
+        .join(crate::lang::tr(", ", "，"))
 }

@@ -212,12 +212,14 @@ impl Chip {
     /// Chip name for people.
     pub fn name(self) -> &'static str {
         match self {
-            Chip::EspressifUsb => "乐鑫 USB Serial/JTAG",
+            Chip::EspressifUsb => {
+                crate::lang::tr("Espressif USB Serial/JTAG", "乐鑫 USB Serial/JTAG")
+            }
             Chip::WchFast => "WCH CH34x",
             Chip::WchSlow => "WCH CH340/CH341",
             Chip::SiliconLabs => "Silicon Labs CP210x",
             Chip::Ftdi => "FTDI",
-            Chip::Other => "其他",
+            Chip::Other => crate::lang::tr("other", "其他"),
         }
     }
 }
@@ -341,7 +343,11 @@ fn serial_by_descriptor(ports: &[SerialPortInfo]) -> Vec<Found> {
                 addr: Addr::Serial {
                     port: p.port.clone(),
                 },
-                note: Some(format!("{}，按 USB 描述符识别", p.chip.name())),
+                note: Some(crate::trf!(
+                    "{}, recognized by its USB descriptors",
+                    "{}，按 USB 描述符识别",
+                    p.chip.name()
+                )),
             })
         })
         .collect()
@@ -356,7 +362,7 @@ pub(crate) const MDNS_SERVICE: &str = "_xrdap._tcp.local.";
 ///
 /// Probes advertised over mDNS on the LAN, browsing for `time`.
 pub(crate) fn mdns(time: Duration) -> Result<Vec<Found>> {
-    let err = |e: mdns_sd::Error| crate::Error::Io(format!("mDNS：{e}"));
+    let err = |e: mdns_sd::Error| crate::Error::Io(crate::trf!("mDNS: {e}", "mDNS：{e}"));
     let daemon = mdns_sd::ServiceDaemon::new().map_err(err)?;
     let rx = daemon.browse(MDNS_SERVICE).map_err(err)?;
     let deadline = Instant::now() + time;

@@ -19,7 +19,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(ssid) => {
             let password = args.next().unwrap_or_default();
             probe.wifi_set(&ssid, &password)?;
-            println!("已保存，探针重启后连接 {ssid}");
+            println!(
+                "{}",
+                xrdap::trf!(
+                    "Saved; the probe restarts and joins {ssid}",
+                    "已保存，探针重启后连接 {ssid}"
+                )
+            );
         }
     }
     Ok(())

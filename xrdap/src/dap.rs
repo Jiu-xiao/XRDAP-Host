@@ -13,8 +13,9 @@ use crate::raw::vendor::wifi::{self, WifiStatus};
 ///
 /// INFO feature bit 5: the probe has a control port.
 const FEATURE_CONTROL: u32 = 1 << 5;
+use crate::lang::tr;
 use crate::raw::vendor::{self, Item, ItemResult, SubItem, SubRead, VendorInfo};
-use crate::{Error, Result};
+use crate::{trf, Error, Result};
 
 /// DAP_Info 项：厂商名。
 ///
@@ -79,10 +80,16 @@ pub fn parse_clock(s: &str) -> Result<u32> {
         .parse()
         .ok()
         .filter(|v: &f64| v.is_finite())
-        .ok_or_else(|| Error::usage(format!("时钟 {s} 写得不对，例如 4M、500k")))?;
+        .ok_or_else(|| {
+            Error::usage(trf!(
+                "Clock {s} is not valid, e.g. 4M, 500k",
+                "时钟 {s} 写得不对，例如 4M、500k"
+            ))
+        })?;
     let hz = (v * scale).round();
     if !(1.0..=100e6).contains(&hz) {
-        return Err(Error::usage(format!(
+        return Err(Error::usage(trf!(
+            "Clock {s} is out of range (1 Hz to 100 MHz)",
             "时钟 {s} 超出范围（1 Hz 到 100 MHz）"
         )));
     }
@@ -112,9 +119,10 @@ impl TargetInfo {
         let who = if designer == 0x23B {
             "ARM"
         } else {
-            "其他厂商"
+            tr("other vendor", "其他厂商")
         };
-        format!(
+        trf!(
+            "DPIDR 0x{d:08X} ({who}, designer code 0x{designer:03X}, DPv{version}, part number 0x{partno:02X})",
             "DPIDR 0x{d:08X}（{who}，设计者代码 0x{designer:03X}，DPv{version}，部件号 0x{partno:02X}）"
         )
     }
@@ -295,7 +303,10 @@ impl Probe {
     /// (DAP_TransferAbort) returns an empty packet right after sending, without waiting.
     pub fn xfer(&mut self, request: &[u8]) -> Result<Vec<u8>> {
         let Some(&cmd) = request.first() else {
-            return Err(Error::usage("DAP 请求不能是空的"));
+            return Err(Error::usage(tr(
+                "A DAP request cannot be empty",
+                "DAP 请求不能是空的",
+            )));
         };
         if self.stale {
             self.drain();
@@ -324,7 +335,10 @@ impl Probe {
     /// queued packets run.
     pub(crate) fn forward_send(&mut self, request: &[u8]) -> Result<()> {
         let Some(&cmd) = request.first() else {
-            return Err(Error::usage("DAP 请求不能是空的"));
+            return Err(Error::usage(tr(
+                "A DAP request cannot be empty",
+                "DAP 请求不能是空的",
+            )));
         };
         if self.stale && self.pending.is_empty() && self.queued == 0 {
             self.drain();
@@ -362,7 +376,7 @@ impl Probe {
     /// disconnect) the other answers in flight are given up.
     pub(crate) fn forward_recv(&mut self) -> Result<Vec<u8>> {
         let Some(cmd) = self.pending.pop_front() else {
-            return Err(Error::usage("没有在等的应答"));
+            return Err(Error::usage(tr("No answer is pending", "没有在等的应答")));
         };
         self.recv_answer(cmd)
             .inspect_err(|_| self.forward_abandon())
@@ -427,7 +441,10 @@ impl Probe {
             match self.dap_info(ID_PACKET_SIZE) {
                 Ok(_) => break Ok(()),
                 Err(e) if Instant::now() >= deadline => {
-                    break Err(Error::Timeout(format!("探针没有应答：{e}")))
+                    break Err(Error::Timeout(trf!(
+                        "The probe did not answer: {e}",
+                        "探针没有应答：{e}"
+                    )))
                 }
                 Err(_) => {}
             }
@@ -444,14 +461,16 @@ impl Probe {
     pub fn dap_info(&mut self, id: u8) -> Result<Vec<u8>> {
         let resp = self.xfer(&[0x00, id])?;
         if resp.len() < 2 || resp[0] != 0x00 {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "DAP_Info(0x{id:02X}) response is malformed: {}",
                 "DAP_Info(0x{id:02X}) 响应格式不对：{}",
                 vendor::hex(&resp)
             )));
         }
         let len = resp[1] as usize;
         if resp.len() < 2 + len {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "DAP_Info(0x{id:02X}) response is too short: {}",
                 "DAP_Info(0x{id:02X}) 响应太短：{}",
                 vendor::hex(&resp)
             )));
@@ -490,11 +509,17 @@ impl Probe {
     pub fn query_packet_size(&mut self) -> Result<usize> {
         let data = self.dap_info(ID_PACKET_SIZE)?;
         if data.len() < 2 {
-            return Err(Error::protocol("DAP_Info(包长) 响应太短"));
+            return Err(Error::protocol(tr(
+                "DAP_Info(packet size) response is too short",
+                "DAP_Info(包长) 响应太短",
+            )));
         }
         let size = u16::from_le_bytes([data[0], data[1]]) as usize;
         if size < 64 {
-            return Err(Error::protocol(format!("探针报告的包长 {size} 不合理")));
+            return Err(Error::protocol(trf!(
+                "The probe reports an implausible packet size {size}",
+                "探针报告的包长 {size} 不合理"
+            )));
         }
         self.packet_size = size;
         self.t.set_packet_size(size);
@@ -508,12 +533,14 @@ impl Probe {
     fn simple(&mut self, request: &[u8], what: &str) -> Result<Vec<u8>> {
         let resp = self.xfer(request)?;
         if resp == [DAP_INVALID] {
-            return Err(Error::Busy(format!(
+            return Err(Error::Busy(trf!(
+                "{what}: the probe is sampling and accepts only DAP_Info and vendor commands while sampling",
                 "{what}：探针正在采样，采样期间只接受 DAP_Info 和厂商命令"
             )));
         }
         if resp.first() != Some(&request[0]) {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "{what} response is malformed: {}",
                 "{what} 的响应格式不对：{}",
                 vendor::hex(&resp)
             )));
@@ -524,7 +551,8 @@ impl Probe {
     fn expect_ok(&mut self, request: &[u8], what: &str) -> Result<()> {
         let resp = self.simple(request, what)?;
         if resp.get(1) != Some(&0x00) {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "{what} failed: {}",
                 "{what} 失败：{}",
                 vendor::hex(&resp)
             )));
@@ -540,7 +568,8 @@ impl Probe {
         }
         let resp = self.simple(&req, what)?;
         if resp.len() < 3 {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "{what} response is too short: {}",
                 "{what} 的响应太短：{}",
                 vendor::hex(&resp)
             )));
@@ -550,10 +579,14 @@ impl Probe {
             let reason = match ack {
                 2 => "WAIT",
                 4 => "FAULT",
-                7 => "没有应答（检查接线、目标供电）",
-                _ => "错误",
+                7 => tr(
+                    "no answer (check the wiring and the target's power)",
+                    "没有应答（检查接线、目标供电）",
+                ),
+                _ => tr("error", "错误"),
             };
-            return Err(Error::Target(format!(
+            return Err(Error::Target(trf!(
+                "{what} failed: SWD ACK {reason} (response {})",
                 "{what} 失败：SWD 应答 {reason}（响应 {}）",
                 vendor::hex(&resp)
             )));
@@ -562,7 +595,8 @@ impl Probe {
             return Ok(0);
         }
         if resp.len() < 7 {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "{what} response is too short: {}",
                 "{what} 的响应太短：{}",
                 vendor::hex(&resp)
             )));
@@ -594,7 +628,8 @@ impl Probe {
         self.query_packet_size()?;
         let resp = self.simple(&[0x02, 0x01], "DAP_Connect")?;
         if resp.get(1) != Some(&0x01) {
-            return Err(Error::protocol(format!(
+            return Err(Error::protocol(trf!(
+                "DAP_Connect(SWD) failed: {}",
                 "DAP_Connect(SWD) 失败：{}",
                 vendor::hex(&resp)
             )));
@@ -614,24 +649,33 @@ impl Probe {
         self.expect_ok(&seq, "DAP_SWJ_Sequence")?;
         self.expect_ok(&[0x12, 8, 0x00], "DAP_SWJ_Sequence")?;
         // 线复位后第一个 DP 访问必须是读 DPIDR
-        let dpidr = self.dp_transfer(DP_READ_DPIDR, None, "读 DPIDR")?;
+        let dpidr = self.dp_transfer(DP_READ_DPIDR, None, tr("Reading DPIDR", "读 DPIDR"))?;
         let mut abort = vec![0x08, 0x00];
         abort.extend_from_slice(&0x1Eu32.to_le_bytes());
         self.expect_ok(&abort, "DAP_WriteABORT")?;
-        self.dp_transfer(DP_WRITE_SELECT, Some(0), "写 DP SELECT")?;
+        self.dp_transfer(
+            DP_WRITE_SELECT,
+            Some(0),
+            tr("Writing DP SELECT", "写 DP SELECT"),
+        )?;
         self.dp_transfer(
             DP_WRITE_CTRL_STAT,
             Some(CSYSPWRUPREQ | CDBGPWRUPREQ),
-            "写 CTRL/STAT",
+            tr("Writing CTRL/STAT", "写 CTRL/STAT"),
         )?;
         let deadline = Instant::now() + Duration::from_secs(1);
         loop {
-            let cs = self.dp_transfer(DP_READ_CTRL_STAT, None, "读 CTRL/STAT")?;
+            let cs = self.dp_transfer(
+                DP_READ_CTRL_STAT,
+                None,
+                tr("Reading CTRL/STAT", "读 CTRL/STAT"),
+            )?;
             if cs & (CSYSPWRUPACK | CDBGPWRUPACK) == CSYSPWRUPACK | CDBGPWRUPACK {
                 break;
             }
             if Instant::now() > deadline {
-                return Err(Error::Target(format!(
+                return Err(Error::Target(trf!(
+                    "The debug power-up was not acknowledged (CTRL/STAT 0x{cs:08X})",
                     "调试域上电没有应答（CTRL/STAT 0x{cs:08X}）"
                 )));
             }
@@ -696,7 +740,8 @@ impl Probe {
         for (item, value) in items {
             item.check()?;
             if value.len() != item.size as usize {
-                return Err(Error::usage(format!(
+                return Err(Error::usage(trf!(
+                    "Item {} has a value of {} bytes, but the access width is {}",
                     "条目 {} 的值有 {} 字节，访问宽度是 {}",
                     item.id,
                     value.len(),
@@ -715,7 +760,10 @@ impl Probe {
         for r in self.chunks(items, |p| req_len(p).max(3 + 3 * p.len())) {
             let part = &items[r];
             if req_len(part) > packet {
-                return Err(Error::usage("一个写入条目放不进一个 DAP 包"));
+                return Err(Error::usage(tr(
+                    "One write item does not fit into a DAP packet",
+                    "一个写入条目放不进一个 DAP 包",
+                )));
             }
             let resp = self.xfer(&vendor::write_request(part))?;
             out.extend(vendor::parse_write(&resp, part)?);
@@ -731,7 +779,7 @@ impl Probe {
         let r = r
             .into_iter()
             .next()
-            .ok_or_else(|| Error::protocol("READ 没有返回结果"))?;
+            .ok_or_else(|| Error::protocol(tr("READ returned no result", "READ 没有返回结果")))?;
         match r.status {
             vendor::STATUS_OK => Ok(r.value),
             status => Err(item_error(item, status)),
@@ -746,7 +794,7 @@ impl Probe {
         let r = r
             .into_iter()
             .next()
-            .ok_or_else(|| Error::protocol("WRITE 没有返回结果"))?;
+            .ok_or_else(|| Error::protocol(tr("WRITE returned no result", "WRITE 没有返回结果")))?;
         match r.status {
             vendor::STATUS_OK => Ok(()),
             status => Err(item_error(item, status)),
@@ -808,7 +856,8 @@ impl Probe {
 fn item_error(item: &Item, status: u8) -> Error {
     Error::Item {
         status,
-        text: format!(
+        text: trf!(
+            "Item at 0x{:08X}: {}",
             "0x{:08X} 处的条目：{}",
             item.base,
             vendor::item_status_text(status, &[])
@@ -998,6 +1047,7 @@ mod tests {
 
     #[test]
     fn clock_strings() {
+        crate::lang::set_chinese(true);
         assert_eq!(parse_clock("4M").unwrap(), 4_000_000);
         assert_eq!(parse_clock("500k").unwrap(), 500_000);
         assert_eq!(parse_clock("1.5MHz").unwrap(), 1_500_000);

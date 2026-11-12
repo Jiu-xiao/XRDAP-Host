@@ -2,6 +2,8 @@
 
 use eframe::egui::{self, RichText};
 use xrdap::cortex::CoreState;
+use xrdap::lang::tr;
+use xrdap::trf;
 
 use crate::gui::app::App;
 use crate::gui::model::Csv;
@@ -16,12 +18,12 @@ impl App {
         let period_us = match xrdap::watch::parse_period(&self.period) {
             Ok(p) => p,
             Err(e) => {
-                self.log(format!("周期：{e}"));
+                self.log(trf!("Period: {e}", "周期：{e}"));
                 return;
             }
         };
         if self.watches.is_empty() {
-            self.log("监视表是空的".into());
+            self.log(tr("The watch table is empty", "监视表是空的").into());
             return;
         }
         self.run_ids = self.watches.iter().map(|w| w.id).collect();
@@ -64,7 +66,7 @@ impl App {
                 .filter_map(|id| self.watches.iter().find(|w| w.id == *id))
                 .map(|w| w.target.name.as_str()),
         );
-        self.log(format!("开始录制 {}", path.display()));
+        self.log(trf!("Recording to {}", "开始录制 {}", path.display()));
         self.csv = Some(Csv::start(&path, line, start_unix_us));
     }
 
@@ -72,8 +74,16 @@ impl App {
         if let Some(c) = self.csv.take() {
             let path = c.path.clone();
             match c.finish() {
-                Ok(rows) => self.log(format!("录制结束：{}，{rows} 行", path.display())),
-                Err(e) => self.log(format!("写 {} 失败：{e}", path.display())),
+                Ok(rows) => self.log(trf!(
+                    "Recording ended: {}, {rows} rows",
+                    "录制结束：{}，{rows} 行",
+                    path.display()
+                )),
+                Err(e) => self.log(trf!(
+                    "Writing {} failed: {e}",
+                    "写 {} 失败：{e}",
+                    path.display()
+                )),
             }
         }
     }
@@ -81,15 +91,21 @@ impl App {
     /// 现在不能开始采样的原因（按钮保持可点，点了说明原因）。
     fn why_not_start(&self) -> &'static str {
         if !self.connected {
-            "还没有连接探针"
+            tr("No probe connected yet", "还没有连接探针")
         } else if self.share.is_some() {
-            "探针正在共享给别的调试工具，先停止共享"
+            tr(
+                "The probe is shared with another debug tool; stop sharing first",
+                "探针正在共享给别的调试工具，先停止共享",
+            )
         } else if self.elf_loading.is_some() {
-            "ELF 还在读取"
+            tr("The ELF is still loading", "ELF 还在读取")
         } else if self.watches.is_empty() {
-            "监视表是空的，先添加变量"
+            tr(
+                "The watch table is empty; add variables first",
+                "监视表是空的，先添加变量",
+            )
         } else {
-            "正在开始采样"
+            tr("Sampling is starting", "正在开始采样")
         }
     }
 
@@ -101,14 +117,14 @@ impl App {
         let mut csv_off = false;
         let mut clear = false;
         ui.horizontal_wrapped(|ui| {
-            ui.label("周期");
+            ui.label(tr("Period", "周期"));
             ui.add_enabled(
                 !self.sampling && !self.starting,
                 egui::TextEdit::singleline(&mut self.period).desired_width(70.0),
             )
-            .on_hover_text("例如 1000（µs）、500us、2ms");
+            .on_hover_text(tr("e.g. 1000 (µs), 500us, 2ms", "例如 1000（µs）、500us、2ms"));
             if self.sampling {
-                if ui.button("停止采样").clicked() {
+                if ui.button(tr("Stop sampling", "停止采样")).clicked() {
                     self.send(Cmd::Stop);
                 }
             } else {
@@ -119,9 +135,9 @@ impl App {
                     && self.elf_loading.is_none();
                 // 连上探针以后，“开始采样”是窗口里唯一的主按钮；还不能开始时点了说明原因
                 start = if self.usable() {
-                    theme::primary_button(ui, "开始采样").clicked()
+                    theme::primary_button(ui, tr("Start sampling", "开始采样")).clicked()
                 } else {
-                    ui.button("开始采样").clicked()
+                    ui.button(tr("Start sampling", "开始采样")).clicked()
                 };
                 if start && !can {
                     start = false;
@@ -132,23 +148,29 @@ impl App {
                 ui.add(egui::Spinner::new());
             }
             ui.add_enabled_ui(!self.sampling, |ui| {
-                ui.checkbox(&mut self.stop_on_full, "缓冲满时丢新帧")
-                    .on_hover_text("默认覆盖最旧的帧");
+                ui.checkbox(
+                    &mut self.stop_on_full,
+                    tr("Drop new frames when full", "缓冲满时丢新帧"),
+                )
+                .on_hover_text(tr(
+                    "By default the oldest frame is overwritten",
+                    "默认覆盖最旧的帧",
+                ));
             });
             read = ui
-                .add_enabled(self.usable(), egui::Button::new("读一次"))
+                .add_enabled(self.usable(), egui::Button::new(tr("Read once", "读一次")))
                 .clicked();
             ui.separator();
             if let Some(c) = &self.csv {
-                csv_off = ui.button("停止录制").clicked();
-                ui.label(format!("录制中 {} 行", c.rows));
+                csv_off = ui.button(tr("Stop recording", "停止录制")).clicked();
+                ui.label(trf!("Recording, {} rows", "录制中 {} 行", c.rows));
             } else {
                 csv_on = ui
-                    .add_enabled(self.sampling, egui::Button::new("录制 CSV…"))
+                    .add_enabled(self.sampling, egui::Button::new(tr("Record CSV…", "录制 CSV…")))
                     .clicked();
             }
             ui.separator();
-            ui.label("窗口");
+            ui.label(tr("Window", "窗口"));
             egui::ComboBox::from_id_salt("window")
                 .selected_text(format!("{} s", self.window_s))
                 .width(70.0)
@@ -157,15 +179,22 @@ impl App {
                         ui.selectable_value(&mut self.window_s, w, format!("{w} s"));
                     }
                 });
-            ui.toggle_value(&mut self.plot.normalize, "归一化")
-                .on_hover_text(
+            ui.toggle_value(&mut self.plot.normalize, tr("Normalize", "归一化"))
+                .on_hover_text(tr(
+                    "Scales each curve by its minimum and maximum in the window to the same height, to compare variables of very different magnitude",
                     "每条曲线按窗口里的最小、最大值缩放到同一高度，方便比较量级差很多的变量",
-                );
-            ui.toggle_value(&mut self.paused, "暂停跟随")
-                .on_hover_text("暂停后可以拖动、缩放；数据照常接收");
-            clear = ui.button("清空曲线").clicked();
-            ui.toggle_value(&mut self.plot.legend_open, "图例")
-                .on_hover_text("浮动的曲线图例：可拖动、折叠、调整大小，滚轮查看长列表");
+                ));
+            ui.toggle_value(&mut self.paused, tr("Pause following", "暂停跟随"))
+                .on_hover_text(tr(
+                    "While paused the plot can be dragged and zoomed; data keeps arriving",
+                    "暂停后可以拖动、缩放；数据照常接收",
+                ));
+            clear = ui.button(tr("Clear curves", "清空曲线")).clicked();
+            ui.toggle_value(&mut self.plot.legend_open, tr("Legend", "图例"))
+                .on_hover_text(tr(
+                    "Floating curve legend: drag, fold and resize it, scroll through long lists",
+                    "浮动的曲线图例：可拖动、折叠、调整大小，滚轮查看长列表",
+                ));
         });
         if start {
             self.start();
@@ -186,7 +215,8 @@ impl App {
         }
         if self.sampling {
             let s = self.stats;
-            let text = format!(
+            let text = trf!(
+                "{:.0} frames/s, {} frames, buffer {}/{} bytes; dropped frames {}, skipped ticks {}, frame gaps {}, failed values {}",
                 "{:.0} 帧/s，共 {} 帧，缓冲 {}/{} 字节；探针丢帧 {}，跳拍 {}，缺帧 {}，失败值 {}",
                 self.rate,
                 s.frames,
@@ -205,7 +235,12 @@ impl App {
             if let Some(Ok(c)) = &self.core {
                 if matches!(c.state, CoreState::Halted | CoreState::Lockup) {
                     ui.label(
-                        RichText::new(format!("目标内核{}，变量不会变化", c.state.text())).strong(),
+                        RichText::new(trf!(
+                            "Target core {}, variables do not change",
+                            "目标内核{}，变量不会变化",
+                            c.state.text()
+                        ))
+                        .strong(),
                     );
                 }
             }

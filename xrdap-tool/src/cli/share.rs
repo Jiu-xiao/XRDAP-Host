@@ -6,7 +6,9 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use xrdap::dap::Probe;
+use xrdap::lang::tr;
 use xrdap::share::{Event, Protocol, Share};
+use xrdap::trf;
 
 use super::{CliResult, ShareKind};
 
@@ -34,21 +36,44 @@ pub fn cmd_share(
     .map_err(|(_, e)| e)?;
 
     let device = share.device();
-    writeln!(out, "探针：{}，序列号 {}", device.product, device.serial)?;
+    writeln!(
+        out,
+        "{}",
+        trf!(
+            "Probe: {}, serial number {}",
+            "探针：{}，序列号 {}",
+            device.product,
+            device.serial
+        )
+    )?;
     match protocol {
-        Protocol::Usbip => writeln!(out, "挂载：{}", share.attach_hint())?,
-        Protocol::OpenOcd => writeln!(out, "OpenOCD：{}", share.attach_hint())?,
+        Protocol::Usbip => writeln!(
+            out,
+            "{}",
+            trf!("Attach: {}", "挂载：{}", share.attach_hint())
+        )?,
+        Protocol::OpenOcd => writeln!(
+            out,
+            "{}",
+            trf!("OpenOCD: {}", "OpenOCD：{}", share.attach_hint())
+        )?,
     }
-    writeln!(out, "按 Ctrl-C 停止")?;
+    writeln!(out, "{}", tr("Press Ctrl-C to stop", "按 Ctrl-C 停止"))?;
     while !stop.load(Ordering::SeqCst) {
         match rx.recv_timeout(STOP_POLL) {
-            Ok(Event::Client(peer)) => writeln!(out, "{peer} 已连接")?,
-            Ok(Event::Idle(None)) => writeln!(out, "已断开")?,
-            Ok(Event::Idle(Some(why))) => writeln!(out, "连接异常断开：{why}")?,
+            Ok(Event::Client(peer)) => {
+                writeln!(out, "{}", trf!("{peer} connected", "{peer} 已连接"))?
+            }
+            Ok(Event::Idle(None)) => writeln!(out, "{}", tr("Disconnected", "已断开"))?,
+            Ok(Event::Idle(Some(why))) => writeln!(
+                out,
+                "{}",
+                trf!("Connection lost: {why}", "连接异常断开：{why}")
+            )?,
             Err(_) => {}
         }
     }
     let _probe = share.stop();
-    writeln!(out, "已停止")?;
+    writeln!(out, "{}", tr("Stopped", "已停止"))?;
     Ok(())
 }

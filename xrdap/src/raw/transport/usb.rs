@@ -11,7 +11,8 @@ use nusb::transfer::{
 use nusb::{DeviceInfo, Endpoint, Interface, MaybeFuture};
 
 use super::Transport;
-use crate::{Error, Result};
+use crate::lang::tr;
+use crate::{trf, Error, Result};
 
 /// 探针的 USB 厂商 ID。
 ///
@@ -53,7 +54,7 @@ pub struct UsbProbeInfo {
 }
 
 fn usb_err(what: &str, e: impl std::fmt::Display) -> Error {
-    Error::Io(format!("{what}：{e}"))
+    Error::Io(trf!("{what}: {e}", "{what}：{e}"))
 }
 
 /// 名字表明设备是 CMSIS-DAP 探针：产品名或某个接口名里带 "CMSIS-DAP"（CMSIS-DAP 规范对
@@ -74,7 +75,7 @@ fn named_cmsis_dap<'a>(
 fn probes() -> Result<Vec<DeviceInfo>> {
     let list = nusb::list_devices()
         .wait()
-        .map_err(|e| usb_err("列 USB 设备失败", e))?;
+        .map_err(|e| usb_err(tr("Listing USB devices failed", "列 USB 设备失败"), e))?;
     Ok(list
         .filter(|d| d.vendor_id() == VID && d.product_id() == PID)
         .filter(|d| {
@@ -126,7 +127,8 @@ impl UsbTransport {
                 .iter()
                 .find(|d| d.serial_number() == Some(s))
                 .ok_or_else(|| {
-                    Error::Select(format!(
+                    Error::Select(trf!(
+                        "No USB probe with serial number {s} found ({} found: {})",
                         "没有找到序列号为 {s} 的 USB 探针（找到 {} 块：{}）",
                         found.len(),
                         serial_list(&found)
@@ -134,13 +136,15 @@ impl UsbTransport {
                 })?,
             None => match found.len() {
                 0 => {
-                    return Err(Error::Select(format!(
+                    return Err(Error::Select(trf!(
+                        "No USB probe found (VID:PID {VID:04X}:{PID:04X})",
                         "没有找到 USB 探针（VID:PID {VID:04X}:{PID:04X}）"
                     )))
                 }
                 1 => &found[0],
                 n => {
-                    return Err(Error::Select(format!(
+                    return Err(Error::Select(trf!(
+                        "{n} USB probes are plugged in: {}",
                         "插着 {n} 块 USB 探针：{}",
                         serial_list(&found)
                     )))
@@ -151,7 +155,7 @@ impl UsbTransport {
         let device = info
             .open()
             .wait()
-            .map_err(|e| usb_err("打开 USB 设备失败", e))?;
+            .map_err(|e| usb_err(tr("Opening the USB device failed", "打开 USB 设备失败"), e))?;
 
         // 找 CMSIS-DAP v2 接口：厂商类、两个 Bulk 端点，接口名带 "CMSIS-DAP" 的优先。
         let named: Vec<u8> = info
@@ -162,9 +166,15 @@ impl UsbTransport {
             })
             .map(|i| i.interface_number())
             .collect();
-        let config = device
-            .active_configuration()
-            .map_err(|e| usb_err("读 USB 配置描述符失败", e))?;
+        let config = device.active_configuration().map_err(|e| {
+            usb_err(
+                tr(
+                    "Reading the USB configuration descriptor failed",
+                    "读 USB 配置描述符失败",
+                ),
+                e,
+            )
+        })?;
         let mut candidates = Vec::new();
         for iface in config.interfaces() {
             let alt = iface.first_alt_setting();
@@ -187,25 +197,37 @@ impl UsbTransport {
             }
         }
         candidates.sort_by_key(|(n, _, _)| !named.contains(n));
-        let &(number, in_addr, out_addr) = candidates
-            .first()
-            .ok_or_else(|| Error::Io("设备上没有 CMSIS-DAP v2 的 Bulk 接口".into()))?;
+        let &(number, in_addr, out_addr) = candidates.first().ok_or_else(|| {
+            Error::Io(
+                tr(
+                    "The device has no CMSIS-DAP v2 bulk interface",
+                    "设备上没有 CMSIS-DAP v2 的 Bulk 接口",
+                )
+                .into(),
+            )
+        })?;
 
         let interface = device
             .detach_and_claim_interface(number)
             .wait()
             .map_err(|e| {
                 usb_err(
-                    &format!("占用接口 {number} 失败（被别的程序占用，或没有装 WinUSB 驱动）"),
+                    &trf!(
+                        "Claiming interface {number} failed (in use by another program, or the WinUSB driver is not installed)",
+                        "占用接口 {number} 失败（被别的程序占用，或没有装 WinUSB 驱动）"
+                    ),
                     e,
                 )
             })?;
-        let ep_out = interface
-            .endpoint::<Bulk, Out>(out_addr)
-            .map_err(|e| usb_err("打开 OUT 端点失败", e))?;
+        let ep_out = interface.endpoint::<Bulk, Out>(out_addr).map_err(|e| {
+            usb_err(
+                tr("Opening the OUT endpoint failed", "打开 OUT 端点失败"),
+                e,
+            )
+        })?;
         let ep_in = interface
             .endpoint::<Bulk, In>(in_addr)
-            .map_err(|e| usb_err("打开 IN 端点失败", e))?;
+            .map_err(|e| usb_err(tr("Opening the IN endpoint failed", "打开 IN 端点失败"), e))?;
         let mut t = Self {
             _interface: interface,
             ep_out,
@@ -224,7 +246,7 @@ fn serial_list(found: &[DeviceInfo]) -> String {
         .iter()
         .map(|d| d.serial_number().unwrap_or("?").to_string())
         .collect::<Vec<_>>()
-        .join("，")
+        .join(tr(", ", "，"))
 }
 
 impl Transport for UsbTransport {
@@ -232,14 +254,16 @@ impl Transport for UsbTransport {
         let done = self
             .ep_out
             .transfer_blocking(Buffer::from(request.to_vec()), SEND_TIMEOUT);
-        done.status.map_err(|e| usb_err("USB 发送失败", e))?;
+        done.status
+            .map_err(|e| usb_err(tr("USB send failed", "USB 发送失败"), e))?;
         // 请求长度正好是端点最大包长的整数倍时，没有短包标志传输结束，探针会一直等；补一个零长度包。
         let mps = self.ep_out.max_packet_size().max(1);
         if !request.is_empty() && request.len().is_multiple_of(mps) {
             let zlp = self
                 .ep_out
                 .transfer_blocking(Buffer::from(Vec::<u8>::new()), SEND_TIMEOUT);
-            zlp.status.map_err(|e| usb_err("USB 发送失败", e))?;
+            zlp.status
+                .map_err(|e| usb_err(tr("USB send failed", "USB 发送失败"), e))?;
         }
         Ok(())
     }
@@ -250,12 +274,12 @@ impl Transport for UsbTransport {
             .transfer_blocking(Buffer::new(self.in_len), timeout);
         match done.status {
             Ok(()) => Ok(done.buffer.into_vec()),
-            Err(nusb::transfer::TransferError::Cancelled) => {
-                Err(Error::Timeout("等待 USB 响应超时".into()))
-            }
+            Err(nusb::transfer::TransferError::Cancelled) => Err(Error::Timeout(
+                tr("Timed out waiting for a USB response", "等待 USB 响应超时").into(),
+            )),
             Err(e) => {
                 let _ = self.ep_in.clear_halt().wait();
-                Err(usb_err("USB 接收失败", e))
+                Err(usb_err(tr("USB receive failed", "USB 接收失败"), e))
             }
         }
     }
@@ -298,12 +322,19 @@ impl Transport for UsbTransport {
                 ._interface
                 .control_in(recv, TIMEOUT)
                 .wait()
-                .map_err(|e| usb_err("读控制口应答失败", e))?;
+                .map_err(|e| {
+                    usb_err(
+                        tr("Reading the control port answer failed", "读控制口应答失败"),
+                        e,
+                    )
+                })?;
             if !answer.is_empty() {
                 return Ok(Some(answer));
             }
             if std::time::Instant::now() >= deadline {
-                return Err(Error::Timeout("控制口没有应答".into()));
+                return Err(Error::Timeout(
+                    tr("The control port did not answer", "控制口没有应答").into(),
+                ));
             }
             std::thread::sleep(Duration::from_millis(2));
         }

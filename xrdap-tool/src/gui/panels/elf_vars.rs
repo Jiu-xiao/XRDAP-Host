@@ -5,6 +5,8 @@ use std::sync::mpsc::channel;
 
 use eframe::egui::{self, RichText};
 use xrdap::expr::Resolver;
+use xrdap::lang::tr;
+use xrdap::trf;
 use xrdap::types::{Member, ScalarKind, SymbolTable, Type, TypeId};
 
 use crate::gui::app::App;
@@ -259,7 +261,7 @@ impl TreeCtx<'_> {
         let children = node_children(self.syms, &ty);
         let toggle_w = self.toggle_w;
         if children.is_empty() || depth >= MAX_DEPTH {
-            let tip = format!("添加 {path}");
+            let tip = trf!("Add {path}", "添加 {path}");
             ui.horizontal(|ui| {
                 ui.add_space(toggle_w);
                 if tree_row(
@@ -274,7 +276,7 @@ impl TreeCtx<'_> {
             });
             return;
         }
-        let tip = format!("添加 {path} 的全部成员");
+        let tip = trf!("Add all members of {path}", "添加 {path} 的全部成员");
         let id = ui.make_persistent_id(("var_tree_node", path));
         let left = ui.cursor().left();
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, depth == 0)
@@ -295,7 +297,8 @@ impl TreeCtx<'_> {
                     if let Some(n) = dims.first().copied().flatten() {
                         if n > MAX_ARRAY_ROWS {
                             ui.label(
-                                RichText::new(format!(
+                                RichText::new(trf!(
+                                    "Only the first {MAX_ARRAY_ROWS} of {n} elements are listed",
                                     "只列出前 {MAX_ARRAY_ROWS} 个元素，共 {n} 个"
                                 ))
                                 .weak()
@@ -309,7 +312,13 @@ impl TreeCtx<'_> {
                     if bit {
                         ui.horizontal(|ui| {
                             ui.add_space(toggle_w);
-                            tree_row(ui, &child_label, "位域，不能单独读", "位域", None);
+                            tree_row(
+                                ui,
+                                &child_label,
+                                tr("Bit field, cannot be read alone", "位域，不能单独读"),
+                                tr("bit field", "位域"),
+                                None,
+                            );
                         });
                         continue;
                     }
@@ -381,7 +390,7 @@ impl App {
         let mut collapsed = ctx
             .data_mut(|d| d.get_persisted::<bool>(fold))
             .unwrap_or(false);
-        egui::Window::new("成员")
+        egui::Window::new(tr("Members", "成员"))
             .id(egui::Id::new("var_tree"))
             .title_bar(false)
             .frame(theme::floating_frame(ctx))
@@ -390,7 +399,13 @@ impl App {
             .max_height(ctx.content_rect().height() - 48.0)
             .resizable(!collapsed)
             .show(ctx, |ui| {
-                theme::floating_header(ui, "XRDAP / ELF / TREE", "成员", &mut collapsed, &mut open);
+                theme::floating_header(
+                    ui,
+                    "XRDAP / ELF / TREE",
+                    tr("Members", "成员"),
+                    &mut collapsed,
+                    &mut open,
+                );
                 if collapsed {
                     return;
                 }
@@ -398,7 +413,10 @@ impl App {
                 ui.label(RichText::new(head).weak().small());
                 ui.add(
                     egui::TextEdit::singleline(&mut tree.filter)
-                        .hint_text("筛选：路径里含这段文字的成员，例如 ins_info")
+                        .hint_text(tr(
+                            "Filter: members whose path contains this text, e.g. ins_info",
+                            "筛选：路径里含这段文字的成员，例如 ins_info",
+                        ))
                         .desired_width(fill_width(ui)),
                 );
                 ui.add_space(4.0);
@@ -438,14 +456,14 @@ impl App {
                             }
                             let Some(m) = &tree.matches else { return };
                             if m.rows.is_empty() {
-                                ui.label(RichText::new("没有匹配的成员").weak());
+                                ui.label(RichText::new(tr("No matching members", "没有匹配的成员")).weak());
                             }
                             let truncated = m.rows.len() >= MAX_MATCHES;
                             for (path, tyname, leaf) in &m.rows {
                                 let tip = if *leaf {
-                                    format!("添加 {path}")
+                                    trf!("Add {path}", "添加 {path}")
                                 } else {
-                                    format!("添加 {path} 的全部成员")
+                                    trf!("Add all members of {path}", "添加 {path} 的全部成员")
                                 };
                                 if tree_row(ui, path, path, tyname, editable.then_some(tip.as_str()))
                                 {
@@ -454,7 +472,8 @@ impl App {
                             }
                             if truncated {
                                 ui.label(
-                                    RichText::new(format!(
+                                    RichText::new(trf!(
+                                        "Only the first {MAX_MATCHES} matches are listed; narrow the filter",
                                         "只列出前 {MAX_MATCHES} 项，缩小筛选范围"
                                     ))
                                     .weak()
@@ -463,7 +482,8 @@ impl App {
                             }
                             if m.clipped {
                                 ui.label(
-                                    RichText::new(format!(
+                                    RichText::new(trf!(
+                                        "Arrays over {MAX_ARRAY_ROWS} elements were searched in their first {MAX_ARRAY_ROWS} only",
                                         "超过 {MAX_ARRAY_ROWS} 个元素的数组只搜了前 {MAX_ARRAY_ROWS} 个"
                                     ))
                                     .weak()
@@ -489,7 +509,13 @@ impl App {
     /// 在后台读 ELF。采样时不读：监视项按新 ELF 重新解析后，正在采样的条目就对不上了。
     pub(crate) fn load_elf(&mut self) {
         if self.sampling || self.starting {
-            self.log("采样中不能重新读 ELF，先停止采样".into());
+            self.log(
+                tr(
+                    "The ELF cannot be reloaded while sampling; stop sampling first",
+                    "采样中不能重新读 ELF，先停止采样",
+                )
+                .into(),
+            );
             return;
         }
         if self.elf_loading.is_some() {
@@ -525,13 +551,18 @@ impl App {
         keep.append(&mut self.restore);
         match loaded {
             Ok((syms, vars)) => {
-                self.log(format!("读入 {}：{} 个变量", path.display(), vars.len()));
+                self.log(trf!(
+                    "Loaded {}: {} variables",
+                    "读入 {}：{} 个变量",
+                    path.display(),
+                    vars.len()
+                ));
                 self.syms = syms;
                 self.vars = vars;
                 // 类型编号跟着旧符号表，换 ELF 后不能再拿它展开
                 self.tree = None;
             }
-            Err(e) => self.log(format!("读 ELF 失败：{e}")),
+            Err(e) => self.log(trf!("Loading the ELF failed: {e}", "读 ELF 失败：{e}")),
         }
         // 地址和类型以新 ELF 为准
         for w in keep {
@@ -549,7 +580,7 @@ impl App {
         let res = r.resolve_all(text);
         let notes = std::mem::take(&mut r.notes);
         for n in notes {
-            self.log(format!("提示：{n}"));
+            self.log(trf!("Note: {n}", "提示：{n}"));
         }
         match res {
             Ok(targets) => {
@@ -579,10 +610,13 @@ impl App {
                     added += 1;
                 }
                 if !quiet && added == 0 {
-                    self.log(format!("{text} 已经在监视表里"));
+                    self.log(trf!(
+                        "{text} is already in the watch table",
+                        "{text} 已经在监视表里"
+                    ));
                 }
             }
-            Err(e) => self.log(format!("{text}：{e}")),
+            Err(e) => self.log(trf!("{text}: {e}", "{text}：{e}")),
         }
     }
 
@@ -597,17 +631,20 @@ impl App {
                 ui.add(egui::Spinner::new());
             }
             load |= ui
-                .add_enabled(idle, egui::Button::new("重新读"))
-                .on_disabled_hover_text("采样中不能重新读 ELF")
+                .add_enabled(idle, egui::Button::new(tr("Reload", "重新读")))
+                .on_disabled_hover_text(tr(
+                    "The ELF cannot be reloaded while sampling",
+                    "采样中不能重新读 ELF",
+                ))
                 .clicked();
             if ui
                 .add_enabled(idle, egui::Button::new("…"))
-                .on_hover_text("选择文件")
+                .on_hover_text(tr("Choose a file", "选择文件"))
                 .clicked()
             {
                 let mut d = rfd::FileDialog::new()
                     .add_filter("ELF", &["elf", "axf", "out"])
-                    .add_filter("所有文件", &["*"]);
+                    .add_filter(tr("All files", "所有文件"), &["*"]);
                 if let Some(dir) = Path::new(self.elf_path.trim())
                     .parent()
                     .filter(|p| p.is_dir())
@@ -621,7 +658,7 @@ impl App {
             }
             ui.add(
                 egui::TextEdit::singleline(&mut self.elf_path)
-                    .hint_text("带 -g 调试信息的 ELF")
+                    .hint_text(tr("ELF built with -g", "带 -g 调试信息的 ELF"))
                     .desired_width(fill_width(ui)),
             );
         });
@@ -631,16 +668,19 @@ impl App {
     }
 
     pub(crate) fn ui_vars(&mut self, ui: &mut egui::Ui) {
-        theme::section(ui, "XRDAP / ELF / VARS", "添加变量");
+        theme::section(ui, "XRDAP / ELF / VARS", tr("Add variables", "添加变量"));
         let editable = !self.sampling && !self.starting;
         let mut add: Option<String> = None;
         let mut open_tree: Option<(String, u64, TypeId)> = None;
         ui.add_enabled_ui(editable, |ui| {
             right_to_left_row(ui, |ui| {
-                let clicked = ui.button("添加").clicked();
+                let clicked = ui.button(tr("Add", "添加")).clicked();
                 let r = ui.add(
                     egui::TextEdit::singleline(&mut self.expr)
-                        .hint_text("表达式，例如 motor[1].pid->out")
+                        .hint_text(tr(
+                            "Expression, e.g. motor[1].pid->out",
+                            "表达式，例如 motor[1].pid->out",
+                        ))
                         .desired_width(fill_width(ui)),
                 );
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -650,11 +690,21 @@ impl App {
             });
             ui.add(
                 egui::TextEdit::singleline(&mut self.search)
-                    .hint_text(format!("在 {} 个变量里搜索", self.vars.len()))
+                    .hint_text(trf!(
+                        "Search {} variables",
+                        "在 {} 个变量里搜索",
+                        self.vars.len()
+                    ))
                     .desired_width(fill_width(ui)),
             );
-            ui.checkbox(&mut self.user_only, "只看自己的变量")
-                .on_hover_text("隐藏 HAL、CMSIS、RTOS、中间件和 C 库里的变量（按源文件路径猜测）");
+            ui.checkbox(
+                &mut self.user_only,
+                tr("Own variables only", "只看自己的变量"),
+            )
+            .on_hover_text(tr(
+                "Hides variables of HAL, CMSIS, RTOS, middleware and the C library (guessed from the source file path)",
+                "隐藏 HAL、CMSIS、RTOS、中间件和 C 库里的变量（按源文件路径猜测）",
+            ));
             let needle = self.search.trim().to_lowercase();
             let user_only = self.user_only;
             let hits: Vec<usize> = self
@@ -678,14 +728,18 @@ impl App {
                     for &i in &hits[range] {
                         let v = &self.vars[i];
                         ui.horizontal(|ui| {
-                            if ui.small_button("添加").clicked() {
+                            if ui.small_button(tr("Add", "添加")).clicked() {
                                 add = Some(xrdap::expr::name_expr(&v.name));
                             }
                             let size = v
                                 .size
                                 .map(|s| format!("{s} B"))
                                 .unwrap_or_else(|| "?".into());
-                            let kind = if v.system { "，第三方代码" } else { "" };
+                            let kind = if v.system {
+                                tr(", third-party code", "，第三方代码")
+                            } else {
+                                ""
+                            };
                             ui.label(&v.name)
                                 .on_hover_text(format!("0x{:08X}  {}  {size}{kind}", v.addr, v.ty));
                             ui.label(RichText::new(&v.ty).weak().small());
@@ -693,9 +747,9 @@ impl App {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        let more = egui::Button::new(RichText::new("成员").small())
+                                        let more = egui::Button::new(RichText::new(tr("Members", "成员")).small())
                                             .frame(false);
-                                        if ui.add(more).on_hover_text("打开成员树").clicked() {
+                                        if ui.add(more).on_hover_text(tr("Open the member tree", "打开成员树")).clicked() {
                                             open_tree = Some((
                                                 xrdap::expr::name_expr(&v.name),
                                                 v.addr,

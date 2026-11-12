@@ -12,7 +12,7 @@ use xrdap::discover::{find, group, Options};
 fn main() {
     let probes = group(find(&Options::default()));
     if probes.is_empty() {
-        println!("没有找到探针");
+        println!("{}", xrdap::lang::tr("No probe found", "没有找到探针"));
     }
     for p in probes {
         println!(

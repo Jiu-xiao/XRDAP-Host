@@ -23,8 +23,12 @@ pub(super) fn serve(s: &mut Link, f: &mut dyn super::Forward) -> io::Result<()> 
             reply(s, f)?;
         }
         s.read_full(&mut header)?;
-        let len = parse_tcp_header(&header, TCP_TYPE_REQUEST)
-            .ok_or_else(|| bad(format!("OpenOCD TCP：帧头无效 {header:02X?}")))?;
+        let len = parse_tcp_header(&header, TCP_TYPE_REQUEST).ok_or_else(|| {
+            bad(crate::trf!(
+                "OpenOCD TCP: invalid frame header {header:02X?}",
+                "OpenOCD TCP：帧头无效 {header:02X?}"
+            ))
+        })?;
         let mut request = vec![0u8; len];
         s.read_full(&mut request)?;
         while f.full() && f.due() {

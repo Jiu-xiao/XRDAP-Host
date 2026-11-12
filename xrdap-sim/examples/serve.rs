@@ -14,23 +14,37 @@
 use std::path::Path;
 
 use xrdap::expr::Resolver;
+use xrdap::lang::tr;
+use xrdap::trf;
 use xrdap_sim::Sim;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
-    let elf = args.next().ok_or("用法：serve <ELF> [递增的变量…]")?;
+    let elf = args.next().ok_or(tr(
+        "usage: serve <ELF> [counting variables...]",
+        "用法：serve <ELF> [递增的变量…]",
+    ))?;
     let sim = Sim::new();
     sim.load_elf(&std::fs::read(&elf)?);
     let mut syms = xrdap::elf::load(Path::new(&elf))?;
     let mut resolver = Resolver::new(&mut syms);
     for (k, name) in args.enumerate() {
         let t = resolver.resolve(&name)?;
-        let addr = t.direct_addr().ok_or("递增的变量不能经过指针")?;
+        let addr = t.direct_addr().ok_or(tr(
+            "a counting variable cannot be reached through a pointer",
+            "递增的变量不能经过指针",
+        ))?;
         sim.add_counter(addr, t.ty.size, 1000 * (k as u64 + 1));
     }
     let listen = std::env::var("XRDAP_SIM_LISTEN").unwrap_or_else(|_| "127.0.0.1:3241".into());
     let addr = sim.serve_tcp_on(&listen)?;
-    println!("模拟探针在 {addr}，按 Ctrl-C 停止");
+    println!(
+        "{}",
+        trf!(
+            "Simulated probe at {addr}, press Ctrl-C to stop",
+            "模拟探针在 {addr}，按 Ctrl-C 停止"
+        )
+    );
     loop {
         std::thread::park();
     }

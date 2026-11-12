@@ -456,7 +456,7 @@ impl SymbolTable {
                 };
                 match name {
                     Some(n) => format!("{k} {n}"),
-                    None => format!("{k} <匿名>"),
+                    None => crate::trf!("{k} <anonymous>", "{k} <匿名>"),
                 }
             }
             Type::Array { elem, dims } => {
@@ -476,9 +476,9 @@ impl SymbolTable {
             },
             Type::Enum { name, .. } => match name {
                 Some(n) => format!("enum {n}"),
-                None => "enum <匿名>".into(),
+                None => crate::lang::tr("enum <anonymous>", "enum <匿名>").into(),
             },
-            Type::Function => "函数".into(),
+            Type::Function => crate::lang::tr("function", "函数").into(),
             Type::Unknown(s) => s.clone(),
         }
     }
@@ -558,10 +558,20 @@ impl SymbolTable {
         if found.len() > 1 {
             let places = found
                 .iter()
-                .map(|v| format!("{}（{}，0x{:08X}）", v.name, v.unit, v.addr))
+                .map(|v| {
+                    crate::trf!(
+                        "{} ({}, 0x{:08X})",
+                        "{}（{}，0x{:08X}）",
+                        v.name,
+                        v.unit,
+                        v.addr
+                    )
+                })
                 .collect::<Vec<_>>()
-                .join("、");
-            return Err(Error::usage(format!(
+                .join(crate::lang::tr(", ", "、"));
+            return Err(Error::usage(crate::trf!(
+                "{name} has several definitions: {places}. Write the full name with its scope, \
+                 or the address, e.g. 0x{:08X}:u32",
                 "{name} 有多个定义：{places}。请写带作用域的全名，或直接写地址，例如 0x{:08X}:u32",
                 found[0].addr
             )));
@@ -731,7 +741,7 @@ impl ValueType {
             ScalarKind::Bool => match raw {
                 0 => "false".into(),
                 1 => "true".into(),
-                v => format!("{v}（不是 0 或 1）"),
+                v => crate::trf!("{v} (not 0 or 1)", "{v}（不是 0 或 1）"),
             },
             ScalarKind::Pointer => format!("0x{raw:0width$X}"),
             ScalarKind::Enum { values, .. } => {
@@ -774,14 +784,17 @@ impl ValueType {
         let text = text.trim();
         let size = self.size as usize;
         let bad = |why: &str| {
-            Error::usage(format!(
+            Error::usage(crate::trf!(
+                "Value {text} cannot be written to a variable of type {}: {why}",
                 "值 {text} 不能写给 {} 类型的变量：{why}",
                 self.name
             ))
         };
         match &self.kind {
             ScalarKind::Float => {
-                let v: f64 = text.parse().map_err(|_| bad("不是数"))?;
+                let v: f64 = text
+                    .parse()
+                    .map_err(|_| bad(crate::lang::tr("not a number", "不是数")))?;
                 Ok(if size == 4 {
                     (v as f32).to_le_bytes().to_vec()
                 } else {
@@ -792,7 +805,12 @@ impl ValueType {
                 let v = match text {
                     "true" | "1" => 1u8,
                     "false" | "0" => 0u8,
-                    _ => return Err(bad("要写 true、false、1 或 0")),
+                    _ => {
+                        return Err(bad(crate::lang::tr(
+                            "write true, false, 1 or 0",
+                            "要写 true、false、1 或 0",
+                        )))
+                    }
                 };
                 let mut out = vec![0u8; size];
                 out[0] = v;
@@ -803,9 +821,15 @@ impl ValueType {
                     ScalarKind::Enum { values, .. } => match values.iter().find(|(_, n)| n == text)
                     {
                         Some((v, _)) => *v as i128,
-                        None => parse_int(text).ok_or_else(|| bad("不是整数，也不是枚举名"))?,
+                        None => parse_int(text).ok_or_else(|| {
+                            bad(crate::lang::tr(
+                                "neither an integer nor an enumeration name",
+                                "不是整数，也不是枚举名",
+                            ))
+                        })?,
                     },
-                    _ => parse_int(text).ok_or_else(|| bad("不是整数"))?,
+                    _ => parse_int(text)
+                        .ok_or_else(|| bad(crate::lang::tr("not an integer", "不是整数")))?,
                 };
                 let bits = size as u32 * 8;
                 let umax: i128 = if bits >= 64 {
@@ -826,7 +850,10 @@ impl ValueType {
                 let min = if signed { smin } else { 0 };
                 let max = if signed && !raw_bits { -smin - 1 } else { umax };
                 if v < min || v > max {
-                    return Err(bad(&format!("超出 {size} 字节的范围")));
+                    return Err(bad(&crate::trf!(
+                        "out of the range of {size} bytes",
+                        "超出 {size} 字节的范围"
+                    )));
                 }
                 Ok((v as u64).to_le_bytes()[..size].to_vec())
             }

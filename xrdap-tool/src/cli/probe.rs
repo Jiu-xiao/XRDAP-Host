@@ -7,6 +7,9 @@ use xrdap::cortex::{self, AfterReset};
 use xrdap::dap::{self, Probe};
 use xrdap::discover::{self, ProbeEntry};
 
+use xrdap::lang::tr;
+use xrdap::trf;
+
 use super::{CliResult, CoreOp, WifiCmd};
 
 /// 列出探针。`ask_serial` 为 false 时不打开任何串口，只列出可能接着探针的串口。
@@ -16,7 +19,7 @@ pub fn cmd_list(ask_serial: bool, out: &mut dyn Write) -> CliResult {
         ..Default::default()
     }));
     if probes.is_empty() {
-        writeln!(out, "没有找到探针")?;
+        writeln!(out, "{}", tr("No probe found", "没有找到探针"))?;
     }
     write!(out, "{}", table(&probes))?;
     let listed: Vec<&Addr> = probes
@@ -34,11 +37,19 @@ pub fn cmd_list(ask_serial: bool, out: &mut dyn Write) -> CliResult {
         .collect();
     if !unchecked.is_empty() {
         if ask_serial {
-            writeln!(out, "没有应答的串口：")?;
+            writeln!(
+                out,
+                "{}",
+                tr("Serial ports that did not answer:", "没有应答的串口：")
+            )?;
         } else {
             writeln!(
                 out,
-                "没有打开检查的串口（用 -p 串口名 连接，或 xrdap list --ask-serial 逐个打开询问）："
+                "{}",
+                tr(
+                    "Serial ports not opened to check (connect one with -p PORT, or open and ask                      each with xrdap list --ask-serial):",
+                    "没有打开检查的串口（用 -p 串口名 连接，或 xrdap list --ask-serial 逐个打开询问）："
+                )
             )?;
         }
         for s in unchecked {
@@ -55,14 +66,16 @@ fn table(probes: &[ProbeEntry]) -> String {
         s.push_str(&format!(
             "{}  {}
 ",
-            p.serial.as_deref().unwrap_or("（没有序列号）"),
+            p.serial
+                .as_deref()
+                .unwrap_or(tr("(no serial number)", "（没有序列号）")),
             p.product.as_deref().unwrap_or("")
         ));
         for l in &p.links {
             let note = l
                 .note
                 .as_deref()
-                .map(|n| format!("（{n}）"))
+                .map(|n| trf!(" ({n})", "（{n}）"))
                 .unwrap_or_default();
             s.push_str(&format!(
                 "    {}{note}    -p {}
@@ -77,7 +90,7 @@ fn table(probes: &[ProbeEntry]) -> String {
 
 /// 探针信息；`clock` 不为 None 时再按这个 SWD 时钟连接目标。
 pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> CliResult {
-    writeln!(out, "连接：{}", probe.describe())?;
+    writeln!(out, "{}", trf!("Link: {}", "连接：{}", probe.describe()))?;
     let packet = probe.query_packet_size()?;
     let id = probe.identity()?;
     let vendor_name = id.vendor.unwrap_or_default();
@@ -92,47 +105,100 @@ pub fn cmd_info(probe: &mut Probe, clock: Option<u32>, out: &mut dyn Write) -> C
         .unwrap_or(1);
     writeln!(
         out,
-        "探针：{vendor_name} {product}，序列号 {serial}，固件 {fw}"
+        "{}",
+        trf!(
+            "Probe: {vendor_name} {product}, serial number {serial}, firmware {fw}",
+            "探针：{vendor_name} {product}，序列号 {serial}，固件 {fw}"
+        )
     )?;
     writeln!(
         out,
-        "CMSIS-DAP：{proto}，包长 {packet} 字节，最多 {count} 个包在途"
+        "{}",
+        trf!(
+            "CMSIS-DAP: {proto}, packet size {packet} bytes, at most {count} packets in flight",
+            "CMSIS-DAP：{proto}，包长 {packet} 字节，最多 {count} 个包在途"
+        )
     )?;
     match probe.vendor_info() {
         Ok(info) => {
             writeln!(
                 out,
-                "厂商扩展：版本 {}，功能 {}（0x{:02X}）",
-                info.version,
-                info.feature_names().join("、"),
-                info.features
+                "{}",
+                trf!(
+                    "Vendor extension: version {}, features {} (0x{:02X})",
+                    "厂商扩展：版本 {}，功能 {}（0x{:02X}）",
+                    info.version,
+                    info.feature_names().join(tr(", ", "、")),
+                    info.features
+                )
             )?;
             writeln!(
                 out,
-                "  每次最多 {} 个条目，最多 {} 级指针，采样缓冲 {} 字节",
-                info.max_items, info.max_depth, info.ring_bytes
+                "{}",
+                trf!(
+                    "  At most {} items per request, at most {} pointer levels, sampling buffer {} bytes",
+                    "  每次最多 {} 个条目，最多 {} 级指针，采样缓冲 {} 字节",
+                    info.max_items,
+                    info.max_depth,
+                    info.ring_bytes
+                )
             )?;
-            writeln!(out, "  探针时间 {:.6} s", info.probe_time_us as f64 / 1e6)?;
+            writeln!(
+                out,
+                "{}",
+                trf!(
+                    "  Probe time {:.6} s",
+                    "  探针时间 {:.6} s",
+                    info.probe_time_us as f64 / 1e6
+                )
+            )?;
         }
-        Err(e) => writeln!(out, "厂商扩展：不可用（{e}）")?,
+        Err(e) => writeln!(
+            out,
+            "{}",
+            trf!(
+                "Vendor extension: not available ({e})",
+                "厂商扩展：不可用（{e}）"
+            )
+        )?,
     }
     if let Some(clock) = clock {
         match probe.connect(clock) {
             Ok(t) => {
-                writeln!(out, "目标：{}，SWD 时钟 {clock} Hz", t.describe())?;
+                writeln!(
+                    out,
+                    "{}",
+                    trf!(
+                        "Target: {}, SWD clock {clock} Hz",
+                        "目标：{}，SWD 时钟 {clock} Hz",
+                        t.describe()
+                    )
+                )?;
                 let core = cortex::info(probe).map(|i| i.describe());
                 let state = cortex::status(probe);
                 match (core, state) {
                     (Ok(c), Ok(st)) => writeln!(
                         out,
-                        "内核：{c}，{}（DHCSR 0x{:08X}）",
-                        st.state.text(),
-                        st.dhcsr
+                        "{}",
+                        trf!(
+                            "Core: {c}, {} (DHCSR 0x{:08X})",
+                            "内核：{c}，{}（DHCSR 0x{:08X}）",
+                            st.state.text(),
+                            st.dhcsr
+                        )
                     )?,
-                    (Err(e), _) | (_, Err(e)) => writeln!(out, "内核：读不到（{e}）")?,
+                    (Err(e), _) | (_, Err(e)) => writeln!(
+                        out,
+                        "{}",
+                        trf!("Core: cannot be read ({e})", "内核：读不到（{e}）")
+                    )?,
                 }
             }
-            Err(e) => writeln!(out, "目标：连接失败（{e}）")?,
+            Err(e) => writeln!(
+                out,
+                "{}",
+                trf!("Target: connection failed ({e})", "目标：连接失败（{e}）")
+            )?,
         }
     }
     Ok(())
@@ -163,11 +229,25 @@ pub fn cmd_wifi(
                 (None, false) => String::new(),
             };
             probe.wifi_set(ssid, &password)?;
-            writeln!(out, "已保存，探针重启后连接热点 {ssid}")?;
+            writeln!(
+                out,
+                "{}",
+                trf!(
+                    "Saved; the probe restarts and joins the hotspot {ssid}",
+                    "已保存，探针重启后连接热点 {ssid}"
+                )
+            )?;
         }
         WifiCmd::Clear { .. } => {
             probe.wifi_clear()?;
-            writeln!(out, "已清除，探针重启后不再连 Wi-Fi")?;
+            writeln!(
+                out,
+                "{}",
+                tr(
+                    "Cleared; the probe restarts and no longer joins Wi-Fi",
+                    "已清除，探针重启后不再连 Wi-Fi"
+                )
+            )?;
         }
     }
     Ok(())
@@ -181,7 +261,16 @@ pub fn cmd_core(probe: &mut Probe, op: CoreOp, out: &mut dyn Write) -> CliResult
         CoreOp::Reset { halt: true } => cortex::reset(probe, AfterReset::Halt)?,
         CoreOp::Reset { halt: false } => cortex::reset(probe, AfterReset::Run)?,
     };
-    writeln!(out, "内核：{}（DHCSR 0x{:08X}）", s.state.text(), s.dhcsr)?;
+    writeln!(
+        out,
+        "{}",
+        trf!(
+            "Core: {} (DHCSR 0x{:08X})",
+            "内核：{}（DHCSR 0x{:08X}）",
+            s.state.text(),
+            s.dhcsr
+        )
+    )?;
     Ok(())
 }
 

@@ -34,6 +34,7 @@
 //! | [`watch`]、[`csv`] | 探针端采样、CSV 记录 / Probe-side sampling, CSV records |
 //! | [`cortex`] | 内核状态和停住、继续、复位 / Core state, halt, resume, reset |
 //! | [`share`] | 把探针共享成 USB/IP 设备或 OpenOCD TCP 后端 / Share a probe over USB/IP or as an OpenOCD TCP backend |
+//! | [`lang`] | 输出语言（中文或英文） / Output language (Chinese or English) |
 //! | [`raw`] | 协议层：厂商命令编码、串口/TCP 帧、三种传输 / Protocol layer: vendor encoding, serial/TCP framing, transports |
 //!
 //! 字节格式见协议文档：<https://github.com/Jiu-xiao/XRDAP-Core/blob/main/docs/protocol.md>。
@@ -53,6 +54,7 @@ pub mod discover;
 pub mod elf;
 mod error;
 pub mod expr;
+pub mod lang;
 pub mod open;
 pub mod raw;
 pub mod share;

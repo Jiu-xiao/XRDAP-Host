@@ -68,7 +68,7 @@ impl fmt::Display for Addr {
         match self {
             Addr::Usb { serial: Some(s) } => write!(f, "USB {s}"),
             Addr::Usb { serial: None } => f.write_str("USB"),
-            Addr::Serial { port } => write!(f, "串口 {port}"),
+            Addr::Serial { port } => f.write_str(&crate::trf!("serial port {port}", "串口 {port}")),
             Addr::Tcp { host } => write!(f, "TCP {host}"),
         }
     }

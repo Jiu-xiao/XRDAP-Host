@@ -1,6 +1,7 @@
 //! 中间的监视表：开关、分频、所在图、当前值、写入、删除。
 
 use eframe::egui::{self, RichText};
+use xrdap::lang::tr;
 
 use crate::gui::app::App;
 use crate::gui::plot::MAX_CHARTS;
@@ -17,6 +18,18 @@ impl App {
         let row_h = ui.spacing().interact_size.y + 2.0;
         let watches = &mut self.watches;
         let max_h = ui.available_height();
+        // 后三列的宽度：当前值（初始宽度）、输入框、输入框加“写入”按钮、“删除”按钮和备注的最小宽度。
+        // 两个按钮的文字要完整显示，多出来的宽度由当前值一列和英文的输入框让出，
+        // 整张表的最小宽度和按钮文字被截断时一样
+        // Widths of the last three columns: the value (initial width), the field, the field with
+        // its Write button, and the minimum for the Delete button and the note. Both button texts
+        // show in full; the value column and, in English, the field give up the width for that, so
+        // the table's minimum width is what it was when the button texts were truncated
+        let (value_w, field_w, write_w, delete_w) = if xrdap::lang::chinese() {
+            (140.0, 90.0, 148.0, 52.0)
+        } else {
+            (126.0, 76.0, 146.0, 68.0)
+        };
         TableBuilder::new(ui)
             .id_salt("watches")
             .striped(true)
@@ -29,11 +42,20 @@ impl App {
             .column(Column::initial(70.0).at_least(40.0).clip(true))
             .column(Column::exact(50.0))
             .column(Column::exact(44.0))
-            .column(Column::initial(170.0).at_least(60.0).clip(true))
-            .column(Column::exact(130.0))
-            .column(Column::remainder().at_least(40.0).clip(true))
+            .column(Column::initial(value_w).at_least(60.0).clip(true))
+            .column(Column::exact(write_w))
+            .column(Column::remainder().at_least(delete_w).clip(true))
             .header(row_h, |mut h| {
-                for title in ["", "变量", "类型", "分频", "图", "当前值", "写入", ""] {
+                for title in [
+                    "",
+                    tr("Variable", "变量"),
+                    tr("Type", "类型"),
+                    tr("Div", "分频"),
+                    tr("Chart", "图"),
+                    tr("Value", "当前值"),
+                    tr("Write", "写入"),
+                    "",
+                ] {
                     h.col(|ui| {
                         ui.strong(title);
                     });
@@ -44,7 +66,8 @@ impl App {
                     let i = row.index();
                     let w = &mut watches[i];
                     row.col(|ui| {
-                        ui.checkbox(&mut w.show, "").on_hover_text("画曲线");
+                        ui.checkbox(&mut w.show, "")
+                            .on_hover_text(tr("Plot the curve", "画曲线"));
                         let (rect, _) =
                             ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                         ui.painter()
@@ -70,7 +93,7 @@ impl App {
                             !frozen,
                             egui::DragValue::new(&mut w.div).range(1..=65535).speed(0.2),
                         )
-                        .on_hover_text("每几拍采一次");
+                        .on_hover_text(tr("Sample every N ticks", "每几拍采一次"));
                     });
                     row.col(|ui| {
                         ui.add(
@@ -78,7 +101,10 @@ impl App {
                                 .range(1..=MAX_CHARTS)
                                 .speed(0.05),
                         )
-                        .on_hover_text("画在第几张图，几张图的时间轴联动");
+                        .on_hover_text(tr(
+                            "The chart to plot on; the charts share a linked time axis",
+                            "画在第几张图，几张图的时间轴联动",
+                        ));
                     });
                     row.col(|ui| {
                         // 值刚变过时短暂高亮
@@ -95,9 +121,8 @@ impl App {
                             }
                         }
                         let value = match (&w.latest, w.failed) {
-                            (_, true) => {
-                                RichText::new("读取失败").color(ui.visuals().error_fg_color)
-                            }
+                            (_, true) => RichText::new(tr("Read failed", "读取失败"))
+                                .color(ui.visuals().error_fg_color),
                             (Some(b), _) => RichText::new(w.target.ty.format(b)).monospace(),
                             (None, _) => RichText::new("-").weak(),
                         };
@@ -107,17 +132,28 @@ impl App {
                         let r = ui.add(
                             egui::TextEdit::singleline(&mut w.write_text)
                                 .id_salt(("write", w.id))
-                                .desired_width(90.0),
+                                .desired_width(field_w),
                         );
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.small_button("写入").clicked() || enter {
+                        // 这个单元格里的按钮文字默认会被截成省略号（和列宽无关），所以指定完整显示
+                        // A button's text in this cell is truncated to an ellipsis by default, whatever
+                        // the column width, so it is told to show in full
+                        let write = egui::Button::new(tr("Write", "写入"))
+                            .small()
+                            .wrap_mode(egui::TextWrapMode::Extend);
+                        if ui.add(write).clicked() || enter {
                             writes.push(i);
                         }
                     });
                     row.col(|ui| {
                         if ui
-                            .add_enabled(!frozen, egui::Button::new("删除").small())
-                            .on_hover_text("移除")
+                            .add_enabled(
+                                !frozen,
+                                egui::Button::new(tr("Delete", "删除"))
+                                    .small()
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                            )
+                            .on_hover_text(tr("Remove", "移除"))
                             .clicked()
                         {
                             remove = Some(i);
@@ -137,16 +173,16 @@ impl App {
         for i in writes {
             if !self.usable() {
                 self.watches[i].note = if self.connected {
-                    "探针正在共享为 USB DAP".into()
+                    tr("The probe is shared as USB DAP", "探针正在共享为 USB DAP").into()
                 } else {
-                    "还没有连接".into()
+                    tr("Not connected yet", "还没有连接").into()
                 };
                 continue;
             }
             let w = &mut self.watches[i];
             match w.target.ty.parse(&w.write_text) {
                 Ok(bytes) => {
-                    w.note = "写入中……".into();
+                    w.note = tr("Writing...", "写入中……").into();
                     let t = w.target.clone();
                     self.send(Cmd::Write(t, bytes));
                 }

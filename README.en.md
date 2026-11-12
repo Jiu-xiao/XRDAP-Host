@@ -10,7 +10,7 @@ The same functions are available to other programs as the Rust library `xrdap`, 
 
 [Releases](https://github.com/Jiu-xiao/XRDAP-Host/releases) has one file per platform: `xrdap-windows-x86_64.exe` for Windows x86-64 and `xrdap-linux-x86_64` for Linux x86-64; `SHA256SUMS` on the same page holds their checksums. The file is renamed to `xrdap` (`xrdap.exe` on Windows) and put on `PATH`; the commands below call it by this name.
 
-On Linux the GUI shows Chinese text with the system's Noto Sans CJK or WenQuanYi Micro Hei, one of which has to be installed. With this udev rule ordinary users can access USB probes:
+`xrdap` prints in Chinese in a Chinese environment and in English elsewhere; `XR_LANG=en` selects English, see [docs/cli.en.md](docs/cli.en.md). On Linux the GUI shows Chinese text, such as the Chinese interface or Chinese names in the ELF, with the system's Noto Sans CJK or WenQuanYi Micro Hei, one of which has to be installed for it. With this udev rule ordinary users can access USB probes:
 
 ```
 SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6199", MODE="0666"
@@ -29,9 +29,9 @@ Every `-p` form, the choice of serial baud rate and the rule that one connection
 
 ## GUI
 
-Running `xrdap` without arguments, or double-clicking it on Windows, opens the GUI. The left column holds the connection, the ELF and adding variables: 找到的探针 (found probes) lists the connections of each probe and the other serial ports, a click on a row fills it into the 探针 (probe) field, and after 连接 (connect) the GUI shows the core type and its run state; the ELF (built with `-g`) is read in the background, and variables are added from a searchable list or as an expression such as `motor[1].pid->out`, with structs and arrays expanded into their members.
+Running `xrdap` without arguments, or double-clicking it on Windows, opens the GUI. The left column holds the connection, the ELF and adding variables: Found probes lists the connections of each probe and the other serial ports, a click on a row fills it into the Probe field, and after Connect the GUI shows the core type and its run state; the ELF (built with `-g`) is read in the background, and variables are added from a searchable list or as an expression such as `motor[1].pid->out`, with structs and arrays expanded into their members.
 
-On the right, from top to bottom, are the sampling controls, the watch table and the plots. With the 周期 (period) filled in, 开始采样 (start sampling) starts the plot scrolling; in the watch table each variable gets its divider and its chart, and a value typed into the 写入 (write) column and Enter changes the variable. The plots can be split across up to 4 charts with linked time axes; click and Shift+click place cursors A and B. 录制 CSV… (record CSV) writes the samples to a CSV file. The statistics line shows the frame count and the sampling counters, with advice below it when sampling cannot keep its period. The probe, the ELF, the watch table and other settings are saved on exit, and 主题 (theme) in the top bar follows the system or stays light or dark.
+On the right, from top to bottom, are the sampling controls, the watch table and the plots. With the Period filled in, Start sampling starts the plot scrolling; in the watch table each variable gets its divider and its chart, and a value typed into the Write column and Enter changes the variable. The plots can be split across up to 4 charts with linked time axes; click and Shift+click place cursors A and B. Record CSV… writes the samples to a CSV file. The statistics line shows the frame count and the sampling counters, with advice below it when sampling cannot keep its period. The probe, the ELF, the watch table and other settings are saved on exit, and Theme in the top bar follows the system or stays light or dark.
 
 ![xrdap GUI, light](docs/images/xrdap-gui.png)
 
@@ -56,7 +56,7 @@ xrdap watch --elf app.elf motor.speed motor.current@10 --period 1ms --csv log.cs
 
 ESP32-S3, ESP32-S2, STM32F103, CH32V307, CH32V305 and CH32V208 (`linkw`, WCH-LinkW-R0-1v1) probes on USB are USB CMSIS-DAP probes themselves, and Keil, pyOCD, probe-rs and OpenOCD use them directly. CH32 wireless probes (two `wdap` or two `linkw`) are used in pairs; they are paired with a key on the probes, as the [XRDAP-CH32](https://github.com/Jiu-xiao/XRDAP-CH32) documentation describes.
 
-A probe on a serial port (ESP32-C3, classic ESP32 and others) or on Wi-Fi is shared as a USB/IP device with `xrdap share usbip`. `xrdap` prints the attach command; once a USB/IP client runs it in another terminal, a `<product> CMSIS-DAP` device appears and debug tools use it as a USB probe. Ctrl-C in the `xrdap` terminal stops sharing. The 共享为 USB DAP (share as USB DAP) switch in the GUI does the same.
+A probe on a serial port (ESP32-C3, classic ESP32 and others) or on Wi-Fi is shared as a USB/IP device with `xrdap share usbip`. `xrdap` prints the attach command; once a USB/IP client runs it in another terminal, a `<product> CMSIS-DAP` device appears and debug tools use it as a USB probe. Ctrl-C in the `xrdap` terminal stops sharing. The Share as USB DAP switch in the GUI does the same.
 
 ```
 xrdap share usbip -p COM3
@@ -84,7 +84,7 @@ xrdap wifi set -p COM3 SSID PASSWORD
 
 ## Controlling the target
 
-`info` shows the probe information and connects the target to read DPIDR and the core type; `halt`, `run` and `reset` halt, resume and reset the target's Cortex-M core, and `reset --halt` stops before the first instruction after reset. The GUI buttons 停住 (halt), 继续 (resume), 复位 (reset) and 复位并停住 (reset and halt) do the same and also work while sampling.
+`info` shows the probe information and connects the target to read DPIDR and the core type; `halt`, `run` and `reset` halt, resume and reset the target's Cortex-M core, and `reset --halt` stops before the first instruction after reset. The GUI buttons Halt, Resume, Reset and Reset and halt do the same and also work while sampling.
 
 ```
 xrdap info

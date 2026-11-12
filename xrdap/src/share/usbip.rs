@@ -359,7 +359,12 @@ pub(super) fn serve(s: &mut Link, info: &DeviceInfo, f: &mut dyn super::Forward)
             usb_device(&mut reply);
             s.write_all(&reply)?;
         }
-        other => return Err(bad(format!("USB/IP：未知操作 0x{other:04X}"))),
+        other => {
+            return Err(bad(crate::trf!(
+                "USB/IP: unknown operation 0x{other:04X}",
+                "USB/IP：未知操作 0x{other:04X}"
+            )))
+        }
     }
     let mut session = Session {
         info,
@@ -381,7 +386,12 @@ pub(super) fn serve(s: &mut Link, info: &DeviceInfo, f: &mut dyn super::Forward)
         match be_u32(&hdr, 0) {
             CMD_SUBMIT => session.submit(s, &hdr, f)?,
             CMD_UNLINK => session.unlink(&hdr),
-            other => return Err(bad(format!("USB/IP：未知命令 {other}"))),
+            other => {
+                return Err(bad(crate::trf!(
+                    "USB/IP: unknown command {other}",
+                    "USB/IP：未知命令 {other}"
+                )))
+            }
         }
         session.flush(s)?;
     }

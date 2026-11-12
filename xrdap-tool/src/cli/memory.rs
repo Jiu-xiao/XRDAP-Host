@@ -5,7 +5,8 @@ use std::path::Path;
 
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
-use xrdap::{item_status_text, Item};
+use xrdap::lang::tr;
+use xrdap::{item_status_text, trf, Item};
 
 use super::text::{ljust, name_width};
 use super::CliResult;
@@ -22,15 +23,19 @@ pub fn cmd_vars(elf: &Path, pattern: Option<&str>, out: &mut dyn Write) -> CliRe
     for v in vars {
         let size = syms
             .size_of(v.ty)
-            .map(|s| format!("{s} 字节"))
-            .unwrap_or_else(|| "大小未知".into());
+            .map(|s| trf!("{s} bytes", "{s} 字节"))
+            .unwrap_or_else(|| tr("size unknown", "大小未知").into());
         writeln!(
             out,
-            "0x{:08X}  {:<24} {}，{}",
-            v.addr,
-            xrdap::expr::name_expr(&v.name),
-            syms.name_of(v.ty),
-            size
+            "{}",
+            trf!(
+                "0x{:08X}  {:<24} {}, {}",
+                "0x{:08X}  {:<24} {}，{}",
+                v.addr,
+                xrdap::expr::name_expr(&v.name),
+                syms.name_of(v.ty),
+                size
+            )
         )?;
     }
     Ok(())
@@ -50,10 +55,14 @@ pub fn cmd_read(probe: &mut Probe, targets: &[Target], out: &mut dyn Write) -> C
         } else {
             writeln!(
                 out,
-                "{}   读取失败：{}（地址 {}）",
-                ljust(&t.name, w),
-                item_status_text(r.status, &t.chain),
-                t.location()
+                "{}",
+                trf!(
+                    "{}   read failed: {} (address {})",
+                    "{}   读取失败：{}（地址 {}）",
+                    ljust(&t.name, w),
+                    item_status_text(r.status, &t.chain),
+                    t.location()
+                )
             )?;
         }
     }
@@ -79,22 +88,42 @@ pub fn cmd_write(
             let readback = if b.status == 0 {
                 t.ty.format(&b.value)
             } else {
-                format!("读回失败：{}", item_status_text(b.status, &t.chain))
+                trf!(
+                    "read back failed: {}",
+                    "读回失败：{}",
+                    item_status_text(b.status, &t.chain)
+                )
             };
-            writeln!(out, "{} ← {text}，读回 {readback}", ljust(&t.name, w))?;
+            writeln!(
+                out,
+                "{}",
+                trf!(
+                    "{} ← {text}, read back {readback}",
+                    "{} ← {text}，读回 {readback}",
+                    ljust(&t.name, w)
+                )
+            )?;
         } else {
             failed += 1;
             writeln!(
                 out,
-                "{}   写入失败：{}（地址 {}）",
-                ljust(&t.name, w),
-                item_status_text(r.status, &t.chain),
-                t.location()
+                "{}",
+                trf!(
+                    "{}   write failed: {} (address {})",
+                    "{}   写入失败：{}（地址 {}）",
+                    ljust(&t.name, w),
+                    item_status_text(r.status, &t.chain),
+                    t.location()
+                )
             )?;
         }
     }
     if failed > 0 {
-        return Err(format!("{failed} 个变量写入失败").into());
+        return Err(trf!(
+            "writing {failed} variables failed",
+            "{failed} 个变量写入失败"
+        )
+        .into());
     }
     Ok(())
 }

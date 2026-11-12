@@ -17,7 +17,13 @@ use xrdap::open::{open, OpenOptions};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let (Some(elf), Some(expr)) = (args.next(), args.next()) else {
-        eprintln!("用法：read_write <ELF> <变量> [<新值>]");
+        eprintln!(
+            "{}",
+            xrdap::lang::tr(
+                "usage: read_write <ELF> <VAR> [<NEW VALUE>]",
+                "用法：read_write <ELF> <变量> [<新值>]"
+            )
+        );
         std::process::exit(2);
     };
     let value = args.next();

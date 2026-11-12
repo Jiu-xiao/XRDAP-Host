@@ -2,6 +2,8 @@
 
 use eframe::egui::{self, Color32, RichText};
 use egui_plot::{Line, Plot, PlotPoints, VLine};
+use xrdap::lang::tr;
+use xrdap::trf;
 
 use super::series::Series;
 
@@ -68,7 +70,7 @@ fn fmt_dt(dt: f64) -> String {
     };
     let mut s = format!("{v:.3} {unit}");
     if a > 0.0 {
-        s.push_str(&format!("（{:.3} Hz）", 1.0 / a));
+        s.push_str(&trf!(" ({:.3} Hz)", "（{:.3} Hz）", 1.0 / a));
     }
     s
 }
@@ -78,7 +80,10 @@ impl PlotView {
     pub fn ui_cursors(&mut self, ui: &mut egui::Ui, curves: &[Curve]) {
         if self.cursor_a.is_none() && self.cursor_b.is_none() {
             ui.label(
-                RichText::new("单击曲线放游标 A，Shift+单击放游标 B；悬停显示各曲线的值")
+                RichText::new(tr(
+                    "Click a curve to place cursor A, Shift+click for cursor B; hover shows the values of all curves",
+                    "单击曲线放游标 A，Shift+单击放游标 B；悬停显示各曲线的值",
+                ))
                     .weak()
                     .small(),
             );
@@ -94,17 +99,17 @@ impl PlotView {
             if let (Some(a), Some(b)) = (self.cursor_a, self.cursor_b) {
                 ui.strong(format!("Δt = {}", fmt_dt(b - a)));
             }
-            if ui.small_button("清除游标").clicked() {
+            if ui.small_button(tr("Clear cursors", "清除游标")).clicked() {
                 self.cursor_a = None;
                 self.cursor_b = None;
             }
         });
-        egui::CollapsingHeader::new("游标处的值")
+        egui::CollapsingHeader::new(tr("Values at the cursors", "游标处的值"))
             .id_salt("cursor_values")
             .default_open(false)
             .show(ui, |ui| {
                 egui::Grid::new("cursor_grid").striped(true).show(ui, |ui| {
-                    ui.strong("变量");
+                    ui.strong(tr("Variable", "变量"));
                     ui.strong("A");
                     ui.strong("B");
                     ui.strong("B − A");
@@ -172,7 +177,7 @@ impl PlotView {
                 .show_x(false)
                 .show_y(false);
             if k == last {
-                plot = plot.x_axis_label("时间 (s)");
+                plot = plot.x_axis_label(tr("Time (s)", "时间 (s)"));
             }
             let normalize = self.normalize;
             let (cursor_a, cursor_b) = (self.cursor_a, self.cursor_b);
@@ -272,7 +277,7 @@ impl PlotView {
         let mut open = self.legend_open;
         let mut toggle = None;
         const WIDTH: f32 = 260.0;
-        egui::Window::new("图例")
+        egui::Window::new(tr("Legend", "图例"))
             .id(egui::Id::new("xrdap_plot_legend"))
             .title_bar(false)
             .frame(super::theme::floating_frame(ctx))
@@ -286,7 +291,7 @@ impl PlotView {
                 super::theme::floating_header(
                     ui,
                     "XRDAP / WATCH / LEGEND",
-                    "图例",
+                    tr("Legend", "图例"),
                     &mut collapsed,
                     &mut open,
                 );
@@ -301,7 +306,9 @@ impl PlotView {
                         let multi = charts.len() > 1;
                         for &chart in &charts {
                             if multi {
-                                ui.label(RichText::new(format!("图 {chart}")).strong());
+                                ui.label(
+                                    RichText::new(trf!("Chart {chart}", "图 {chart}")).strong(),
+                                );
                             }
                             for c in curves.iter().filter(|c| c.chart == chart) {
                                 // 整行（色块、名字、右侧空白）都要能点。文字直接画 galley，
@@ -352,10 +359,15 @@ impl PlotView {
                                 );
                                 ui.painter().galley(pos, galley, color);
                                 if resp
-                                    .on_hover_text(format!(
+                                    .on_hover_text(trf!(
+                                        "{}\nClick to {} this curve",
                                         "{}\n点击{}这条曲线",
                                         c.name,
-                                        if c.show { "隐藏" } else { "显示" }
+                                        if c.show {
+                                            tr("hide", "隐藏")
+                                        } else {
+                                            tr("show", "显示")
+                                        }
                                     ))
                                     .clicked()
                                 {
@@ -380,6 +392,7 @@ mod tests {
 
     #[test]
     fn value_and_time_formats() {
+        xrdap::lang::set_chinese(true);
         assert_eq!(fmt_value(1406.0, false), "1406");
         assert_eq!(fmt_value(0.25, true), "0.25");
         assert_eq!(fmt_value(3.0, true), "3");

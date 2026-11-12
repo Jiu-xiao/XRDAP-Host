@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 use xrdap::dap::Probe;
 use xrdap::expr::Target;
+use xrdap::lang::tr;
+use xrdap::trf;
 
 use xrdap::watch::{HostFrame, Lag, Sampler, Var};
 
@@ -39,7 +41,11 @@ impl Output<'_> {
             writeln!(csv, "{line}")?;
             return Ok(());
         }
-        let mut line = format!("{} {}", rjust("时间(s)", 12), rjust("节拍", 10));
+        let mut line = format!(
+            "{} {}",
+            rjust(tr("time (s)", "时间(s)"), 12),
+            rjust(tr("tick", "节拍"), 10)
+        );
         for (t, w) in self.targets.iter().zip(&self.widths) {
             line.push(' ');
             line.push_str(&rjust(&t.name, *w));
@@ -108,22 +114,44 @@ pub fn cmd_watch(
 
     writeln!(
         out,
-        "采样 {} 个变量，周期 {} µs",
-        targets.len(),
-        opts.period_us
+        "{}",
+        trf!(
+            "Sampling {} variables, period {} µs",
+            "采样 {} 个变量，周期 {} µs",
+            targets.len(),
+            opts.period_us
+        )
     )?;
     for (t, s) in targets.iter().zip(sampler.items()) {
         if s.div > 1 {
-            writeln!(out, "  {} 每 {} 拍采一次，相位 {}", t.name, s.div, s.phase)?;
+            writeln!(
+                out,
+                "{}",
+                trf!(
+                    "  {} sampled every {} ticks, phase {}",
+                    "  {} 每 {} 拍采一次，相位 {}",
+                    t.name,
+                    s.div,
+                    s.phase
+                )
+            )?;
         }
     }
     let csv = match &opts.csv {
         Some(path) => {
-            writeln!(out, "写入 {}，按 Ctrl-C 停止", path.display())?;
+            writeln!(
+                out,
+                "{}",
+                trf!(
+                    "Writing {}, press Ctrl-C to stop",
+                    "写入 {}，按 Ctrl-C 停止",
+                    path.display()
+                )
+            )?;
             Some(std::io::BufWriter::new(std::fs::File::create(path)?))
         }
         None => {
-            writeln!(out, "按 Ctrl-C 停止")?;
+            writeln!(out, "{}", tr("Press Ctrl-C to stop", "按 Ctrl-C 停止"))?;
             None
         }
     };
@@ -159,10 +187,21 @@ pub fn cmd_watch(
             let lag = sampler.stats().lag();
             if lag.is_some() && lag != warned {
                 warned = lag;
-                writeln!(err, "\n提示：{}", lag.map_or("", Lag::advice))?;
+                writeln!(
+                    err,
+                    "{}",
+                    trf!("\nNote: {}", "\n提示：{}", lag.map_or("", Lag::advice))
+                )?;
             }
             if !sampler.sampling_on_probe() && remaining == 0 {
-                writeln!(err, "探针上的采样已经停止（会话结束）")?;
+                writeln!(
+                    err,
+                    "{}",
+                    tr(
+                        "Sampling on the probe has stopped (session ended)",
+                        "探针上的采样已经停止（会话结束）"
+                    )
+                )?;
                 break;
             }
             if output.csv.is_some() && last_status.elapsed() >= Duration::from_secs(1) {
@@ -170,8 +209,14 @@ pub fn cmd_watch(
                 let st = sampler.stats();
                 write!(
                     err,
-                    "\r已采 {} 帧，跳过节拍 {}，缓冲丢帧 {}   ",
-                    st.frames, st.skipped, st.dropped
+                    "{}",
+                    trf!(
+                        "\r{} frames sampled, skipped ticks {}, dropped frames {}   ",
+                        "\r已采 {} 帧，跳过节拍 {}，缓冲丢帧 {}   ",
+                        st.frames,
+                        st.skipped,
+                        st.dropped
+                    )
                 )?;
                 err.flush()?;
             }
@@ -197,18 +242,32 @@ pub fn cmd_watch(
     let secs = started.elapsed().as_secs_f64();
     writeln!(
         output.out,
-        "已停止：{} 帧，用时 {secs:.2} s；探针跳过节拍 {}，缓冲丢帧 {}，帧序号缺口 {}，读取失败的值 {}",
-        st.frames, st.skipped, st.dropped, st.missing, st.failed_values
+        "{}",
+        trf!(
+            "Stopped: {} frames in {secs:.2} s; skipped ticks {}, dropped frames {}, \
+             frame number gaps {}, failed values {}",
+            "已停止：{} 帧，用时 {secs:.2} s；探针跳过节拍 {}，缓冲丢帧 {}，帧序号缺口 {}，读取失败的值 {}",
+            st.frames,
+            st.skipped,
+            st.dropped,
+            st.missing,
+            st.failed_values
+        )
     )?;
     if let (Some((_, half_rtt)), Some(path)) = (sampler.clock_offset(), &opts.csv) {
         writeln!(
             output.out,
-            "{} 的 host_time 列是对到电脑时钟的 Unix 时间（秒），按 SUB_READ 的往返时间估计，误差约 ±{half_rtt} µs",
-            path.display()
+            "{}",
+            trf!(
+                "The host_time column of {} is Unix time on the host clock in seconds, \
+                 estimated from the SUB_READ round trips, error about ±{half_rtt} µs",
+                "{} 的 host_time 列是对到电脑时钟的 Unix 时间（秒），按 SUB_READ 的往返时间估计，误差约 ±{half_rtt} µs",
+                path.display()
+            )
         )?;
     }
     if let Some(lag) = st.lag() {
-        writeln!(output.out, "提示：{}", lag.advice())?;
+        writeln!(output.out, "{}", trf!("Note: {}", "提示：{}", lag.advice()))?;
     }
     Ok(())
 }

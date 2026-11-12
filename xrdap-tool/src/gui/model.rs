@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use xrdap::discover::{ProbeEntry, SerialPortInfo};
 use xrdap::expr::Target;
+use xrdap::lang::tr;
 
 use super::series::Series;
 
@@ -156,7 +157,10 @@ impl Csv {
         drop(self.lines);
         match self.writer.join() {
             Ok(r) => r.map(|()| self.rows),
-            Err(_) => Err(io::Error::other("写文件的线程异常退出")),
+            Err(_) => Err(io::Error::other(tr(
+                "the file writer thread exited abnormally",
+                "写文件的线程异常退出",
+            ))),
         }
     }
 }

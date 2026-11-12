@@ -79,6 +79,7 @@ mod tests {
 
     #[test]
     fn raw_addresses() {
+        crate::lang::set_chinese(true);
         let mut syms = SymbolTable::new();
         let mut r = Resolver::new(&mut syms);
         let t = r.resolve("0x20000010:u32").unwrap();

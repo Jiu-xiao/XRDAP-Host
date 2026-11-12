@@ -10,22 +10,27 @@
 //! 唯一的那块。
 
 use xrdap::addr::Spec;
+use xrdap::lang::tr;
 use xrdap::open::{open, OpenOptions};
 use xrdap::share::{Event, Protocol, Share};
+use xrdap::trf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let spec = Spec::parse(&std::env::var("XRDAP_PROBE").unwrap_or_default());
     let probe = open(&spec, &OpenOptions::default())?;
     let share = Share::start(probe, Protocol::Usbip, "127.0.0.1:3240", |e| match e {
-        Event::Client(peer) => println!("{peer} 已连接"),
-        Event::Idle(None) => println!("已断开"),
-        Event::Idle(Some(why)) => println!("异常断开：{why}"),
+        Event::Client(peer) => println!("{}", trf!("{peer} connected", "{peer} 已连接")),
+        Event::Idle(None) => println!("{}", tr("Disconnected", "已断开")),
+        Event::Idle(Some(why)) => println!("{}", trf!("Connection lost: {why}", "异常断开：{why}")),
     })
     .map_err(|(_, e)| e)?;
     let device = share.device();
-    println!("{}（{}）", device.product, device.serial);
-    println!("挂载：{}", share.attach_hint());
-    println!("按回车停止");
+    println!(
+        "{}",
+        trf!("{} ({})", "{}（{}）", device.product, device.serial)
+    );
+    println!("{}", trf!("Attach: {}", "挂载：{}", share.attach_hint()));
+    println!("{}", tr("Press Enter to stop", "按回车停止"));
     std::io::stdin().read_line(&mut String::new())?;
     let _probe = share.stop();
     Ok(())

@@ -19,7 +19,10 @@ use crate::{Error, Result};
 type R<'a> = EndianSlice<'a, RunTimeEndian>;
 
 fn derr(e: gimli::Error) -> Error {
-    Error::usage(format!("解析 DWARF 失败：{e}"))
+    Error::usage(crate::trf!(
+        "Parsing DWARF failed: {e}",
+        "解析 DWARF 失败：{e}"
+    ))
 }
 
 /// 数组一维的元素个数：上界减下界加一；结果是负数或超出 u64 时不知道（损坏的 DWARF 不能让
@@ -69,13 +72,23 @@ fn is_function_name_string(name: &str) -> bool {
 ///
 /// Read an ELF file.
 pub fn load(path: &Path) -> Result<SymbolTable> {
-    let data =
-        std::fs::read(path).map_err(|e| Error::usage(format!("读不了 {}：{e}", path.display())))?;
-    load_bytes(&data).map_err(|e| Error::usage(format!("{}：{e}", path.display())))
+    let data = std::fs::read(path).map_err(|e| {
+        Error::usage(crate::trf!(
+            "Cannot read {}: {e}",
+            "读不了 {}：{e}",
+            path.display()
+        ))
+    })?;
+    load_bytes(&data).map_err(|e| Error::usage(crate::trf!("{}: {e}", "{}：{e}", path.display())))
 }
 
 fn parse_file(data: &[u8]) -> Result<object::File<'_>> {
-    object::File::parse(data).map_err(|e| Error::usage(format!("不是可以识别的 ELF 文件：{e}")))
+    object::File::parse(data).map_err(|e| {
+        Error::usage(crate::trf!(
+            "Not a recognized ELF file: {e}",
+            "不是可以识别的 ELF 文件：{e}"
+        ))
+    })
 }
 
 fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
@@ -108,9 +121,12 @@ fn load_bytes(data: &[u8]) -> Result<SymbolTable> {
         } else {
             continue;
         };
-        let data = sec
-            .uncompressed_data()
-            .map_err(|e| Error::usage(format!("读段 {name} 失败：{e}")))?;
+        let data = sec.uncompressed_data().map_err(|e| {
+            Error::usage(crate::trf!(
+                "Reading section {name} failed: {e}",
+                "读段 {name} 失败：{e}"
+            ))
+        })?;
         debug.insert(key, data);
     }
     // 变量地址要落在加载到目标上的段里。被 --gc-sections 丢掉的变量在 DWARF 里地址是 0，地址 0
@@ -340,7 +356,9 @@ impl<'a, 'd> Loader<'a, 'd> {
             return Ok(id);
         }
         // 先占位，结构体通过指针引用自己时不会无限递归
-        let id = self.syms.add(Type::Unknown("解析中".into()));
+        let id = self.syms.add(Type::Unknown(
+            crate::lang::tr("being parsed", "解析中").into(),
+        ));
         self.map.insert(key, id);
         let d = self.read_die(unit, off)?;
         let ty = self.build_type(unit, &d)?;
@@ -374,9 +392,9 @@ impl<'a, 'd> Loader<'a, 'd> {
                     Some(gimli::DW_ATE_float) => Encoding::Float,
                     Some(gimli::DW_ATE_boolean) => Encoding::Bool,
                     _ => {
-                        return Ok(Type::Unknown(
-                            d.name.clone().unwrap_or_else(|| "未知基本类型".into()),
-                        ))
+                        return Ok(Type::Unknown(d.name.clone().unwrap_or_else(|| {
+                            crate::lang::tr("unknown base type", "未知基本类型").into()
+                        })))
                     }
                 };
                 if enc == Encoding::Float && size != 4 && size != 8 {
